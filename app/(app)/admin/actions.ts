@@ -1169,19 +1169,27 @@ async function upsertGameweekCompleteActivity({
     return a.displayName.localeCompare(b.displayName);
   });
 
-  const weeklyLeaderboard = weeklyRankedRaw.map((entry, index, list) => {
-    const previousEntry = list[index - 1];
+  const weeklyLeaderboard: {
+    rank: number;
+    name: string;
+    points: number;
+  }[] = [];
 
-    const rank =
-      previousEntry && previousEntry.points === entry.points
-        ? list[index - 1].rank
-        : index + 1;
+  let currentRank = 0;
+  let previousPoints: number | null = null;
 
-    return {
-      rank,
+  weeklyRankedRaw.forEach((entry, index) => {
+    if (previousPoints === null || entry.points !== previousPoints) {
+      currentRank = index + 1;
+    }
+
+    weeklyLeaderboard.push({
+      rank: currentRank,
       name: entry.displayName,
       points: entry.points,
-    };
+    });
+
+    previousPoints = entry.points;
   });
 
   const topWeeklyPoints = weeklyLeaderboard[0]?.points ?? 0;

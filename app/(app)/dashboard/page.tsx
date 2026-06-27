@@ -251,8 +251,10 @@ export default async function HomePage() {
   const nextKickoff =
     fixtureList.length > 0 ? new Date(fixtureList[0].kickoff_at) : null;
 
+  const now = new Date();
+
   const hoursUntilNextKickoff = nextKickoff
-    ? Math.ceil((nextKickoff.getTime() - Date.now()) / (1000 * 60 * 60))
+    ? Math.ceil((nextKickoff.getTime() - now.getTime()) / (1000 * 60 * 60))
     : null;
 
   const { data: notifications } = await supabase

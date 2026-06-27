@@ -235,7 +235,6 @@ async function upsertFixturesPickedActivity({
 
   const pickerName = getPickerDisplayName(typedGameweek);
   const gameweekName = formatGameweekName(typedGameweek);
-  const fixtureText = formatFixtureList(fixtureList.slice(0, 4));
   const kickoffText = formatKickoffForActivity(firstKickoff);
 
   await upsertActivityNotification({
