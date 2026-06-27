@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import AdminAddFixtureForm from "@/components/admin/AdminAddFixtureForm";
 import AdminCreateGameweekForm from "@/components/admin/AdminCreateGameweekForm";
 import AdminManageFixtureCard from "@/components/admin/AdminManageFixtureCard";

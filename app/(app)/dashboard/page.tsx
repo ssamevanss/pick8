@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import DashboardSummary from "@/components/dashboard/DashboardSummary";
 import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import FixturePredictionCard from "@/components/predictions/FixturePredictionCard";

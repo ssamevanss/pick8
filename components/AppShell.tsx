@@ -29,6 +29,7 @@ export default function AppShell({ children, isAdmin = false }: AppShellProps) {
 
           <Link
             href="/logout"
+            prefetch={false}
             className="rounded-full border border-slate-800 px-3 py-1 text-sm text-slate-300"
           >
             Sign out
@@ -48,6 +49,7 @@ export default function AppShell({ children, isAdmin = false }: AppShellProps) {
             <Link
               key={item.href}
               href={item.href}
+              prefetch={false}
               className="rounded-xl bg-slate-900 px-3 py-2 text-center text-sm font-medium text-slate-300"
             >
               {item.label}

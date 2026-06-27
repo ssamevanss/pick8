@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import AppShell from "@/components/AppShell";
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
@@ -38,6 +40,11 @@ export default async function AppLayout({ children }: AppLayoutProps) {
   if (profile.status === "rejected") {
     await supabase.auth.signOut();
     redirect("/login?error=Your account request was not approved.");
+  }
+
+  if (profile.status === "disabled") {
+    await supabase.auth.signOut();
+    redirect("/login?error=Your account has been disabled.");
   }
 
   const isAdmin = profile.role === "admin";
