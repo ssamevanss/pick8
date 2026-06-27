@@ -4,12 +4,77 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { fromZonedTime } from "date-fns-tz";
 import { createClient } from "@/utils/supabase/server";
+import { upsertActivityNotification } from "@/utils/activity";
 
 type LeaderboardPredictionRow = {
   user_id: string;
   points: number | null;
   is_exact_score: boolean;
   is_correct_result: boolean;
+};
+
+type FixtureGameweekLookupRow = {
+  gameweek_id: string;
+};
+
+type ActivityGameweekRow = {
+  id: string;
+  season_id: string;
+  gameweek_number: number;
+  name: string | null;
+};
+
+type ActivityFixtureRow = {
+  id: string;
+  home_team: string;
+  away_team: string;
+  kickoff_at: string;
+  status: string;
+  home_score: number | null;
+  away_score: number | null;
+};
+
+type WeeklyPredictionRow = {
+  user_id: string;
+  points: number | null;
+  profiles:
+    | {
+        display_name: string;
+      }
+    | {
+        display_name: string;
+      }[]
+    | null;
+};
+
+type LeaderboardMovementRow = {
+  user_id: string;
+  rank: number | null;
+  previous_rank: number | null;
+  total_points: number;
+  profiles:
+    | {
+        display_name: string;
+      }
+    | {
+        display_name: string;
+      }[]
+    | null;
+};
+
+type NextPickerGameweekRow = {
+  id: string;
+  gameweek_number: number;
+  name: string | null;
+  fixture_picker_id: string | null;
+  profiles:
+    | {
+        display_name: string;
+      }
+    | {
+        display_name: string;
+      }[]
+    | null;
 };
 
 type ExistingGameweekRow = {
@@ -923,11 +988,392 @@ export async function rejectUser(formData: FormData) {
   redirect("/admin?tab=users&saved=1");
 }
 
+function getProfileDisplayName(
+  profiles:
+    | {
+        display_name: string;
+      }
+    | {
+        display_name: string;
+      }[]
+    | null,
+) {
+  if (Array.isArray(profiles)) {
+    return profiles[0]?.display_name ?? "Unknown player";
+  }
+
+  return profiles?.display_name ?? "Unknown player";
+}
+
+function formatGameweekName(gameweek: {
+  gameweek_number: number;
+  name: string | null;
+}) {
+  return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
+}
+
+function formatFixtureList(fixtures: ActivityFixtureRow[]) {
+  const fixtureNames = fixtures.map(
+    (fixture) => `${fixture.home_team} v ${fixture.away_team}`,
+  );
+
+  if (fixtureNames.length === 0) {
+    return "";
+  }
+
+  if (fixtureNames.length === 1) {
+    return fixtureNames[0];
+  }
+
+  if (fixtureNames.length === 2) {
+    return `${fixtureNames[0]} and ${fixtureNames[1]}`;
+  }
+
+  return `${fixtureNames.slice(0, -1).join(", ")}, and ${
+    fixtureNames[fixtureNames.length - 1]
+  }`;
+}
+
+function formatPlayerList(names: string[]) {
+  if (names.length === 0) {
+    return "";
+  }
+
+  if (names.length === 1) {
+    return names[0];
+  }
+
+  if (names.length === 2) {
+    return `${names[0]} and ${names[1]}`;
+  }
+
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+function formatMovementText({
+  name,
+  movement,
+}: {
+  name: string;
+  movement: number;
+}) {
+  if (movement > 0) {
+    return `${name} up ${movement} position${movement === 1 ? "" : "s"}`;
+  }
+
+  const fall = Math.abs(movement);
+
+  return `${name} down ${fall} position${fall === 1 ? "" : "s"}`;
+}
+
+async function getGameweekFixtureIds({
+  supabase,
+  gameweekId,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  gameweekId: string;
+}) {
+  const { data: fixtures } = await supabase
+    .from("fixtures")
+    .select("id, home_team, away_team, kickoff_at, status, home_score, away_score")
+    .eq("gameweek_id", gameweekId)
+    .order("kickoff_at", { ascending: true });
+
+  return (fixtures as ActivityFixtureRow[] | null) ?? [];
+}
+
+function isGameweekComplete(fixtures: ActivityFixtureRow[]) {
+  return (
+    fixtures.length > 0 &&
+    fixtures.every((fixture) =>
+      ["completed", "postponed", "void"].includes(fixture.status),
+    )
+  );
+}
+
+async function upsertGameweekCompleteActivity({
+  supabase,
+  gameweekId,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  gameweekId: string;
+}) {
+  const { data: gameweek } = await supabase
+    .from("gameweeks")
+    .select("id, season_id, gameweek_number, name")
+    .eq("id", gameweekId)
+    .single();
+
+  const typedGameweek = gameweek as ActivityGameweekRow | null;
+
+  if (!typedGameweek) {
+    return;
+  }
+
+  const fixtures = await getGameweekFixtureIds({
+    supabase,
+    gameweekId,
+  });
+
+  if (!isGameweekComplete(fixtures)) {
+    return;
+  }
+
+  const fixtureIds = fixtures.map((fixture) => fixture.id);
+
+  const { data: predictions } =
+    fixtureIds.length > 0
+      ? await supabase
+          .from("predictions")
+          .select(
+            `
+            user_id,
+            points,
+            profiles (
+              display_name
+            )
+          `,
+          )
+          .in("fixture_id", fixtureIds)
+      : { data: null };
+
+  const weeklyTotals = new Map<
+    string,
+    {
+      userId: string;
+      displayName: string;
+      points: number;
+    }
+  >();
+
+  for (const prediction of (predictions as WeeklyPredictionRow[] | null) ??
+    []) {
+    const current =
+      weeklyTotals.get(prediction.user_id) ??
+      {
+        userId: prediction.user_id,
+        displayName: getProfileDisplayName(prediction.profiles),
+        points: 0,
+      };
+
+    current.points += prediction.points ?? 0;
+
+    weeklyTotals.set(prediction.user_id, current);
+  }
+
+  const weeklyRankedRaw = [...weeklyTotals.values()].sort((a, b) => {
+    if (b.points !== a.points) {
+      return b.points - a.points;
+    }
+
+    return a.displayName.localeCompare(b.displayName);
+  });
+
+  const weeklyLeaderboard = weeklyRankedRaw.map((entry, index, list) => {
+    const previousEntry = list[index - 1];
+
+    const rank =
+      previousEntry && previousEntry.points === entry.points
+        ? list[index - 1].rank
+        : index + 1;
+
+    return {
+      rank,
+      name: entry.displayName,
+      points: entry.points,
+    };
+  });
+
+  const topWeeklyPoints = weeklyLeaderboard[0]?.points ?? 0;
+
+  const weeklyWinners = weeklyLeaderboard
+    .filter((entry) => entry.points === topWeeklyPoints && topWeeklyPoints > 0)
+    .map((entry) => ({
+      name: entry.name,
+      points: entry.points,
+    }));
+
+  const { data: leaderboardRows } = await supabase
+    .from("leaderboard_entries")
+    .select(
+      `
+      user_id,
+      rank,
+      previous_rank,
+      total_points,
+      profiles (
+        display_name
+      )
+    `,
+    )
+    .eq("season_id", typedGameweek.season_id)
+    .order("rank", { ascending: true });
+
+  const movementRows =
+    (leaderboardRows as LeaderboardMovementRow[] | null) ?? [];
+
+  const movements = movementRows
+    .filter((entry) => entry.rank !== null && entry.previous_rank !== null)
+    .map((entry) => ({
+      name: getProfileDisplayName(entry.profiles),
+      movement: (entry.previous_rank ?? 0) - (entry.rank ?? 0),
+    }))
+    .filter((entry) => entry.movement !== 0);
+
+  const maxRise =
+    movements.filter((entry) => entry.movement > 0).length > 0
+      ? Math.max(
+          ...movements
+            .filter((entry) => entry.movement > 0)
+            .map((entry) => entry.movement),
+        )
+      : 0;
+
+  const maxFall =
+    movements.filter((entry) => entry.movement < 0).length > 0
+      ? Math.min(
+          ...movements
+            .filter((entry) => entry.movement < 0)
+            .map((entry) => entry.movement),
+        )
+      : 0;
+
+  const biggestRisers = movements
+    .filter((entry) => entry.movement === maxRise && maxRise > 0)
+    .map((entry) => ({
+      name: entry.name,
+      movement: entry.movement,
+    }));
+
+  const biggestFallers = movements
+    .filter((entry) => entry.movement === maxFall && maxFall < 0)
+    .map((entry) => ({
+      name: entry.name,
+      movement: entry.movement,
+    }));
+
+  const gameweekName = formatGameweekName(typedGameweek);
+
+  const fixtureResults = fixtures.map((fixture) => ({
+    homeTeam: fixture.home_team,
+    awayTeam: fixture.away_team,
+    homeScore: fixture.home_score,
+    awayScore: fixture.away_score,
+    status: fixture.status,
+  }));
+
+  const winnerNames = weeklyWinners.map((winner) => winner.name);
+
+  const winnerText =
+    weeklyWinners.length > 0
+      ? `Weekly winner${weeklyWinners.length === 1 ? "" : "s"}: ${formatPlayerList(
+          winnerNames,
+        )} with ${topWeeklyPoints} point${topWeeklyPoints === 1 ? "" : "s"}.`
+      : "No weekly winner because no points were scored.";
+
+  const riserText =
+    biggestRisers.length > 0
+      ? `Biggest riser${biggestRisers.length === 1 ? "" : "s"}: ${formatPlayerList(
+          biggestRisers.map((riser) =>
+            formatMovementText({
+              name: riser.name,
+              movement: riser.movement,
+            }),
+          ),
+        )}.`
+      : "";
+
+  const fallerText =
+    biggestFallers.length > 0
+      ? `Biggest faller${biggestFallers.length === 1 ? "" : "s"}: ${formatPlayerList(
+          biggestFallers.map((faller) =>
+            formatMovementText({
+              name: faller.name,
+              movement: faller.movement,
+            }),
+          ),
+        )}.`
+      : "";
+
+  const movementText =
+    riserText || fallerText
+      ? [riserText, fallerText].filter(Boolean).join(" ")
+      : "No leaderboard movement this week.";
+
+  await upsertActivityNotification({
+    eventKey: `gameweek_complete:${gameweekId}`,
+    type: "results_available",
+    title: `${gameweekName} complete`,
+    body: `${gameweekName} is complete. ${winnerText} ${movementText}`,
+    metadata: {
+      gameweekId,
+      gameweekName,
+      fixtures: fixtureResults,
+      weeklyLeaderboard,
+      weeklyWinners,
+      biggestRisers,
+      biggestFallers,
+    },
+  });
+}
+
+async function upsertNextPickerActivity({
+  supabase,
+  completedGameweekId,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  completedGameweekId: string;
+}) {
+  const { data: completedGameweek } = await supabase
+    .from("gameweeks")
+    .select("season_id, gameweek_number")
+    .eq("id", completedGameweekId)
+    .single();
+
+  if (!completedGameweek) {
+    return;
+  }
+
+  const { data: nextGameweek } = await supabase
+    .from("gameweeks")
+    .select(
+      `
+      id,
+      gameweek_number,
+      name,
+      fixture_picker_id,
+      profiles (
+        display_name
+      )
+    `,
+    )
+    .eq("season_id", completedGameweek.season_id)
+    .eq("gameweek_number", completedGameweek.gameweek_number + 1)
+    .maybeSingle();
+
+  const typedNextGameweek = nextGameweek as NextPickerGameweekRow | null;
+
+  if (!typedNextGameweek || !typedNextGameweek.fixture_picker_id) {
+    return;
+  }
+
+  const pickerName = getProfileDisplayName(typedNextGameweek.profiles);
+  const gameweekName = formatGameweekName(typedNextGameweek);
+
+  await upsertActivityNotification({
+    eventKey: `next_picker:${typedNextGameweek.id}`,
+    type: "info",
+    title: `${pickerName} is up next`,
+    body: `${pickerName} is to pick fixtures for ${gameweekName}.`,
+  });
+}
+
 export async function updateFixtureResults(formData: FormData) {
   const { supabase } = await requireAdmin();
 
   const fixtureIds = formData.getAll("fixture_id").map(String);
   const updatedSeasonIds = new Set<string>();
+  const updatedGameweekIds = new Set<string>();
   let savedAnyFixture = false;
 
   for (const fixtureId of fixtureIds) {
@@ -955,6 +1401,19 @@ export async function updateFixtureResults(formData: FormData) {
           "Scores must be whole numbers",
         )}`,
       );
+    }
+
+    const { data: fixtureLookup } = await supabase
+      .from("fixtures")
+      .select("gameweek_id")
+      .eq("id", fixtureId)
+      .single();
+
+    const typedFixtureLookup =
+      fixtureLookup as FixtureGameweekLookupRow | null;
+
+    if (typedFixtureLookup?.gameweek_id) {
+      updatedGameweekIds.add(typedFixtureLookup.gameweek_id);
     }
 
     const { error } = await supabase
@@ -989,8 +1448,21 @@ export async function updateFixtureResults(formData: FormData) {
     await recalculateLeaderboard(seasonId);
   }
 
+  for (const gameweekId of updatedGameweekIds) {
+    await upsertGameweekCompleteActivity({
+      supabase,
+      gameweekId,
+    });
+
+    await upsertNextPickerActivity({
+      supabase,
+      completedGameweekId: gameweekId,
+    });
+  }
+
   revalidatePath("/admin");
   revalidatePath("/dashboard");
+  revalidatePath("/predictions");
   revalidatePath("/leaderboard");
 
   redirect("/admin?tab=results&saved=1");

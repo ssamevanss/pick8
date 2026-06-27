@@ -8,7 +8,8 @@ type AppShellProps = {
 };
 
 const baseNavItems = [
-  { href: "/dashboard", label: "Dashboard" },
+  { href: "/dashboard", label: "Home" },
+  { href: "/predictions", label: "Predictions" },
   { href: "/leaderboard", label: "Leaderboard" },
 ];
 

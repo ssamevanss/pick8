@@ -1,25 +1,138 @@
 export const dynamic = "force-dynamic";
 
-import DashboardSummary from "@/components/dashboard/DashboardSummary";
-import GameweekSelector from "@/components/gameweeks/GameweekSelector";
-import FixturePredictionCard from "@/components/predictions/FixturePredictionCard";
-import type {
-  Fixture,
-  Gameweek,
-  JokerUsage,
-  LeaderboardSummary,
-  Prediction,
-} from "@/components/predictions/types";
+import Link from "next/link";
 import { createClient } from "@/utils/supabase/server";
-import { savePredictions } from "./actions";
-import SubmitButton from "@/components/forms/SubmitButton";
+import LeagueActivityFeed from "@/components/activity/LeagueActivityFeed";
 
-export default async function DashboardPage({
-  searchParams,
+type NotificationRow = {
+  id: string;
+  type: string;
+  title: string | null;
+  body: string | null;
+  created_at: string;
+  metadata: Record<string, unknown> | null;
+};
+
+type PickerGameweekRow = {
+  id: string;
+  gameweek_number: number;
+  name: string | null;
+  season_id: string;
+};
+
+type FixtureStatusRow = {
+  status: string;
+};
+
+type FixtureRow = {
+  id: string;
+  kickoff_at: string;
+  status: string;
+};
+
+type PredictionRow = {
+  fixture_id: string;
+};
+
+type LatestGameweekRow = {
+  id: string;
+  gameweek_number: number;
+  name: string | null;
+  fixtures: { id: string }[];
+};
+
+type PickerGameweekStatus = PickerGameweekRow & {
+  isUnlocked: boolean;
+  fixtureCount: number;
+  hasPredictions: boolean;
+};
+
+async function isPreviousGameweekComplete({
+  supabase,
+  seasonId,
+  gameweekNumber,
 }: {
-  searchParams?: Promise<{ saved?: string; error?: string; gameweek?: string }>;
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  seasonId: string;
+  gameweekNumber: number;
 }) {
-  const params = searchParams ? await searchParams : {};
+  if (gameweekNumber === 1) {
+    return true;
+  }
+
+  const { data: previousGameweek } = await supabase
+    .from("gameweeks")
+    .select("id")
+    .eq("season_id", seasonId)
+    .eq("gameweek_number", gameweekNumber - 1)
+    .maybeSingle();
+
+  if (!previousGameweek) {
+    return false;
+  }
+
+  const { data: previousFixtures } = await supabase
+    .from("fixtures")
+    .select("status")
+    .eq("gameweek_id", previousGameweek.id);
+
+  const fixtureList = (previousFixtures as FixtureStatusRow[] | null) ?? [];
+
+  return (
+    fixtureList.length > 0 &&
+    fixtureList.every((fixture) =>
+      ["completed", "postponed", "void"].includes(fixture.status),
+    )
+  );
+}
+
+async function getPickerGameweekStatus({
+  supabase,
+  gameweek,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  gameweek: PickerGameweekRow;
+}): Promise<PickerGameweekStatus> {
+  const isUnlocked = await isPreviousGameweekComplete({
+    supabase,
+    seasonId: gameweek.season_id,
+    gameweekNumber: gameweek.gameweek_number,
+  });
+
+  const { data: fixtures } = await supabase
+    .from("fixtures")
+    .select("id")
+    .eq("gameweek_id", gameweek.id);
+
+  const fixtureRows = (fixtures as { id: string }[] | null) ?? [];
+  const fixtureIds = fixtureRows.map((fixture) => fixture.id);
+
+  const { data: existingPrediction } =
+    fixtureIds.length > 0
+      ? await supabase
+          .from("predictions")
+          .select("fixture_id")
+          .in("fixture_id", fixtureIds)
+          .limit(1)
+          .maybeSingle()
+      : { data: null };
+
+  return {
+    ...gameweek,
+    isUnlocked,
+    fixtureCount: fixtureRows.length,
+    hasPredictions: Boolean(existingPrediction),
+  };
+}
+
+function formatGameweekName(gameweek: {
+  gameweek_number: number;
+  name: string | null;
+}) {
+  return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
+}
+
+export default async function HomePage() {
   const supabase = await createClient();
 
   const {
@@ -32,211 +145,287 @@ export default async function DashboardPage({
     .eq("is_active", true)
     .single();
 
-  const { data: gameweeks } = activeSeason
-    ? await supabase
-        .from("gameweeks")
-        .select("id, gameweek_number, name")
-        .eq("season_id", activeSeason.id)
-        .order("gameweek_number", { ascending: true })
-    : { data: null };
-
-  const gameweekList = (gameweeks as Gameweek[] | null) ?? [];
-
-  const gameweekIds = gameweekList.map((gameweek) => gameweek.id);
-
-  const { data: fixtureRows } =
-    gameweekIds.length > 0
+  const { data: pickerGameweeks } =
+    user && activeSeason
       ? await supabase
-          .from("fixtures")
-          .select("gameweek_id")
-          .in("gameweek_id", gameweekIds)
-      : { data: [] };
-
-  const gameweekIdsWithFixtures = new Set(
-    (fixtureRows ?? []).map((fixture) => fixture.gameweek_id),
-  );
-
-  const latestGameweekWithFixtures =
-    [...gameweekList]
-      .reverse()
-      .find((gameweek) => gameweekIdsWithFixtures.has(gameweek.id)) ?? null;
-
-  const selectedGameweek =
-    gameweekList.find((gameweek) => gameweek.id === params.gameweek) ??
-    latestGameweekWithFixtures ??
-    gameweekList[gameweekList.length - 1] ??
-    null;
-
-  const { data: fixtures, error: fixturesError } = selectedGameweek
-    ? await supabase
-        .from("fixtures")
-        .select(
-          "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score",
-        )
-        .eq("gameweek_id", selectedGameweek.id)
-        .order("kickoff_at", { ascending: true })
-    : { data: null, error: null };
-
-  const fixtureIds = ((fixtures as Fixture[] | null) ?? []).map(
-    (fixture) => fixture.id,
-  );
-
-  const { data: predictions, error: predictionsError } =
-    fixtureIds.length > 0
-      ? await supabase
-          .from("predictions")
-          .select(
-            `
-            fixture_id,
-            user_id,
-            home_score,
-            away_score,
-            points,
-            is_exact_score,
-            is_correct_result,
-            profiles (
-              display_name
-            )
-          `,
-          )
-          .in("fixture_id", fixtureIds)
-      : { data: null, error: null };
-
-  const { data: jokerUsage, error: jokerUsageError } =
-    fixtureIds.length > 0
-      ? await supabase
-          .from("joker_usage")
-          .select("fixture_id, user_id")
-          .in("fixture_id", fixtureIds)
-          .is("refunded_at", null)
-      : { data: null, error: null };
-
-  const { data: leaderboardEntry } =
-    activeSeason && user
-      ? await supabase
-          .from("leaderboard_entries")
-          .select("rank, total_points, weekly_points")
+          .from("gameweeks")
+          .select("id, gameweek_number, name, season_id")
           .eq("season_id", activeSeason.id)
-          .eq("user_id", user.id)
-          .maybeSingle()
+          .eq("fixture_picker_id", user.id)
+          .order("gameweek_number", { ascending: true })
       : { data: null };
 
-  const predictionsByFixture = new Map<string, Prediction[]>();
+  const assignedPickerGameweeks =
+    (pickerGameweeks as PickerGameweekRow[] | null) ?? [];
 
-  for (const prediction of (predictions as Prediction[] | null) ?? []) {
-    const existing = predictionsByFixture.get(prediction.fixture_id) ?? [];
-    existing.push(prediction);
-    predictionsByFixture.set(prediction.fixture_id, existing);
+  const pickerStatuses: PickerGameweekStatus[] = [];
+
+  for (const gameweek of assignedPickerGameweeks) {
+    pickerStatuses.push(
+      await getPickerGameweekStatus({
+        supabase,
+        gameweek,
+      }),
+    );
   }
 
-  const jokerRows = (jokerUsage as JokerUsage[] | null) ?? [];
+  const activePickerGameweek =
+    pickerStatuses.find(
+      (gameweek) =>
+        gameweek.isUnlocked &&
+        !gameweek.hasPredictions &&
+        gameweek.fixtureCount < 4,
+    ) ?? null;
 
-  const ownJokerFixtureIds = new Set(
-    jokerRows
-      .filter((joker) => joker.user_id === user?.id)
-      .map((joker) => joker.fixture_id),
+  const submittedPickerGameweek =
+    pickerStatuses.find(
+      (gameweek) =>
+        gameweek.isUnlocked &&
+        !gameweek.hasPredictions &&
+        gameweek.fixtureCount >= 4,
+    ) ?? null;
+
+  const lockedPickerGameweek =
+    pickerStatuses.find(
+      (gameweek) => gameweek.isUnlocked && gameweek.hasPredictions,
+    ) ?? null;
+
+  const nextFuturePickerGameweek =
+    pickerStatuses.find((gameweek) => !gameweek.isUnlocked) ?? null;
+
+  const { data: latestGameweekWithFixtures } = activeSeason
+    ? await supabase
+        .from("gameweeks")
+        .select(
+          `
+          id,
+          gameweek_number,
+          name,
+          fixtures!inner (
+            id
+          )
+        `,
+        )
+        .eq("season_id", activeSeason.id)
+        .order("gameweek_number", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    : { data: null };
+
+  const latestGameweek =
+    (latestGameweekWithFixtures as LatestGameweekRow | null) ?? null;
+
+  const { data: latestFixtures } = latestGameweek
+    ? await supabase
+        .from("fixtures")
+        .select("id, kickoff_at, status")
+        .eq("gameweek_id", latestGameweek.id)
+        .order("kickoff_at", { ascending: true })
+    : { data: null };
+
+  const fixtureList = (latestFixtures as FixtureRow[] | null) ?? [];
+  const fixtureIds = fixtureList.map((fixture) => fixture.id);
+
+  const latestGameweekComplete =
+  fixtureList.length > 0 &&
+  fixtureList.every((fixture) =>
+    ["completed", "postponed", "void"].includes(fixture.status),
   );
 
-  const jokerPredictionKeys = new Set(
-    jokerRows.map((joker) => `${joker.fixture_id}:${joker.user_id}`),
-  );
+  const { data: userPredictions } =
+    user && fixtureIds.length > 0
+      ? await supabase
+          .from("predictions")
+          .select("fixture_id")
+          .eq("user_id", user.id)
+          .in("fixture_id", fixtureIds)
+      : { data: null };
 
-  const jokersUsed = ownJokerFixtureIds.size;
-  const jokersLeft = Math.max(0, 3 - jokersUsed);
+  const predictionList = (userPredictions as PredictionRow[] | null) ?? [];
+  const predictionCount = predictionList.length;
+  const fixtureCount = fixtureList.length;
+  const hasPredictionFixtures = fixtureCount > 0;
+  const isPredictionComplete =
+    hasPredictionFixtures && predictionCount >= fixtureCount;
+
+  const nextKickoff =
+    fixtureList.length > 0 ? new Date(fixtureList[0].kickoff_at) : null;
+
+  const hoursUntilNextKickoff = nextKickoff
+    ? Math.ceil((nextKickoff.getTime() - Date.now()) / (1000 * 60 * 60))
+    : null;
+
+  const { data: notifications } = await supabase
+    .from("notifications")
+    .select("id, type, title, body, created_at, metadata")
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  const notificationList = (notifications as NotificationRow[] | null) ?? [];
 
   return (
     <>
       <header className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">
-          Gameweek Dashboard
-        </h1>
+        <h1 className="text-3xl font-bold tracking-tight">Home</h1>
         <p className="mt-2 text-sm text-slate-400">
-          Predict four fixtures, use your Jokers wisely, and climb the league.
+          Your league hub: actions, updates and recent activity.
         </p>
       </header>
 
-      {params.saved ? (
-        <p className="mb-4 rounded-xl bg-emerald-950 p-3 text-sm text-emerald-300">
-          Predictions saved.
-        </p>
-      ) : null}
+      <section className="space-y-4">
+        {activePickerGameweek ? (
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+            <p className="text-sm font-semibold text-amber-300">
+              You’re up next
+            </p>
+            <h2 className="mt-1 text-xl font-bold">
+              Pick fixtures for {formatGameweekName(activePickerGameweek)}
+            </h2>
+            <p className="mt-2 text-sm text-slate-300">
+              You’ve selected {activePickerGameweek.fixtureCount}/4 fixtures.
+              Choose four fixtures for your assigned gameweek.
+            </p>
 
-      {params.error ? (
-        <p className="mb-4 rounded-xl bg-red-950 p-3 text-sm text-red-300">
-          {params.error}
-        </p>
-      ) : null}
-
-      <DashboardSummary
-        leaderboardEntry={leaderboardEntry as LeaderboardSummary}
-        jokersLeft={jokersLeft}
-      />
-
-      <section className="mt-8 rounded-2xl bg-slate-900 p-4 shadow-lg">
-        <GameweekSelector
-          gameweeks={gameweekList}
-          selectedGameweekId={selectedGameweek?.id ?? null}
-          basePath="/dashboard"
-        />
-
-        <div className="mb-4">
-          <h2 className="text-xl font-semibold">
-            {selectedGameweek?.name ||
-              (selectedGameweek
-                ? `Gameweek ${selectedGameweek.gameweek_number}`
-                : "No gameweek")}
-          </h2>
-          <p className="text-sm text-slate-400">
-            Predictions lock individually at kickoff.
-          </p>
-        </div>
-
-        {fixturesError ? (
-          <p className="rounded-xl bg-red-950 p-4 text-sm text-red-300">
-            {fixturesError.message}
-          </p>
+            <Link
+              href={`/pick-fixtures?gameweek=${activePickerGameweek.id}`}
+              prefetch={false}
+              className="mt-4 inline-flex rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950"
+            >
+              Pick fixtures
+            </Link>
+          </div>
         ) : null}
 
-        {predictionsError ? (
-          <p className="mt-3 rounded-xl bg-red-950 p-4 text-sm text-red-300">
-            {predictionsError.message}
-          </p>
+        {!activePickerGameweek && submittedPickerGameweek ? (
+          <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+            <p className="text-sm font-semibold text-emerald-300">
+              Fixtures submitted
+            </p>
+            <h2 className="mt-1 text-xl font-bold">
+              You picked fixtures for {formatGameweekName(submittedPickerGameweek)}
+            </h2>
+            <p className="mt-2 text-sm text-slate-300">
+              Your four fixtures are in. You can still make changes until
+              someone enters predictions.
+            </p>
+
+            <Link
+              href={`/pick-fixtures?gameweek=${submittedPickerGameweek.id}`}
+              prefetch={false}
+              className="mt-4 inline-flex rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
+            >
+              Review fixtures
+            </Link>
+          </div>
         ) : null}
 
-        {jokerUsageError ? (
-          <p className="mt-3 rounded-xl bg-red-950 p-4 text-sm text-red-300">
-            {jokerUsageError.message}
-          </p>
-        ) : null}
-
-        {!fixturesError && (!fixtures || fixtures.length === 0) ? (
-          <p className="rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
-            No fixtures found for this gameweek.
-          </p>
-        ) : null}
-
-        <form action={savePredictions} className="space-y-3">
-          {(fixtures as Fixture[] | null)?.map((fixture) => (
-            <FixturePredictionCard
-              key={fixture.id}
-              fixture={fixture}
-              predictions={predictionsByFixture.get(fixture.id) ?? []}
-              currentUserId={user!.id}
-              jokerPredictionKeys={jokerPredictionKeys}
-              ownJokerFixtureIds={ownJokerFixtureIds}
-              jokersLeft={jokersLeft}
-            />
-          ))}
-
-          {fixtures && fixtures.length > 0 ? (
-            <SubmitButton
-              idleLabel="Save open predictions"
-              pendingLabel="Saving predictions..."
-              className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
-            />
+        {!activePickerGameweek &&
+          !submittedPickerGameweek &&
+          nextFuturePickerGameweek ? (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+              <p className="text-sm font-semibold text-slate-300">Your next pick</p>
+              <h2 className="mt-1 text-xl font-bold">
+                You’re scheduled for {formatGameweekName(nextFuturePickerGameweek)}
+              </h2>
+              <p className="mt-2 text-sm text-slate-400">
+                You’ll be able to pick fixtures once the previous gameweek has been
+                completed.
+              </p>
+            </div>
           ) : null}
-        </form>
+
+          {!activePickerGameweek &&
+          !submittedPickerGameweek &&
+          !nextFuturePickerGameweek &&
+          lockedPickerGameweek ? (
+            <div className="rounded-2xl border border-slate-700 bg-slate-900 p-4">
+              <p className="text-sm font-semibold text-slate-300">Fixtures locked</p>
+              <h2 className="mt-1 text-xl font-bold">
+                {formatGameweekName(lockedPickerGameweek)} fixtures are locked
+              </h2>
+              <p className="mt-2 text-sm text-slate-400">
+                Predictions have been entered, so the fixture selection is now locked. Ask
+                an admin if anything needs to change.
+              </p>
+            </div>
+          ) : null}
+
+        {latestGameweek ? (
+          isPredictionComplete ? (
+            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+              <p className="text-sm font-semibold text-emerald-300">
+                You’re all set
+              </p>
+              <h2 className="mt-1 text-xl font-bold">
+                {latestGameweekComplete
+                  ? `${formatGameweekName(latestGameweek)} complete`
+                  : `Predictions complete for ${formatGameweekName(latestGameweek)}`}
+              </h2>
+              <p className="mt-2 text-sm text-slate-300">
+                {latestGameweekComplete
+                  ? `${formatGameweekName(
+                      latestGameweek,
+                    )} is complete. Check the results and see how everyone scored.`
+                  : `You’ve entered all ${fixtureCount} predictions. You can review or edit them until each fixture kicks off.`}
+              </p>
+
+              <Link
+                href={`/predictions?gameweek=${latestGameweek.id}`}
+                prefetch={false}
+                className="mt-4 inline-flex rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
+              >
+                {latestGameweekComplete ? "View results" : "Review predictions"}
+              </Link>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+              <p className="text-sm font-semibold text-amber-300">
+                Predictions
+              </p>
+              <h2 className="mt-1 text-xl font-bold">
+                {predictionCount > 0
+                  ? "Predictions in progress"
+                  : `Enter predictions for ${formatGameweekName(
+                      latestGameweek,
+                    )}`}
+              </h2>
+              <p className="mt-2 text-sm text-slate-300">
+                {predictionCount > 0
+                  ? `You’ve entered ${predictionCount}/${fixtureCount} predictions for ${formatGameweekName(
+                      latestGameweek,
+                    )}.`
+                  : `You haven’t entered predictions for ${formatGameweekName(
+                      latestGameweek,
+                    )} yet.`}
+                {hoursUntilNextKickoff !== null &&
+                hoursUntilNextKickoff > 0 &&
+                hoursUntilNextKickoff <= 24
+                  ? ` First kickoff is in about ${hoursUntilNextKickoff} hours.`
+                  : ""}
+              </p>
+
+              <Link
+                href={`/predictions?gameweek=${latestGameweek.id}`}
+                prefetch={false}
+                className="mt-4 inline-flex rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950"
+              >
+                {predictionCount > 0 ? "Finish predictions" : "Go to predictions"}
+              </Link>
+            </div>
+          )
+        ) : (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+            <p className="text-sm font-semibold text-slate-300">
+              No fixtures yet
+            </p>
+            <p className="mt-2 text-sm text-slate-400">
+              Fixtures have not been selected for the next gameweek yet.
+            </p>
+          </div>
+        )}
       </section>
+
+      <LeagueActivityFeed notifications={notificationList} />
     </>
   );
 }

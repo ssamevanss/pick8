@@ -3,11 +3,35 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
+import { upsertActivityNotification } from "@/utils/activity";
 
 const slotNumbers = [1, 2, 3, 4];
 
 type FixtureStatusRow = {
   status: string;
+};
+
+type SavedFixtureRow = {
+  id: string;
+  home_team: string;
+  away_team: string;
+  kickoff_at: string;
+};
+
+type GameweekWithPickerRow = {
+  id: string;
+  season_id: string;
+  gameweek_number: number;
+  name: string | null;
+  fixture_picker_id: string | null;
+  profiles:
+    | {
+        display_name: string;
+      }
+    | {
+        display_name: string;
+      }[]
+    | null;
 };
 
 function getKickoffIso(rawKickoff: string) {
@@ -16,6 +40,54 @@ function getKickoffIso(rawKickoff: string) {
   }
 
   return new Date(rawKickoff).toISOString();
+}
+
+function getPickerDisplayName(gameweek: GameweekWithPickerRow) {
+  if (Array.isArray(gameweek.profiles)) {
+    return gameweek.profiles[0]?.display_name ?? "Someone";
+  }
+
+  return gameweek.profiles?.display_name ?? "Someone";
+}
+
+function formatGameweekName(gameweek: {
+  gameweek_number: number;
+  name: string | null;
+}) {
+  return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
+}
+
+function formatFixtureList(fixtures: SavedFixtureRow[]) {
+  const fixtureNames = fixtures.map(
+    (fixture) => `${fixture.home_team} v ${fixture.away_team}`,
+  );
+
+  if (fixtureNames.length === 0) {
+    return "";
+  }
+
+  if (fixtureNames.length === 1) {
+    return fixtureNames[0];
+  }
+
+  if (fixtureNames.length === 2) {
+    return `${fixtureNames[0]} and ${fixtureNames[1]}`;
+  }
+
+  return `${fixtureNames.slice(0, -1).join(", ")}, and ${
+    fixtureNames[fixtureNames.length - 1]
+  }`;
+}
+
+function formatKickoffForActivity(kickoffAt: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "long",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(kickoffAt));
 }
 
 async function requireFixtureManagerForGameweek(gameweekId: string) {
@@ -44,75 +116,146 @@ async function requireFixtureManagerForGameweek(gameweekId: string) {
       )}`,
     );
   }
-    
+
+  if (gameweek.gameweek_number !== 1) {
+    const { data: previousGameweek } = await supabase
+      .from("gameweeks")
+      .select("id")
+      .eq("season_id", gameweek.season_id)
+      .eq("gameweek_number", gameweek.gameweek_number - 1)
+      .maybeSingle();
+
+    if (!previousGameweek) {
+      redirect(
+        `/pick-fixtures?error=${encodeURIComponent(
+          "Previous gameweek has not been created",
+        )}`,
+      );
+    }
+
+    const { data: previousFixtures } = await supabase
+      .from("fixtures")
+      .select("status")
+      .eq("gameweek_id", previousGameweek.id);
+
+    const previousFixtureList =
+      (previousFixtures as FixtureStatusRow[] | null) ?? [];
+
+    const previousGameweekComplete =
+      previousFixtureList.length > 0 &&
+      previousFixtureList.every((fixture) =>
+        ["completed", "postponed", "void"].includes(fixture.status),
+      );
+
+    if (!previousGameweekComplete) {
+      redirect(
+        `/pick-fixtures?error=${encodeURIComponent(
+          "You can pick fixtures once the previous gameweek has been completed",
+        )}`,
+      );
+    }
+  }
+
   const { data: currentFixtures } = await supabase
     .from("fixtures")
     .select("id")
     .eq("gameweek_id", gameweekId);
 
-    const currentFixtureIds =
+  const currentFixtureIds =
     (currentFixtures as { id: string }[] | null)?.map((fixture) => fixture.id) ??
     [];
 
-    if (currentFixtureIds.length > 0) {
+  if (currentFixtureIds.length > 0) {
     const { data: existingPrediction } = await supabase
-        .from("predictions")
-        .select("fixture_id")
-        .in("fixture_id", currentFixtureIds)
-        .limit(1)
-        .maybeSingle();
+      .from("predictions")
+      .select("fixture_id")
+      .in("fixture_id", currentFixtureIds)
+      .limit(1)
+      .maybeSingle();
 
     if (existingPrediction) {
-        redirect(
+      redirect(
         `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
-            "Fixtures are locked because predictions have already been entered",
+          "Fixtures are locked because predictions have already been entered",
         )}`,
-        );
+      );
     }
-    }
-
-  if (gameweek.gameweek_number === 1) {
-    return { supabase };
-  }
-
-  const { data: previousGameweek } = await supabase
-    .from("gameweeks")
-    .select("id")
-    .eq("season_id", gameweek.season_id)
-    .eq("gameweek_number", gameweek.gameweek_number - 1)
-    .maybeSingle();
-
-  if (!previousGameweek) {
-    redirect(
-      `/pick-fixtures?error=${encodeURIComponent(
-        "Previous gameweek has not been created",
-      )}`,
-    );
-  }
-
-  const { data: previousFixtures } = await supabase
-    .from("fixtures")
-    .select("status")
-    .eq("gameweek_id", previousGameweek.id);
-
-  const previousFixtureList =
-    (previousFixtures as FixtureStatusRow[] | null) ?? [];
-
-  const previousGameweekComplete =
-    previousFixtureList.length > 0 &&
-    previousFixtureList.every((fixture) =>
-      ["completed", "postponed", "void"].includes(fixture.status),
-    );
-
-  if (!previousGameweekComplete) {
-    redirect(
-      `/pick-fixtures?error=${encodeURIComponent(
-        "You can pick fixtures once the previous gameweek has been completed",
-      )}`,
-    );
   }
 
   return { supabase };
+}
+
+async function upsertFixturesPickedActivity({
+  supabase,
+  gameweekId,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  gameweekId: string;
+}) {
+  const { data: gameweek } = await supabase
+    .from("gameweeks")
+    .select(
+      `
+      id,
+      season_id,
+      gameweek_number,
+      name,
+      fixture_picker_id,
+      profiles (
+        display_name
+      )
+    `,
+    )
+    .eq("id", gameweekId)
+    .single();
+
+  if (!gameweek) {
+    return;
+  }
+
+  const typedGameweek = gameweek as GameweekWithPickerRow;
+
+  const { data: fixtures } = await supabase
+    .from("fixtures")
+    .select("id, home_team, away_team, kickoff_at")
+    .eq("gameweek_id", gameweekId)
+    .order("kickoff_at", { ascending: true });
+
+  const fixtureList = (fixtures as SavedFixtureRow[] | null) ?? [];
+
+  if (fixtureList.length < 4) {
+    return;
+  }
+
+  const firstKickoff = fixtureList[0]?.kickoff_at;
+
+  if (!firstKickoff) {
+    return;
+  }
+
+  const pickerName = getPickerDisplayName(typedGameweek);
+  const gameweekName = formatGameweekName(typedGameweek);
+  const fixtureText = formatFixtureList(fixtureList.slice(0, 4));
+  const kickoffText = formatKickoffForActivity(firstKickoff);
+
+  await upsertActivityNotification({
+    eventKey: `fixtures_picked:${gameweekId}`,
+    type: "fixtures_selected",
+    title: `${pickerName} picked fixtures for ${gameweekName}`,
+    body: `${pickerName} picked the fixtures for ${gameweekName}. ${gameweekName} starts at ${kickoffText}.`,
+    metadata: {
+        pickerName,
+        gameweekId,
+        gameweekName,
+        firstKickoff: firstKickoff,
+        kickoffText,
+        fixtures: fixtureList.slice(0, 4).map((fixture) => ({
+        homeTeam: fixture.home_team,
+        awayTeam: fixture.away_team,
+        kickoffAt: fixture.kickoff_at,
+        })),
+    },
+    });
 }
 
 export async function savePickerFixtures(formData: FormData) {
@@ -212,6 +355,21 @@ export async function savePickerFixtures(formData: FormData) {
         );
       }
     }
+  }
+
+  try {
+    await upsertFixturesPickedActivity({
+      supabase,
+      gameweekId,
+    });
+  } catch (error) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        error instanceof Error
+          ? error.message
+          : "Could not create activity update",
+      )}`,
+    );
   }
 
   revalidatePath("/pick-fixtures");
