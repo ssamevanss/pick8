@@ -339,10 +339,6 @@ export async function createGameweekWithFixtures(formData: FormData) {
     });
   }
 
-  if (fixturesToCreate.length === 0) {
-    redirect("/admin?tab=create&error=Add at least one fixture");
-  }
-
   const { data: gameweek, error: gameweekError } = await supabase
     .from("gameweeks")
     .insert({
@@ -362,17 +358,19 @@ export async function createGameweekWithFixtures(formData: FormData) {
     );
   }
 
-  const { error: fixturesError } = await supabase.from("fixtures").insert(
-    fixturesToCreate.map((fixture) => ({
-      ...fixture,
-      gameweek_id: gameweek.id,
-    })),
-  );
-
-  if (fixturesError) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent(fixturesError.message)}`,
+  if (fixturesToCreate.length > 0) {
+    const { error: fixturesError } = await supabase.from("fixtures").insert(
+      fixturesToCreate.map((fixture) => ({
+        ...fixture,
+        gameweek_id: gameweek.id,
+      })),
     );
+
+    if (fixturesError) {
+      redirect(
+        `/admin?tab=create&error=${encodeURIComponent(fixturesError.message)}`,
+      );
+    }
   }
 
   revalidatePath("/admin");

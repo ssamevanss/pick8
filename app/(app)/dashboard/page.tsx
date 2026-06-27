@@ -42,8 +42,28 @@ export default async function DashboardPage({
 
   const gameweekList = (gameweeks as Gameweek[] | null) ?? [];
 
+  const gameweekIds = gameweekList.map((gameweek) => gameweek.id);
+
+  const { data: fixtureRows } =
+    gameweekIds.length > 0
+      ? await supabase
+          .from("fixtures")
+          .select("gameweek_id")
+          .in("gameweek_id", gameweekIds)
+      : { data: [] };
+
+  const gameweekIdsWithFixtures = new Set(
+    (fixtureRows ?? []).map((fixture) => fixture.gameweek_id),
+  );
+
+  const latestGameweekWithFixtures =
+    [...gameweekList]
+      .reverse()
+      .find((gameweek) => gameweekIdsWithFixtures.has(gameweek.id)) ?? null;
+
   const selectedGameweek =
     gameweekList.find((gameweek) => gameweek.id === params.gameweek) ??
+    latestGameweekWithFixtures ??
     gameweekList[gameweekList.length - 1] ??
     null;
 

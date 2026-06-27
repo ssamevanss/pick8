@@ -122,13 +122,13 @@ export default function FixturePredictionCard({
           )}
         </div>
       ) : (
-        <>
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <div className="flex-1">
-              <p className="font-medium">{fixture.home_team}</p>
-              <p className="font-medium">{fixture.away_team}</p>
-            </div>
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">{fixture.home_team}</p>
+            <p className="font-medium">{fixture.away_team}</p>
+          </div>
 
+          <div className="flex flex-wrap items-center justify-end gap-3">
             <div className="flex items-center gap-2">
               <input
                 name={`home_score_${fixture.id}`}
@@ -136,7 +136,7 @@ export default function FixturePredictionCard({
                 inputMode="numeric"
                 min="0"
                 defaultValue={ownPrediction?.home_score ?? ""}
-                className="h-10 w-12 rounded-lg bg-slate-800 text-center text-lg font-bold outline-none"
+                className="h-10 w-14 appearance-none rounded-lg bg-slate-800 text-center text-lg font-bold outline-none ring-1 ring-slate-700 [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 aria-label={`${fixture.home_team} score`}
               />
               <span className="text-slate-500">-</span>
@@ -146,32 +146,74 @@ export default function FixturePredictionCard({
                 inputMode="numeric"
                 min="0"
                 defaultValue={ownPrediction?.away_score ?? ""}
-                className="h-10 w-12 rounded-lg bg-slate-800 text-center text-lg font-bold outline-none"
+                className="h-10 w-14 appearance-none rounded-lg bg-slate-800 text-center text-lg font-bold outline-none ring-1 ring-slate-700 [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 aria-label={`${fixture.away_team} score`}
               />
             </div>
-          </div>
 
-          <label className="mt-4 flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 text-sm">
-            <input
-              name={`use_joker_${fixture.id}`}
-              type="checkbox"
-              disabled={jokerDisabled}
-              defaultChecked={hasJoker}
-              className="h-4 w-4 accent-emerald-500 disabled:cursor-not-allowed"
-            />
-            <span>
-              Use Joker{" "}
-              <span className="text-slate-500">
-                {hasJoker
-                  ? "(applied)"
-                  : jokersLeft <= 0
-                    ? "(none left)"
-                    : "(double points)"}
-              </span>
-            </span>
-          </label>
-        </>
+            {jokerDisabled ? (
+              <div
+                className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-sm font-medium ${
+                  hasJoker
+                    ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
+                    : "border-slate-700 bg-slate-900 text-slate-400"
+                }`}
+                title={
+                  hasJoker
+                    ? "Joker applied"
+                    : isLocked
+                      ? "Fixture locked"
+                      : "No Jokers left"
+                }
+              >
+                <span
+                  className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-sm ring-1 ring-inset ${
+                    hasJoker
+                      ? "bg-amber-500/15 text-amber-300 ring-amber-500/30"
+                      : "bg-slate-950/70 text-slate-500 ring-slate-700"
+                  }`}
+                >
+                  🃏
+                </span>
+
+                <span>
+                  {hasJoker
+                    ? "Joker active"
+                    : isLocked
+                      ? "Locked"
+                      : "No Jokers left"}
+                </span>
+
+                {hasJoker ? (
+                  <span className="rounded-full bg-slate-950/60 px-1.5 py-0.5 text-[11px] font-semibold text-amber-200">
+                    2x
+                  </span>
+                ) : null}
+              </div>
+            ) : (
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-medium text-slate-300 transition hover:border-amber-500/40 hover:text-white">
+                <input
+                  name={`use_joker_${fixture.id}`}
+                  type="checkbox"
+                  defaultChecked={hasJoker}
+                  className="peer sr-only"
+                />
+
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-950/70 text-sm ring-1 ring-inset ring-slate-700 transition peer-checked:bg-amber-500/15 peer-checked:text-amber-300 peer-checked:ring-amber-500/30">
+                  🃏
+                </span>
+
+                <span className="transition peer-checked:text-amber-200">
+                  Joker
+                </span>
+
+                <span className="rounded-full bg-slate-950/60 px-1.5 py-0.5 text-[11px] font-semibold text-slate-400 transition peer-checked:text-amber-200">
+                  2x
+                </span>
+              </label>
+            )}
+          </div>
+        </div>
       )}
 
       {isLocked && sortedPredictions.length > 0 ? (

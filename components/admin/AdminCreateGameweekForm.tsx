@@ -1,3 +1,5 @@
+import SubmitButton from "@/components/forms/SubmitButton";
+
 type Profile = {
   id: string;
   display_name: string;
@@ -33,8 +35,9 @@ export default function AdminCreateGameweekForm({
     <section className="mt-6 rounded-2xl bg-slate-900 p-4 shadow-lg">
       <h2 className="text-xl font-semibold">Create gameweek</h2>
       <p className="mt-2 text-sm text-slate-400">
-        Add up to four fixtures. Kickoff times are treated as London/Dublin time.
-      </p>
+        Create an empty future gameweek, or add up to four fixtures now. Kickoff
+        times are treated as London/Dublin time.
+        </p>
 
       <form action={action} className="mt-4 space-y-4">
         <input type="hidden" name="season_id" value={activeSeasonId} />
@@ -126,9 +129,11 @@ export default function AdminCreateGameweekForm({
           ))}
         </div>
 
-        <button className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950">
-          Create gameweek fixtures
-        </button>
+        <SubmitButton
+            idleLabel="Create gameweek"
+            pendingLabel="Creating gameweek..."
+            className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
+        />
       </form>
     </section>
   );

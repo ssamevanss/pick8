@@ -47,6 +47,7 @@ export default async function AdminPage({
 }) {
   const params = searchParams ? await searchParams : {};
   const selectedTab = getSelectedTab(params.tab);
+  const selectedGameweekId = params.gameweek;
 
   const supabase = await createClient();
 
@@ -78,10 +79,30 @@ export default async function AdminPage({
         .order("gameweek_number", { ascending: true })
     : { data: null };
 
-  const gameweekList = (gameweeks as Gameweek[] | null) ?? [];
+  const gameweekList = (gameweeks ?? []) as Gameweek[];
+
+  const gameweekIds = gameweekList.map((gameweek) => gameweek.id);
+
+  const { data: fixtureRows } =
+    gameweekIds.length > 0
+      ? await supabase
+          .from("fixtures")
+          .select("gameweek_id")
+          .in("gameweek_id", gameweekIds)
+      : { data: [] };
+
+  const gameweekIdsWithFixtures = new Set(
+    (fixtureRows ?? []).map((fixture) => fixture.gameweek_id),
+  );
+
+  const latestGameweekWithFixtures =
+    [...gameweekList]
+      .reverse()
+      .find((gameweek) => gameweekIdsWithFixtures.has(gameweek.id)) ?? null;
 
   const selectedGameweek =
-    gameweekList.find((gameweek) => gameweek.id === params.gameweek) ??
+    gameweekList.find((gameweek) => gameweek.id === selectedGameweekId) ??
+    latestGameweekWithFixtures ??
     gameweekList[gameweekList.length - 1] ??
     null;
 
