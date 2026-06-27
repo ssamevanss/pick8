@@ -12,6 +12,20 @@ type LeaderboardPredictionRow = {
   is_correct_result: boolean;
 };
 
+type ExistingGameweekRow = {
+  gameweek_number: number;
+};
+
+type FixturePickerOrderRow = {
+  user_id: string;
+  sort_order: number;
+};
+
+type GameweekPickerAssignmentRow = {
+  id: string;
+  gameweek_number: number;
+};
+
 type PredictionToScore = {
   id: string;
   fixture_id: string;
@@ -33,6 +47,157 @@ type FixtureToScore = {
       }[]
     | null;
 };
+
+export async function saveFixturePickerOrder(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+  const userIds = formData.getAll("user_id").map(String);
+
+  if (!seasonId || userIds.length === 0) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(
+        "No fixture picker order to save",
+      )}`,
+    );
+  }
+
+  const rows = userIds.map((userId) => {
+    const sortOrder = Number(formData.get(`sort_order_${userId}`));
+
+    return {
+      season_id: seasonId,
+      user_id: userId,
+      sort_order: sortOrder,
+    };
+  });
+
+  const hasInvalidOrder = rows.some(
+    (row) => !Number.isInteger(row.sort_order) || row.sort_order < 1,
+  );
+
+  if (hasInvalidOrder) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(
+        "Each picker needs a valid order number",
+      )}`,
+    );
+  }
+
+  const uniqueOrders = new Set(rows.map((row) => row.sort_order));
+
+  if (uniqueOrders.size !== rows.length) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(
+        "Each picker order number must be unique",
+      )}`,
+    );
+  }
+
+  const { error: deleteError } = await supabase
+    .from("fixture_picker_order")
+    .delete()
+    .eq("season_id", seasonId);
+
+  if (deleteError) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(deleteError.message)}`,
+    );
+  }
+
+  const { error: insertError } = await supabase
+    .from("fixture_picker_order")
+    .insert(rows);
+
+  if (insertError) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(insertError.message)}`,
+    );
+  }
+
+  revalidatePath("/admin");
+
+  redirect("/admin?tab=create&saved=1");
+}
+
+export async function assignFixturePickers(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+
+  if (!seasonId) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent("No active season found")}`,
+    );
+  }
+
+  const { data: pickerOrder, error: pickerOrderError } = await supabase
+    .from("fixture_picker_order")
+    .select("user_id, sort_order")
+    .eq("season_id", seasonId)
+    .order("sort_order", { ascending: true });
+
+  if (pickerOrderError) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(pickerOrderError.message)}`,
+    );
+  }
+
+  const orderedPickers = (pickerOrder as FixturePickerOrderRow[] | null) ?? [];
+
+  if (orderedPickers.length === 0) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(
+        "Save a fixture picker order before assigning pickers",
+      )}`,
+    );
+  }
+
+  const { data: gameweeks, error: gameweeksError } = await supabase
+    .from("gameweeks")
+    .select("id, gameweek_number")
+    .eq("season_id", seasonId)
+    .order("gameweek_number", { ascending: true });
+
+  if (gameweeksError) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(gameweeksError.message)}`,
+    );
+  }
+
+  const gameweekRows = (gameweeks as GameweekPickerAssignmentRow[] | null) ?? [];
+
+  if (gameweekRows.length === 0) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(
+        "Generate gameweeks before assigning pickers",
+      )}`,
+    );
+  }
+
+  for (let index = 0; index < gameweekRows.length; index++) {
+    const gameweek = gameweekRows[index];
+    const picker = orderedPickers[index % orderedPickers.length];
+
+    const { error: updateError } = await supabase
+      .from("gameweeks")
+      .update({
+        fixture_picker_id: picker.user_id,
+      })
+      .eq("id", gameweek.id);
+
+    if (updateError) {
+      redirect(
+        `/admin?tab=create&error=${encodeURIComponent(updateError.message)}`,
+      );
+    }
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+
+  redirect("/admin?tab=create&saved=1");
+}
 
 async function requireAdmin() {
   const supabase = await createClient();
@@ -377,6 +542,75 @@ export async function createGameweekWithFixtures(formData: FormData) {
   revalidatePath("/dashboard");
 
   redirect(`/admin?tab=fixtures&gameweek=${gameweek.id}&saved=1`);
+}
+
+export async function generateMissingGameweeks(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+  const targetCount = Number(formData.get("target_count"));
+
+  if (!seasonId || !Number.isInteger(targetCount) || targetCount < 1) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(
+        "Invalid season setup details",
+      )}`,
+    );
+  }
+
+  if (targetCount > 60) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(
+        "Maximum gameweek count is 60",
+      )}`,
+    );
+  }
+
+  const { data: existingGameweeks, error: existingError } = await supabase
+    .from("gameweeks")
+    .select("gameweek_number")
+    .eq("season_id", seasonId);
+
+  if (existingError) {
+    redirect(
+      `/admin?tab=create&error=${encodeURIComponent(existingError.message)}`,
+    );
+  }
+
+  const existingNumbers = new Set(
+    ((existingGameweeks as ExistingGameweekRow[] | null) ?? []).map(
+      (gameweek) => gameweek.gameweek_number,
+    ),
+  );
+
+  const gameweeksToCreate = [];
+
+  for (let gameweekNumber = 1; gameweekNumber <= targetCount; gameweekNumber++) {
+    if (!existingNumbers.has(gameweekNumber)) {
+      gameweeksToCreate.push({
+        season_id: seasonId,
+        gameweek_number: gameweekNumber,
+        name: `Gameweek ${gameweekNumber}`,
+      });
+    }
+  }
+
+  if (gameweeksToCreate.length > 0) {
+    const { error: insertError } = await supabase
+      .from("gameweeks")
+      .insert(gameweeksToCreate);
+
+    if (insertError) {
+      redirect(
+        `/admin?tab=create&error=${encodeURIComponent(insertError.message)}`,
+      );
+    }
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+
+  redirect("/admin?tab=create&saved=1");
 }
 
 export async function addFixtureToGameweek(formData: FormData) {

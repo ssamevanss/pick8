@@ -11,9 +11,9 @@ type AdminTabsProps = {
 };
 
 const tabs: { id: AdminTab; label: string }[] = [
-  { id: "create", label: "Create Gameweek" },
-  { id: "fixtures", label: "Manage Fixtures" },
-  { id: "results", label: "Enter Results" },
+  { id: "create", label: "Season" },
+  { id: "fixtures", label: "Fixtures" },
+  { id: "results", label: "Results" },
   { id: "users", label: "Users" },
 ];
 

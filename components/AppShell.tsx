@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 type AppShellProps = {
   children: ReactNode;
   isAdmin?: boolean;
+  canPickFixtures?: boolean;
 };
 
 const baseNavItems = [
@@ -11,10 +12,19 @@ const baseNavItems = [
   { href: "/leaderboard", label: "Leaderboard" },
 ];
 
+const pickFixturesNavItem = { href: "/pick-fixtures", label: "Pick Fixtures" };
 const adminNavItem = { href: "/admin", label: "Admin" };
 
-export default function AppShell({ children, isAdmin = false }: AppShellProps) {
-  const navItems = isAdmin ? [...baseNavItems, adminNavItem] : baseNavItems;
+export default function AppShell({
+  children,
+  isAdmin = false,
+  canPickFixtures = false,
+}: AppShellProps) {
+  const navItems = [
+    ...baseNavItems,
+    ...(canPickFixtures ? [pickFixturesNavItem] : []),
+    ...(isAdmin ? [adminNavItem] : []),
+  ];
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -41,9 +51,10 @@ export default function AppShell({ children, isAdmin = false }: AppShellProps) {
 
       <nav className="fixed inset-x-0 bottom-0 border-t border-slate-800 bg-slate-950/95 px-4 py-3 backdrop-blur">
         <div
-          className={`mx-auto grid max-w-5xl gap-2 ${
-            isAdmin ? "grid-cols-3" : "grid-cols-2"
-          }`}
+          className="mx-auto grid max-w-5xl gap-2"
+          style={{
+            gridTemplateColumns: `repeat(${navItems.length}, minmax(0, 1fr))`,
+          }}
         >
           {navItems.map((item) => (
             <Link

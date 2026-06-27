@@ -23,7 +23,7 @@ export default function AdminCreateGameweekForm({
   if (!activeSeasonId) {
     return (
       <section className="mt-6 rounded-2xl bg-slate-900 p-4 shadow-lg">
-        <h2 className="text-xl font-semibold">Create gameweek</h2>
+        <h2 className="text-xl font-semibold">Manually create gameweek</h2>
         <p className="mt-2 text-sm text-slate-400">
           No active season found. Create an active season first.
         </p>
@@ -33,10 +33,10 @@ export default function AdminCreateGameweekForm({
 
   return (
     <section className="mt-6 rounded-2xl bg-slate-900 p-4 shadow-lg">
-      <h2 className="text-xl font-semibold">Create gameweek</h2>
+      <h2 className="text-xl font-semibold">Manually create gameweek</h2>
       <p className="mt-2 text-sm text-slate-400">
-        Create an empty future gameweek, or add up to four fixtures now. Kickoff
-        times are treated as London/Dublin time.
+        Use this for special cases. Normally, generate gameweeks from Season setup and
+        add fixtures to an existing gameweek.
         </p>
 
       <form action={action} className="mt-4 space-y-4">

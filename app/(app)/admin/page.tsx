@@ -12,8 +12,16 @@ import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import type { Fixture, Gameweek } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
-import { createGameweekWithFixtures, updateFixtureResults } from "./actions";
+import {
+  assignFixturePickers,
+  createGameweekWithFixtures,
+  generateMissingGameweeks,
+  saveFixturePickerOrder,
+  updateFixtureResults,
+} from "./actions";
 import SubmitButton from "@/components/forms/SubmitButton";
+import AdminSeasonSetupCard from "@/components/admin/AdminSeasonSetupCard";
+import AdminFixturePickerOrderCard from "@/components/admin/AdminFixturePickerOrderCard";
 
 type Profile = {
   id: string;
@@ -70,6 +78,14 @@ export default async function AdminPage({
     .select("id, name")
     .eq("is_active", true)
     .single();
+
+  const { data: pickerOrder } = activeSeason
+  ? await supabase
+      .from("fixture_picker_order")
+      .select("user_id, sort_order")
+      .eq("season_id", activeSeason.id)
+      .order("sort_order", { ascending: true })
+  : { data: null };
 
   const { data: gameweeks } = activeSeason
     ? await supabase
@@ -172,12 +188,24 @@ export default async function AdminPage({
       ) : null}
 
       {selectedTab === "create" ? (
-        <AdminCreateGameweekForm
-          activeSeasonId={activeSeason?.id ?? null}
-          nextGameweekNumber={nextGameweekNumber}
-          profiles={(profiles as Profile[] | null) ?? []}
-          action={createGameweekWithFixtures}
-        />
+        <>
+          <AdminSeasonSetupCard
+            activeSeasonId={activeSeason?.id ?? null}
+            activeSeasonName={activeSeason?.name ?? null}
+            existingGameweekCount={gameweekList.length}
+            action={generateMissingGameweeks}
+          />
+
+          <AdminFixturePickerOrderCard
+            activeSeasonId={activeSeason?.id ?? null}
+            profiles={(profiles as Profile[] | null) ?? []}
+            pickerOrder={
+              (pickerOrder as { user_id: string; sort_order: number }[] | null) ?? []
+            }
+            saveAction={saveFixturePickerOrder}
+            assignAction={assignFixturePickers}
+          />
+        </>
       ) : null}
 
       {selectedTab === "fixtures" ? (
@@ -213,6 +241,20 @@ export default async function AdminPage({
 
             <AdminAddFixtureForm gameweekId={selectedGameweek?.id ?? null} />
           </div>
+          <details className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-lg">
+            <summary className="cursor-pointer select-none text-sm font-semibold text-slate-300">
+              Advanced: manually create a gameweek
+            </summary>
+
+            <div className="mt-4">
+              <AdminCreateGameweekForm
+                activeSeasonId={activeSeason?.id ?? null}
+                nextGameweekNumber={nextGameweekNumber}
+                profiles={(profiles as Profile[] | null) ?? []}
+                action={createGameweekWithFixtures}
+              />
+            </div>
+          </details>
         </section>
       ) : null}
 
