@@ -13,6 +13,7 @@ import type { Fixture, Gameweek } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
 import { createGameweekWithFixtures, updateFixtureResults } from "./actions";
+import SubmitButton from "@/components/forms/SubmitButton";
 
 type Profile = {
   id: string;
@@ -226,9 +227,11 @@ export default async function AdminPage({
             ))}
 
             {fixtureList.length > 0 ? (
-              <button className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950">
-                Save results
-              </button>
+              <SubmitButton
+                idleLabel="Save results"
+                pendingLabel="Saving results..."
+                className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
+              />
             ) : null}
           </form>
         </section>

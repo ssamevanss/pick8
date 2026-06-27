@@ -12,6 +12,7 @@ import type {
 } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
 import { savePredictions } from "./actions";
+import SubmitButton from "@/components/forms/SubmitButton";
 
 export default async function DashboardPage({
   searchParams,
@@ -208,9 +209,11 @@ export default async function DashboardPage({
           ))}
 
           {fixtures && fixtures.length > 0 ? (
-            <button className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950">
-              Save open predictions
-            </button>
+            <SubmitButton
+              idleLabel="Save open predictions"
+              pendingLabel="Saving predictions..."
+              className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
+            />
           ) : null}
         </form>
       </section>
