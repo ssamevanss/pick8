@@ -11,6 +11,7 @@ import type {
   Prediction,
 } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
+import { getActiveSeason } from "@/utils/seasons";
 import { savePredictions } from "./actions";
 import SubmitButton from "@/components/forms/SubmitButton";
 
@@ -26,11 +27,7 @@ export default async function DashboardPage({
     data: { user },
   } = await supabase.auth.getUser();
 
-  const { data: activeSeason } = await supabase
-    .from("seasons")
-    .select("id")
-    .eq("is_active", true)
-    .single();
+  const { data: activeSeason } = await getActiveSeason(supabase, "id");
 
   const { data: gameweeks } = activeSeason
     ? await supabase
@@ -191,27 +188,43 @@ export default async function DashboardPage({
           </p>
         </div>
 
+        {!activeSeason ? (
+          <p className="rounded-xl bg-amber-950 p-4 text-sm text-amber-300">
+            No active season is available yet. Predictions will open once an
+            admin activates a season.
+          </p>
+        ) : null}
+
+        {activeSeason && gameweekList.length === 0 ? (
+          <p className="rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
+            No gameweeks have been created for the active season yet.
+          </p>
+        ) : null}
+
         {fixturesError ? (
           <p className="rounded-xl bg-red-950 p-4 text-sm text-red-300">
-            {fixturesError.message}
+            Could not load fixtures. Please try again shortly.
           </p>
         ) : null}
 
         {predictionsError ? (
           <p className="mt-3 rounded-xl bg-red-950 p-4 text-sm text-red-300">
-            {predictionsError.message}
+            Could not load predictions. Please try again shortly.
           </p>
         ) : null}
 
         {jokerUsageError ? (
           <p className="mt-3 rounded-xl bg-red-950 p-4 text-sm text-red-300">
-            {jokerUsageError.message}
+            Could not load Joker usage. Please try again shortly.
           </p>
         ) : null}
 
-        {!fixturesError && (!fixtures || fixtures.length === 0) ? (
+        {activeSeason &&
+        gameweekList.length > 0 &&
+        !fixturesError &&
+        (!fixtures || fixtures.length === 0) ? (
           <p className="rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
-            No fixtures found for this gameweek.
+            No fixtures have been selected for this gameweek yet.
           </p>
         ) : null}
 

@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import AppShell from "@/components/AppShell";
 import { createClient } from "@/utils/supabase/server";
+import { getActiveSeason } from "@/utils/seasons";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -59,11 +60,16 @@ export default async function AppLayout({ children }: AppLayoutProps) {
 
   const isAdmin = profile.role === "admin";
 
-  const { data: assignedGameweeks } = await supabase
-    .from("gameweeks")
-    .select("id, gameweek_number, season_id")
-    .eq("fixture_picker_id", user.id)
-    .order("gameweek_number", { ascending: true });
+  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+
+  const { data: assignedGameweeks } = activeSeason
+    ? await supabase
+        .from("gameweeks")
+        .select("id, gameweek_number, season_id")
+        .eq("season_id", activeSeason.id)
+        .eq("fixture_picker_id", user.id)
+        .order("gameweek_number", { ascending: true })
+    : { data: null };
 
   const assignedGameweekList =
     (assignedGameweeks as AssignedGameweek[] | null) ?? [];

@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
+import { getKickoffIso } from "@/utils/fixtures";
+import { getActiveSeason } from "@/utils/seasons";
 import { upsertActivityNotification } from "@/utils/activity";
 
 const slotNumbers = [1, 2, 3, 4];
@@ -34,14 +36,6 @@ type GameweekWithPickerRow = {
     | null;
 };
 
-function getKickoffIso(rawKickoff: string) {
-  if (!rawKickoff) {
-    return null;
-  }
-
-  return new Date(rawKickoff).toISOString();
-}
-
 function getPickerDisplayName(gameweek: GameweekWithPickerRow) {
   if (Array.isArray(gameweek.profiles)) {
     return gameweek.profiles[0]?.display_name ?? "Someone";
@@ -55,28 +49,6 @@ function formatGameweekName(gameweek: {
   name: string | null;
 }) {
   return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
-}
-
-function formatFixtureList(fixtures: SavedFixtureRow[]) {
-  const fixtureNames = fixtures.map(
-    (fixture) => `${fixture.home_team} v ${fixture.away_team}`,
-  );
-
-  if (fixtureNames.length === 0) {
-    return "";
-  }
-
-  if (fixtureNames.length === 1) {
-    return fixtureNames[0];
-  }
-
-  if (fixtureNames.length === 2) {
-    return `${fixtureNames[0]} and ${fixtureNames[1]}`;
-  }
-
-  return `${fixtureNames.slice(0, -1).join(", ")}, and ${
-    fixtureNames[fixtureNames.length - 1]
-  }`;
 }
 
 function formatKickoffForActivity(kickoffAt: string) {
@@ -113,6 +85,16 @@ async function requireFixtureManagerForGameweek(gameweekId: string) {
     redirect(
       `/pick-fixtures?error=${encodeURIComponent(
         "You are not assigned to manage this gameweek",
+      )}`,
+    );
+  }
+
+  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+
+  if (!activeSeason || gameweek.season_id !== activeSeason.id) {
+    redirect(
+      `/pick-fixtures?error=${encodeURIComponent(
+        "This gameweek is not part of the active season",
       )}`,
     );
   }

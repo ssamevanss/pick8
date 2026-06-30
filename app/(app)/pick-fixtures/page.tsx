@@ -4,6 +4,7 @@ import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import SubmitButton from "@/components/forms/SubmitButton";
 import type { Fixture, Gameweek } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
+import { getActiveSeason } from "@/utils/seasons";
 import { savePickerFixtures } from "./actions";
 import { redirect } from "next/navigation";
 
@@ -100,11 +101,7 @@ export default async function PickFixturesPage({
     redirect("/login");
   }
 
-  const { data: activeSeason } = await supabase
-    .from("seasons")
-    .select("id")
-    .eq("is_active", true)
-    .single();
+  const { data: activeSeason } = await getActiveSeason(supabase, "id");
 
   const eligibleGameweeks = activeSeason
     ? await getEligiblePickerGameweeks({
@@ -114,16 +111,48 @@ export default async function PickFixturesPage({
       })
     : [];
 
+  if (!activeSeason) {
+    return (
+      <>
+        <header className="mb-8">
+          <h1 className="text-3xl font-bold tracking-tight">Pick Fixtures</h1>
+          <p className="mt-2 text-sm text-slate-400">
+            Fixture picking will open once an admin activates a season.
+          </p>
+        </header>
+
+        <section className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <p className="text-sm font-semibold text-amber-300">
+            No active season
+          </p>
+          <p className="mt-2 text-sm text-slate-300">
+            There is no live season for fixture selection yet.
+          </p>
+        </section>
+      </>
+    );
+  }
+
   if (eligibleGameweeks.length === 0) {
     return (
       <>
         <header className="mb-8">
           <h1 className="text-3xl font-bold tracking-tight">Pick Fixtures</h1>
           <p className="mt-2 text-sm text-slate-400">
-            You are not currently able to pick fixtures. Your assigned gameweek
-            will unlock once the previous gameweek has been completed.
+            You are not currently assigned to pick fixtures for an unlocked
+            active-season gameweek.
           </p>
         </header>
+
+        <section className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+          <p className="text-sm font-semibold text-slate-300">
+            Nothing to pick right now
+          </p>
+          <p className="mt-2 text-sm text-slate-400">
+            Your assigned gameweek may still be locked until the previous
+            gameweek is complete, or you may not be scheduled as a picker.
+          </p>
+        </section>
       </>
     );
   }
@@ -218,7 +247,7 @@ export default async function PickFixturesPage({
 
         {fixturesError ? (
           <p className="rounded-xl bg-red-950 p-4 text-sm text-red-300">
-            {fixturesError.message}
+            Could not load fixtures for this gameweek. Please try again shortly.
           </p>
         ) : null}
 

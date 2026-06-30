@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
+import { getActiveSeason } from "@/utils/seasons";
 
 type FixtureLookupRow = {
   id: string;
@@ -95,6 +96,17 @@ export async function savePredictions(formData: FormData) {
     );
   }
 
+  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+
+  if (!activeSeason) {
+    redirect(
+      getPredictionsRedirectUrl({
+        gameweekId: selectedGameweekId,
+        error: "No active season found",
+      }),
+    );
+  }
+
   const fixtureById = new Map(
     (fixtures as FixtureLookupRow[]).map((fixture) => [fixture.id, fixture]),
   );
@@ -146,6 +158,26 @@ export async function savePredictions(formData: FormData) {
       );
     }
 
+    const seasonId = getSeasonId(fixture);
+
+    if (!seasonId) {
+      redirect(
+        getPredictionsRedirectUrl({
+          gameweekId: selectedGameweekId,
+          error: "Season not found for fixture",
+        }),
+      );
+    }
+
+    if (seasonId !== activeSeason.id) {
+      redirect(
+        getPredictionsRedirectUrl({
+          gameweekId: selectedGameweekId,
+          error: "This fixture is not part of the active season",
+        }),
+      );
+    }
+
     const isLocked = new Date(fixture.kickoff_at) <= new Date();
 
     if (isLocked || fixture.status !== "scheduled") {
@@ -174,17 +206,6 @@ export async function savePredictions(formData: FormData) {
         getPredictionsRedirectUrl({
           gameweekId: selectedGameweekId,
           error: predictionError.message,
-        }),
-      );
-    }
-
-    const seasonId = getSeasonId(fixture);
-
-    if (!seasonId) {
-      redirect(
-        getPredictionsRedirectUrl({
-          gameweekId: selectedGameweekId,
-          error: "Season not found for fixture",
         }),
       );
     }

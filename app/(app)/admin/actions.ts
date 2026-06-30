@@ -2,8 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { fromZonedTime } from "date-fns-tz";
 import { createClient } from "@/utils/supabase/server";
+import { getKickoffIso } from "@/utils/fixtures";
+import { getActiveSeason } from "@/utils/seasons";
 import { upsertActivityNotification } from "@/utils/activity";
 
 type LeaderboardPredictionRow = {
@@ -81,16 +82,6 @@ type ExistingGameweekRow = {
   gameweek_number: number;
 };
 
-type FixturePickerOrderRow = {
-  user_id: string;
-  sort_order: number;
-};
-
-type GameweekPickerAssignmentRow = {
-  id: string;
-  gameweek_number: number;
-};
-
 type PredictionToScore = {
   id: string;
   fixture_id: string;
@@ -112,157 +103,6 @@ type FixtureToScore = {
       }[]
     | null;
 };
-
-export async function saveFixturePickerOrder(formData: FormData) {
-  const { supabase } = await requireAdmin();
-
-  const seasonId = String(formData.get("season_id") ?? "");
-  const userIds = formData.getAll("user_id").map(String);
-
-  if (!seasonId || userIds.length === 0) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent(
-        "No fixture picker order to save",
-      )}`,
-    );
-  }
-
-  const rows = userIds.map((userId) => {
-    const sortOrder = Number(formData.get(`sort_order_${userId}`));
-
-    return {
-      season_id: seasonId,
-      user_id: userId,
-      sort_order: sortOrder,
-    };
-  });
-
-  const hasInvalidOrder = rows.some(
-    (row) => !Number.isInteger(row.sort_order) || row.sort_order < 1,
-  );
-
-  if (hasInvalidOrder) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent(
-        "Each picker needs a valid order number",
-      )}`,
-    );
-  }
-
-  const uniqueOrders = new Set(rows.map((row) => row.sort_order));
-
-  if (uniqueOrders.size !== rows.length) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent(
-        "Each picker order number must be unique",
-      )}`,
-    );
-  }
-
-  const { error: deleteError } = await supabase
-    .from("fixture_picker_order")
-    .delete()
-    .eq("season_id", seasonId);
-
-  if (deleteError) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent(deleteError.message)}`,
-    );
-  }
-
-  const { error: insertError } = await supabase
-    .from("fixture_picker_order")
-    .insert(rows);
-
-  if (insertError) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent(insertError.message)}`,
-    );
-  }
-
-  revalidatePath("/admin");
-
-  redirect("/admin?tab=create&saved=1");
-}
-
-export async function assignFixturePickers(formData: FormData) {
-  const { supabase } = await requireAdmin();
-
-  const seasonId = String(formData.get("season_id") ?? "");
-
-  if (!seasonId) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent("No active season found")}`,
-    );
-  }
-
-  const { data: pickerOrder, error: pickerOrderError } = await supabase
-    .from("fixture_picker_order")
-    .select("user_id, sort_order")
-    .eq("season_id", seasonId)
-    .order("sort_order", { ascending: true });
-
-  if (pickerOrderError) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent(pickerOrderError.message)}`,
-    );
-  }
-
-  const orderedPickers = (pickerOrder as FixturePickerOrderRow[] | null) ?? [];
-
-  if (orderedPickers.length === 0) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent(
-        "Save a fixture picker order before assigning pickers",
-      )}`,
-    );
-  }
-
-  const { data: gameweeks, error: gameweeksError } = await supabase
-    .from("gameweeks")
-    .select("id, gameweek_number")
-    .eq("season_id", seasonId)
-    .order("gameweek_number", { ascending: true });
-
-  if (gameweeksError) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent(gameweeksError.message)}`,
-    );
-  }
-
-  const gameweekRows = (gameweeks as GameweekPickerAssignmentRow[] | null) ?? [];
-
-  if (gameweekRows.length === 0) {
-    redirect(
-      `/admin?tab=create&error=${encodeURIComponent(
-        "Generate gameweeks before assigning pickers",
-      )}`,
-    );
-  }
-
-  for (let index = 0; index < gameweekRows.length; index++) {
-    const gameweek = gameweekRows[index];
-    const picker = orderedPickers[index % orderedPickers.length];
-
-    const { error: updateError } = await supabase
-      .from("gameweeks")
-      .update({
-        fixture_picker_id: picker.user_id,
-      })
-      .eq("id", gameweek.id);
-
-    if (updateError) {
-      redirect(
-        `/admin?tab=create&error=${encodeURIComponent(updateError.message)}`,
-      );
-    }
-  }
-
-  revalidatePath("/admin");
-  revalidatePath("/dashboard");
-
-  redirect("/admin?tab=create&saved=1");
-}
 
 async function requireAdmin() {
   const supabase = await createClient();
@@ -509,6 +349,72 @@ async function recalculateLeaderboard(seasonId: string) {
   }
 }
 
+export async function recalculateActiveSeasonLeaderboard() {
+  const { supabase } = await requireAdmin();
+  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+
+  if (!activeSeason) {
+    redirect(
+      `/admin?tab=maintenance&error=${encodeURIComponent(
+        "No active season found",
+      )}`,
+    );
+  }
+
+  await recalculateLeaderboard(activeSeason.id);
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/leaderboard");
+
+  redirect("/admin?tab=maintenance&saved=1");
+}
+
+export async function rescoreActiveSeasonAndRecalculateLeaderboard() {
+  const { supabase } = await requireAdmin();
+  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+
+  if (!activeSeason) {
+    redirect(
+      `/admin?tab=maintenance&error=${encodeURIComponent(
+        "No active season found",
+      )}`,
+    );
+  }
+
+  const { data: completedFixtures, error } = await supabase
+    .from("fixtures")
+    .select(
+      `
+      id,
+      gameweeks!inner (
+        season_id
+      )
+    `,
+    )
+    .eq("status", "completed")
+    .eq("gameweeks.season_id", activeSeason.id);
+
+  if (error) {
+    redirect(
+      `/admin?tab=maintenance&error=${encodeURIComponent(error.message)}`,
+    );
+  }
+
+  for (const fixture of (completedFixtures as { id: string }[] | null) ?? []) {
+    await scoreFixture(fixture.id);
+  }
+
+  await recalculateLeaderboard(activeSeason.id);
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/predictions");
+  revalidatePath("/leaderboard");
+
+  redirect("/admin?tab=maintenance&saved=1");
+}
+
 export async function createGameweekWithFixtures(formData: FormData) {
   const { supabase, user } = await requireAdmin();
 
@@ -558,7 +464,7 @@ export async function createGameweekWithFixtures(formData: FormData) {
       );
     }
 
-    const kickoffAt = fromZonedTime(kickoffRaw, "Europe/London").toISOString();
+    const kickoffAt = getKickoffIso(kickoffRaw);
 
     fixturesToCreate.push({
       home_team: homeTeam,
@@ -696,7 +602,7 @@ export async function addFixtureToGameweek(formData: FormData) {
     );
   }
 
-  const kickoffAt = fromZonedTime(kickoffRaw, "Europe/London").toISOString();
+  const kickoffAt = getKickoffIso(kickoffRaw);
 
   const { error } = await supabase.from("fixtures").insert({
     gameweek_id: gameweekId,
@@ -784,7 +690,7 @@ export async function updateFixtureDetails(formData: FormData) {
     redirect("/admin?tab=fixtures&error=Fixture details are incomplete");
   }
 
-  const kickoffAt = fromZonedTime(kickoffRaw, "Europe/London").toISOString();
+  const kickoffAt = getKickoffIso(kickoffRaw);
 
   const { data: existingFixture } = await supabase
     .from("fixtures")
@@ -1005,33 +911,792 @@ function getProfileDisplayName(
   return profiles?.display_name ?? "Unknown player";
 }
 
+type SeasonStatus = "draft" | "active" | "archived";
+
+function getSeasonRedirectUrl({
+  saved,
+  error,
+}: {
+  saved?: string;
+  error?: string;
+}) {
+  const params = new URLSearchParams({
+    tab: "create",
+  });
+
+  if (saved) {
+    params.set("saved", saved);
+  }
+
+  if (error) {
+    params.set("error", error);
+  }
+
+  return `/admin?${params.toString()}`;
+}
+
+function getValidSeasonType(value: string) {
+  if (value === "standard" || value === "test" || value === "world_cup") {
+    return value;
+  }
+
+  return "standard";
+}
+
+async function createGameweeksForSeason({
+  supabase,
+  seasonId,
+  targetCount,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  seasonId: string;
+  targetCount: number;
+}) {
+  if (!Number.isInteger(targetCount) || targetCount < 1) {
+    return;
+  }
+
+  if (targetCount > 60) {
+    throw new Error("Maximum gameweek count is 60");
+  }
+
+  const gameweeksToCreate = Array.from({ length: targetCount }, (_, index) => {
+    const gameweekNumber = index + 1;
+
+    return {
+      season_id: seasonId,
+      gameweek_number: gameweekNumber,
+      name: `Gameweek ${gameweekNumber}`,
+    };
+  });
+
+  const { error } = await supabase.from("gameweeks").insert(gameweeksToCreate);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function createSeason(formData: FormData) {
+  const { supabase, user } = await requireAdmin();
+
+  const name = String(formData.get("name") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim();
+  const seasonType = getValidSeasonType(
+    String(formData.get("season_type") ?? "standard"),
+  );
+  const status = String(formData.get("status") ?? "draft") as SeasonStatus;
+  const gameweekCount = Number(formData.get("gameweek_count") ?? 0);
+
+  const autoAssignPickers =
+  String(formData.get("auto_assign_pickers") ?? "") === "on";
+
+  if (!name) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "Season name is required",
+      }),
+    );
+  }
+
+  if (status !== "draft" && status !== "active") {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "New seasons must be created as draft or active",
+      }),
+    );
+  }
+
+  if (
+    gameweekCount &&
+    (!Number.isInteger(gameweekCount) || gameweekCount < 1 || gameweekCount > 60)
+  ) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "Gameweek count must be between 1 and 60",
+      }),
+    );
+  }
+
+  if (status === "active") {
+    const { error: archiveActiveError } = await supabase
+      .from("seasons")
+      .update({
+        status: "archived",
+        archived_at: new Date().toISOString(),
+        archived_by: user.id,
+      })
+      .eq("status", "active");
+
+    if (archiveActiveError) {
+      redirect(
+        getSeasonRedirectUrl({
+          error: archiveActiveError.message,
+        }),
+      );
+    }
+  }
+
+  const { data: season, error } = await supabase
+    .from("seasons")
+    .insert({
+      name,
+      description: description || null,
+      season_type: seasonType,
+      status,
+      created_by: user.id,
+    })
+    .select("id")
+    .single();
+
+  if (error || !season) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: error?.message ?? "Could not create season",
+      }),
+    );
+  }
+
+  try {
+    if (gameweekCount > 0) {
+      await createGameweeksForSeason({
+        supabase,
+        seasonId: season.id,
+        targetCount: gameweekCount,
+      });
+    }
+    if (autoAssignPickers) {
+      await autoAssignPickersForSeason({
+        supabase,
+        seasonId: season.id,
+      });
+    }
+  } catch (createGameweeksError) {
+    redirect(
+      getSeasonRedirectUrl({
+        error:
+          createGameweeksError instanceof Error
+            ? createGameweeksError.message
+            : "Season created, but gameweeks could not be generated",
+      }),
+    );
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/predictions");
+  revalidatePath("/pick-fixtures");
+  revalidatePath("/leaderboard");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
+export async function activateSeason(formData: FormData) {
+  const { supabase, user } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+
+  if (!seasonId) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No season selected",
+      }),
+    );
+  }
+
+  const { data: targetSeason, error: targetSeasonError } = await supabase
+    .from("seasons")
+    .select("id, status")
+    .eq("id", seasonId)
+    .single();
+
+  if (targetSeasonError || !targetSeason) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: targetSeasonError?.message ?? "Could not find season",
+      }),
+    );
+  }
+
+  if (targetSeason.status === "archived") {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "Archived seasons cannot be reactivated. Create a new season instead.",
+      }),
+    );
+  }
+
+  const { error: archiveActiveError } = await supabase
+    .from("seasons")
+    .update({
+      status: "archived",
+      archived_at: new Date().toISOString(),
+      archived_by: user.id,
+    })
+    .eq("status", "active")
+    .neq("id", seasonId);
+
+  if (archiveActiveError) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: archiveActiveError.message,
+      }),
+    );
+  }
+
+  const { error: activateError } = await supabase
+    .from("seasons")
+    .update({
+      status: "active",
+      archived_at: null,
+      archived_by: null,
+    })
+    .eq("id", seasonId);
+
+  if (activateError) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: activateError.message,
+      }),
+    );
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/predictions");
+  revalidatePath("/pick-fixtures");
+  revalidatePath("/leaderboard");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
+export async function restoreSeasonToDraft(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+
+  if (!seasonId) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No season selected",
+      }),
+    );
+  }
+
+  const { error } = await supabase
+    .from("seasons")
+    .update({
+      status: "draft",
+      archived_at: null,
+      archived_by: null,
+    })
+    .eq("id", seasonId)
+    .eq("status", "archived");
+
+  if (error) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: error.message,
+      }),
+    );
+  }
+
+  revalidatePath("/admin");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
+export async function saveGameweekPickerAssignments(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const gameweekIds = formData.getAll("gameweek_id").map(String);
+
+  if (gameweekIds.length === 0) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No gameweeks found to update",
+      }),
+    );
+  }
+
+  for (const gameweekId of gameweekIds) {
+    const fixturePickerIdRaw = String(
+      formData.get(`fixture_picker_id_${gameweekId}`) ?? "",
+    );
+
+    const fixturePickerId =
+      fixturePickerIdRaw && fixturePickerIdRaw !== "unassigned"
+        ? fixturePickerIdRaw
+        : null;
+
+    const { error } = await supabase
+      .from("gameweeks")
+      .update({
+        fixture_picker_id: fixturePickerId,
+      })
+      .eq("id", gameweekId);
+
+    if (error) {
+      redirect(
+        getSeasonRedirectUrl({
+          error: error.message,
+        }),
+      );
+    }
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/pick-fixtures");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
+export async function autoAssignAllGameweekPickers(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+
+  if (!seasonId) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No season selected",
+      }),
+    );
+  }
+
+  try {
+    await autoAssignPickersForSeason({
+      supabase,
+      seasonId,
+    });
+  } catch (error) {
+    redirect(
+      getSeasonRedirectUrl({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not auto-assign fixture pickers",
+      }),
+    );
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/pick-fixtures");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
+export async function autoAssignFutureGameweekPickers(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+
+  if (!seasonId) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No season selected",
+      }),
+    );
+  }
+
+  try {
+    await autoAssignPickersForSeason({
+      supabase,
+      seasonId,
+      onlyGameweeksWithoutFixtures: true,
+    });
+  } catch (error) {
+    redirect(
+      getSeasonRedirectUrl({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not auto-assign future fixture pickers",
+      }),
+    );
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/pick-fixtures");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
+export async function updateSeasonArchiveVisibility(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+  const showInArchive =
+    String(formData.get("show_in_archive") ?? "") === "on";
+
+  if (!seasonId) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No season selected",
+      }),
+    );
+  }
+
+  const { error } = await supabase
+    .from("seasons")
+    .update({
+      show_in_archive: showInArchive,
+    })
+    .eq("id", seasonId);
+
+  if (error) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: error.message,
+      }),
+    );
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/leaderboard");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
+export async function deleteSeason(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+  const confirmText = String(formData.get("confirm_text") ?? "").trim();
+
+  if (!seasonId) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No season selected",
+      }),
+    );
+  }
+
+  if (confirmText !== "DELETE") {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "Type DELETE to confirm season deletion",
+      }),
+    );
+  }
+
+  const { data: season, error: seasonError } = await supabase
+    .from("seasons")
+    .select("id, name, status, season_type, show_in_archive")
+    .eq("id", seasonId)
+    .single();
+
+  if (seasonError || !season) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: seasonError?.message ?? "Could not find season",
+      }),
+    );
+  }
+
+  if (season.status === "active") {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "You cannot delete the active season. Archive it first.",
+      }),
+    );
+  }
+
+  const canDelete =
+    season.status === "draft" ||
+    season.season_type === "test" ||
+    season.season_type === "world_cup" ||
+    season.show_in_archive === false;
+
+  if (!canDelete) {
+    redirect(
+      getSeasonRedirectUrl({
+        error:
+          "Only draft, test, cup, or hidden archived seasons can be deleted.",
+      }),
+    );
+  }
+
+  const { data: gameweeks } = await supabase
+    .from("gameweeks")
+    .select("id")
+    .eq("season_id", seasonId);
+
+  const gameweekIds =
+    (gameweeks as { id: string }[] | null)?.map((gameweek) => gameweek.id) ??
+    [];
+
+  const { data: fixtures } =
+    gameweekIds.length > 0
+      ? await supabase
+          .from("fixtures")
+          .select("id")
+          .in("gameweek_id", gameweekIds)
+      : { data: null };
+
+  const fixtureIds =
+    (fixtures as { id: string }[] | null)?.map((fixture) => fixture.id) ?? [];
+
+  if (fixtureIds.length > 0) {
+    const { error: jokerDeleteError } = await supabase
+      .from("joker_usage")
+      .delete()
+      .in("fixture_id", fixtureIds);
+
+    if (jokerDeleteError) {
+      redirect(
+        getSeasonRedirectUrl({
+          error: jokerDeleteError.message,
+        }),
+      );
+    }
+
+    const { error: predictionDeleteError } = await supabase
+      .from("predictions")
+      .delete()
+      .in("fixture_id", fixtureIds);
+
+    if (predictionDeleteError) {
+      redirect(
+        getSeasonRedirectUrl({
+          error: predictionDeleteError.message,
+        }),
+      );
+    }
+
+    const { error: fixtureDeleteError } = await supabase
+      .from("fixtures")
+      .delete()
+      .in("id", fixtureIds);
+
+    if (fixtureDeleteError) {
+      redirect(
+        getSeasonRedirectUrl({
+          error: fixtureDeleteError.message,
+        }),
+      );
+    }
+  }
+
+  if (gameweekIds.length > 0) {
+    const { error: gameweekDeleteError } = await supabase
+      .from("gameweeks")
+      .delete()
+      .in("id", gameweekIds);
+
+    if (gameweekDeleteError) {
+      redirect(
+        getSeasonRedirectUrl({
+          error: gameweekDeleteError.message,
+        }),
+      );
+    }
+  }
+
+  await supabase.from("fixture_picker_order").delete().eq("season_id", seasonId);
+  await supabase.from("leaderboard_entries").delete().eq("season_id", seasonId);
+
+  const { error: seasonDeleteError } = await supabase
+    .from("seasons")
+    .delete()
+    .eq("id", seasonId);
+
+  if (seasonDeleteError) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: seasonDeleteError.message,
+      }),
+    );
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/predictions");
+  revalidatePath("/pick-fixtures");
+  revalidatePath("/leaderboard");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
+export async function archiveSeason(formData: FormData) {
+  const { supabase, user } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+
+  if (!seasonId) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No season selected",
+      }),
+    );
+  }
+
+  const { error } = await supabase
+    .from("seasons")
+    .update({
+      status: "archived",
+      archived_at: new Date().toISOString(),
+      archived_by: user.id,
+    })
+    .eq("id", seasonId);
+
+  if (error) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: error.message,
+      }),
+    );
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/predictions");
+  revalidatePath("/pick-fixtures");
+  revalidatePath("/leaderboard");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
+async function getApprovedPlayerIds({
+  supabase,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+}) {
+  const { data: approvedPlayers, error } = await supabase
+    .from("profiles")
+    .select("id, display_name")
+    .eq("status", "approved")
+    .order("display_name", { ascending: true });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (
+    approvedPlayers as
+      | {
+          id: string;
+          display_name: string;
+        }[]
+      | null
+  ) ?? [];
+}
+
+async function autoAssignPickersForSeason({
+  supabase,
+  seasonId,
+  onlyGameweeksWithoutFixtures = false,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  seasonId: string;
+  onlyGameweeksWithoutFixtures?: boolean;
+}) {
+  const approvedPlayers = await getApprovedPlayerIds({ supabase });
+
+  if (approvedPlayers.length === 0) {
+    throw new Error("No approved users found to assign as fixture pickers");
+  }
+
+  const { data: gameweeks, error: gameweeksError } = await supabase
+    .from("gameweeks")
+    .select(
+      `
+      id,
+      gameweek_number,
+      fixtures (
+        id
+      )
+    `,
+    )
+    .eq("season_id", seasonId)
+    .order("gameweek_number", { ascending: true });
+
+  if (gameweeksError) {
+    throw new Error(gameweeksError.message);
+  }
+
+  const gameweekList =
+    (gameweeks as
+      | {
+          id: string;
+          gameweek_number: number;
+          fixtures:
+            | {
+                id: string;
+              }[]
+            | null;
+        }[]
+      | null) ?? [];
+
+  const assignableGameweeks = onlyGameweeksWithoutFixtures
+    ? gameweekList.filter(
+        (gameweek) => (gameweek.fixtures ?? []).length === 0,
+      )
+    : gameweekList;
+
+  const updates = assignableGameweeks.map((gameweek, index) => ({
+    id: gameweek.id,
+    fixture_picker_id: approvedPlayers[index % approvedPlayers.length].id,
+  }));
+
+  for (const update of updates) {
+    const { error } = await supabase
+      .from("gameweeks")
+      .update({
+        fixture_picker_id: update.fixture_picker_id,
+      })
+      .eq("id", update.id);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  }
+}
+
 function formatGameweekName(gameweek: {
   gameweek_number: number;
   name: string | null;
 }) {
   return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
-}
-
-function formatFixtureList(fixtures: ActivityFixtureRow[]) {
-  const fixtureNames = fixtures.map(
-    (fixture) => `${fixture.home_team} v ${fixture.away_team}`,
-  );
-
-  if (fixtureNames.length === 0) {
-    return "";
-  }
-
-  if (fixtureNames.length === 1) {
-    return fixtureNames[0];
-  }
-
-  if (fixtureNames.length === 2) {
-    return `${fixtureNames[0]} and ${fixtureNames[1]}`;
-  }
-
-  return `${fixtureNames.slice(0, -1).join(", ")}, and ${
-    fixtureNames[fixtureNames.length - 1]
-  }`;
 }
 
 function formatPlayerList(names: string[]) {
@@ -1393,6 +2058,14 @@ export async function updateFixtureResults(formData: FormData) {
 
     if (!homeScoreText && !awayScoreText) {
       continue;
+    }
+
+    if (!homeScoreText || !awayScoreText) {
+      redirect(
+        `/admin?tab=results&error=${encodeURIComponent(
+          "Enter both home and away scores for each result",
+        )}`,
+      );
     }
 
     const homeScore = Number(homeScoreText);

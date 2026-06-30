@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import Link from "next/link";
 import { createClient } from "@/utils/supabase/server";
+import { getActiveSeason } from "@/utils/seasons";
 import LeagueActivityFeed from "@/components/activity/LeagueActivityFeed";
 
 type NotificationRow = {
@@ -139,11 +140,7 @@ export default async function HomePage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const { data: activeSeason } = await supabase
-    .from("seasons")
-    .select("id")
-    .eq("is_active", true)
-    .single();
+  const { data: activeSeason } = await getActiveSeason(supabase, "id");
 
   const { data: pickerGameweeks } =
     user && activeSeason
@@ -192,6 +189,13 @@ export default async function HomePage() {
 
   const nextFuturePickerGameweek =
     pickerStatuses.find((gameweek) => !gameweek.isUnlocked) ?? null;
+
+  const { count: activeGameweekCount } = activeSeason
+    ? await supabase
+        .from("gameweeks")
+        .select("id", { count: "exact", head: true })
+        .eq("season_id", activeSeason.id)
+    : { count: 0 };
 
   const { data: latestGameweekWithFixtures } = activeSeason
     ? await supabase
@@ -257,6 +261,7 @@ export default async function HomePage() {
     ? Math.ceil((nextKickoff.getTime() - now.getTime()) / (1000 * 60 * 60))
     : null;
 
+  // TODO: Filter activity by active season after notifications has season_id.
   const { data: notifications } = await supabase
     .from("notifications")
     .select("id, type, title, body, created_at, metadata")
@@ -352,7 +357,18 @@ export default async function HomePage() {
             </div>
           ) : null}
 
-        {latestGameweek ? (
+        {!activeSeason ? (
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+            <p className="text-sm font-semibold text-amber-300">
+              No active season
+            </p>
+            <h2 className="mt-1 text-xl font-bold">Season setup is pending</h2>
+            <p className="mt-2 text-sm text-slate-300">
+              There is no live season yet. Predictions and fixture picking will
+              appear here once an admin activates a season.
+            </p>
+          </div>
+        ) : latestGameweek ? (
           isPredictionComplete ? (
             <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
               <p className="text-sm font-semibold text-emerald-300">
@@ -418,10 +434,14 @@ export default async function HomePage() {
         ) : (
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
             <p className="text-sm font-semibold text-slate-300">
-              No fixtures yet
+              {(activeGameweekCount ?? 0) === 0
+                ? "No gameweeks yet"
+                : "No fixtures yet"}
             </p>
             <p className="mt-2 text-sm text-slate-400">
-              Fixtures have not been selected for the next gameweek yet.
+              {(activeGameweekCount ?? 0) === 0
+                ? "The active season has not had gameweeks generated yet."
+                : "Fixtures have not been selected for the next gameweek yet."}
             </p>
           </div>
         )}

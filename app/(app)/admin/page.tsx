@@ -11,31 +11,67 @@ import AdminUserCard, {
 import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import type { Fixture, Gameweek } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
+import { getActiveSeason } from "@/utils/seasons";
 import { redirect } from "next/navigation";
 import {
-  assignFixturePickers,
+  activateSeason,
+  archiveSeason,
   createGameweekWithFixtures,
-  generateMissingGameweeks,
-  saveFixturePickerOrder,
+  createSeason,
   updateFixtureResults,
+  generateMissingGameweeks,
+  restoreSeasonToDraft,
+  saveGameweekPickerAssignments,
+  autoAssignAllGameweekPickers,
+  autoAssignFutureGameweekPickers,
+  updateSeasonArchiveVisibility,
+  deleteSeason,
+  recalculateActiveSeasonLeaderboard,
+  rescoreActiveSeasonAndRecalculateLeaderboard,
 } from "./actions";
 import SubmitButton from "@/components/forms/SubmitButton";
 import AdminSeasonSetupCard from "@/components/admin/AdminSeasonSetupCard";
-import AdminFixturePickerOrderCard from "@/components/admin/AdminFixturePickerOrderCard";
+import AdminSeasonControlsCard, {
+  type AdminSeasonRow,
+} from "@/components/admin/AdminSeasonControlsCard";
+import AdminGameweekPickerAssignmentsCard, {
+  type GameweekPickerAssignmentRow,
+} from "@/components/admin/AdminGameweekPickerAssignmentsCard";
+import AdminMaintenanceCards, {
+  type HealthCheckRow,
+  type MaintenanceSeasonOption,
+} from "@/components/admin/AdminMaintenanceCards";
 
 type Profile = {
   id: string;
   display_name: string;
+  email: string | null;
+  role: string;
+  status: string;
 };
 
-type AdminTab = "create" | "fixtures" | "results" | "users";
+type AdminTab = "create" | "fixtures" | "results" | "users" | "maintenance";
+
+type HealthFixtureRow = {
+  id: string;
+  gameweek_id: string;
+  kickoff_at: string | null;
+  status: string;
+  home_score: number | null;
+  away_score: number | null;
+};
+
+type HealthPredictionRow = {
+  points: number | null;
+};
 
 function getSelectedTab(tab: string | undefined): AdminTab {
   if (
     tab === "create" ||
     tab === "fixtures" ||
     tab === "results" ||
-    tab === "users"
+    tab === "users" ||
+    tab === "maintenance"
   ) {
     return tab;
   }
@@ -73,19 +109,19 @@ export default async function AdminPage({
     redirect("/dashboard?error=Admin access required");
   }
 
-  const { data: activeSeason } = await supabase
-    .from("seasons")
-    .select("id, name")
-    .eq("is_active", true)
-    .single();
+  const { data: activeSeason } = await getActiveSeason(
+    supabase,
+    "id, name, status, is_active",
+  );
 
-  const { data: pickerOrder } = activeSeason
-  ? await supabase
-      .from("fixture_picker_order")
-      .select("user_id, sort_order")
-      .eq("season_id", activeSeason.id)
-      .order("sort_order", { ascending: true })
-  : { data: null };
+  const { data: seasons } = await supabase
+    .from("seasons")
+    .select(
+      "id, name, status, is_active, season_type, description, show_in_archive, created_at, archived_at",
+    )
+    .order("created_at", { ascending: false });
+
+  const seasonList = (seasons as AdminSeasonRow[] | null) ?? [];
 
   const { data: gameweeks } = activeSeason
     ? await supabase
@@ -103,12 +139,18 @@ export default async function AdminPage({
     gameweekIds.length > 0
       ? await supabase
           .from("fixtures")
-          .select("gameweek_id")
+          .select("id, gameweek_id, kickoff_at, status, home_score, away_score")
           .in("gameweek_id", gameweekIds)
       : { data: [] };
 
   const gameweekIdsWithFixtures = new Set(
     (fixtureRows ?? []).map((fixture) => fixture.gameweek_id),
+  );
+
+  const activeSeasonFixtures =
+    (fixtureRows as HealthFixtureRow[] | null) ?? [];
+  const activeSeasonFixtureIds = activeSeasonFixtures.map(
+    (fixture) => fixture.id,
   );
 
   const latestGameweekWithFixtures =
@@ -130,7 +172,7 @@ export default async function AdminPage({
 
   const { data: profiles } = await supabase
     .from("profiles")
-    .select("id, display_name")
+    .select("id, display_name, email, role, status")
     .order("display_name", { ascending: true });
 
   const { data: adminUsers, error: adminUsersError } = await supabase
@@ -162,6 +204,182 @@ export default async function AdminPage({
     (adminUser) => adminUser.status === "disabled",
   );
 
+  const { data: gameweekPickerAssignments } = activeSeason?.id
+    ? await supabase
+        .from("gameweeks")
+        .select(
+          `
+          id,
+          gameweek_number,
+          name,
+          fixture_picker_id,
+          fixtures (
+            id
+          )
+        `,
+        )
+        .eq("season_id", activeSeason.id)
+        .order("gameweek_number", { ascending: true })
+    : { data: null };
+
+  const gameweekPickerAssignmentList =
+    (gameweekPickerAssignments as GameweekPickerAssignmentRow[] | null) ?? [];
+
+  const { count: approvedUserCount } = await supabase
+    .from("profiles")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "approved");
+
+  const { count: predictionCount } =
+    activeSeasonFixtureIds.length > 0
+      ? await supabase
+          .from("predictions")
+          .select("id", { count: "exact", head: true })
+          .in("fixture_id", activeSeasonFixtureIds)
+      : { count: 0 };
+
+  const completedFixtureIds = activeSeasonFixtures
+    .filter((fixture) => fixture.status === "completed")
+    .map((fixture) => fixture.id);
+
+  const { data: completedFixturePredictions } =
+    completedFixtureIds.length > 0
+      ? await supabase
+          .from("predictions")
+          .select("points")
+          .in("fixture_id", completedFixtureIds)
+      : { data: [] };
+
+  const unscoredPredictionCount = (
+    (completedFixturePredictions as HealthPredictionRow[] | null) ?? []
+  ).filter((prediction) => prediction.points === null).length;
+
+  const { count: leaderboardEntryCount } = activeSeason?.id
+    ? await supabase
+        .from("leaderboard_entries")
+        .select("id", { count: "exact", head: true })
+        .eq("season_id", activeSeason.id)
+    : { count: 0 };
+
+  const completedFixturesWithNullScores = activeSeasonFixtures.filter(
+    (fixture) =>
+      fixture.status === "completed" &&
+      (fixture.home_score === null || fixture.away_score === null),
+  ).length;
+
+  const fixturesMissingKickoff = activeSeasonFixtures.filter(
+    (fixture) => !fixture.kickoff_at,
+  ).length;
+
+  const activeSeasonIsConsistent =
+    activeSeason?.status === "active" && activeSeason.is_active === true;
+
+  const requiredEnvChecks = [
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    "SUPABASE_SECRET_KEY",
+    "LEAGUE_SIGNUP_CODE",
+  ].map((name) => ({
+    name,
+    present: Boolean(process.env[name]),
+  }));
+
+  const missingEnvVars = requiredEnvChecks
+    .filter((envVar) => !envVar.present)
+    .map((envVar) => envVar.name);
+
+  const healthChecks: HealthCheckRow[] = [
+    {
+      label: "Active season",
+      value: activeSeason?.name ?? "Missing",
+      severity: activeSeason ? "ok" : "error",
+      detail: activeSeason?.id ?? "Create or activate a season.",
+    },
+    {
+      label: "Season status mirror",
+      value: activeSeasonIsConsistent ? "Consistent" : "Check needed",
+      severity: activeSeasonIsConsistent
+        ? "ok"
+        : activeSeason
+          ? "warning"
+          : "error",
+      detail: activeSeason
+        ? `status=${activeSeason.status ?? "unknown"}, is_active=${
+            activeSeason.is_active ? "true" : "false"
+          }`
+        : "No active season to compare.",
+    },
+    {
+      label: "Approved users",
+      value: String(approvedUserCount ?? 0),
+      severity: (approvedUserCount ?? 0) > 0 ? "ok" : "warning",
+    },
+    {
+      label: "Gameweeks",
+      value: String(gameweekList.length),
+      severity:
+        gameweekList.length > 0 ? "ok" : activeSeason ? "warning" : "error",
+      detail: "Active season only.",
+    },
+    {
+      label: "Fixtures",
+      value: String(activeSeasonFixtures.length),
+      severity:
+        activeSeasonFixtures.length > 0
+          ? "ok"
+          : activeSeason
+            ? "warning"
+            : "error",
+      detail: "Active season only.",
+    },
+    {
+      label: "Predictions",
+      value: String(predictionCount ?? 0),
+      severity: (predictionCount ?? 0) > 0 ? "ok" : "warning",
+      detail: "Active season fixture predictions.",
+    },
+    {
+      label: "Completed fixtures missing scores",
+      value: String(completedFixturesWithNullScores),
+      severity: completedFixturesWithNullScores === 0 ? "ok" : "error",
+    },
+    {
+      label: "Fixtures missing kickoff",
+      value: String(fixturesMissingKickoff),
+      severity: fixturesMissingKickoff === 0 ? "ok" : "warning",
+    },
+    {
+      label: "Unscored completed predictions",
+      value: String(unscoredPredictionCount),
+      severity: unscoredPredictionCount === 0 ? "ok" : "warning",
+      detail: "Predictions on completed fixtures with null points.",
+    },
+    {
+      label: "Leaderboard entries",
+      value: String(leaderboardEntryCount ?? 0),
+      severity: (leaderboardEntryCount ?? 0) > 0 ? "ok" : "warning",
+      detail: "Active season only.",
+    },
+    {
+      label: "Environment variables",
+      value:
+        missingEnvVars.length === 0
+          ? "Present"
+          : `${missingEnvVars.length} missing`,
+      severity: missingEnvVars.length === 0 ? "ok" : "error",
+      detail:
+        missingEnvVars.length === 0
+          ? "All required env vars are set."
+          : missingEnvVars.join(", "),
+    },
+  ];
+
+  const maintenanceSeasonOptions = seasonList.map((season) => ({
+    id: season.id,
+    name: season.name,
+    status: season.status,
+  })) as MaintenanceSeasonOption[];
+
   return (
     <>
       <h1 className="text-3xl font-bold">Admin</h1>
@@ -189,6 +407,16 @@ export default async function AdminPage({
 
       {selectedTab === "create" ? (
         <>
+          <AdminSeasonControlsCard
+            seasons={seasonList}
+            createSeasonAction={createSeason}
+            activateSeasonAction={activateSeason}
+            archiveSeasonAction={archiveSeason}
+            restoreSeasonAction={restoreSeasonToDraft}
+            updateArchiveVisibilityAction={updateSeasonArchiveVisibility}
+            deleteSeasonAction={deleteSeason}
+          />
+
           <AdminSeasonSetupCard
             activeSeasonId={activeSeason?.id ?? null}
             activeSeasonName={activeSeason?.name ?? null}
@@ -196,14 +424,13 @@ export default async function AdminPage({
             action={generateMissingGameweeks}
           />
 
-          <AdminFixturePickerOrderCard
+          <AdminGameweekPickerAssignmentsCard
             activeSeasonId={activeSeason?.id ?? null}
+            gameweeks={gameweekPickerAssignmentList}
             profiles={(profiles as Profile[] | null) ?? []}
-            pickerOrder={
-              (pickerOrder as { user_id: string; sort_order: number }[] | null) ?? []
-            }
-            saveAction={saveFixturePickerOrder}
-            assignAction={assignFixturePickers}
+            saveAction={saveGameweekPickerAssignments}
+            autoAssignAllAction={autoAssignAllGameweekPickers}
+            autoAssignFutureAction={autoAssignFutureGameweekPickers}
           />
         </>
       ) : null}
@@ -422,6 +649,17 @@ export default async function AdminPage({
             </div>
           </div>
         </section>
+      ) : null}
+
+      {selectedTab === "maintenance" ? (
+        <AdminMaintenanceCards
+          activeSeasonId={activeSeason?.id ?? null}
+          activeSeasonName={activeSeason?.name ?? null}
+          seasons={maintenanceSeasonOptions}
+          healthChecks={healthChecks}
+          recalculateAction={recalculateActiveSeasonLeaderboard}
+          rescoreAction={rescoreActiveSeasonAndRecalculateLeaderboard}
+        />
       ) : null}
     </>
   );
