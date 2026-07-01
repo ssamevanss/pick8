@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/admin";
 import { getKickoffIso } from "@/utils/fixtures";
 import { getActiveSeason } from "@/utils/seasons";
 import { upsertActivityNotification } from "@/utils/activity";
@@ -1448,7 +1449,9 @@ export async function deleteSeason(formData: FormData) {
     );
   }
 
-  const { data: gameweeks } = await supabase
+  const adminSupabase = createAdminClient();
+
+  const { data: gameweeks } = await adminSupabase
     .from("gameweeks")
     .select("id")
     .eq("season_id", seasonId);
@@ -1459,7 +1462,7 @@ export async function deleteSeason(formData: FormData) {
 
   const { data: fixtures } =
     gameweekIds.length > 0
-      ? await supabase
+      ? await adminSupabase
           .from("fixtures")
           .select("id")
           .in("gameweek_id", gameweekIds)
@@ -1469,7 +1472,7 @@ export async function deleteSeason(formData: FormData) {
     (fixtures as { id: string }[] | null)?.map((fixture) => fixture.id) ?? [];
 
   if (fixtureIds.length > 0) {
-    const { error: jokerDeleteError } = await supabase
+    const { error: jokerDeleteError } = await adminSupabase
       .from("joker_usage")
       .delete()
       .in("fixture_id", fixtureIds);
@@ -1482,7 +1485,7 @@ export async function deleteSeason(formData: FormData) {
       );
     }
 
-    const { error: predictionDeleteError } = await supabase
+    const { error: predictionDeleteError } = await adminSupabase
       .from("predictions")
       .delete()
       .in("fixture_id", fixtureIds);
@@ -1495,7 +1498,7 @@ export async function deleteSeason(formData: FormData) {
       );
     }
 
-    const { error: fixtureDeleteError } = await supabase
+    const { error: fixtureDeleteError } = await adminSupabase
       .from("fixtures")
       .delete()
       .in("id", fixtureIds);
@@ -1510,7 +1513,7 @@ export async function deleteSeason(formData: FormData) {
   }
 
   if (gameweekIds.length > 0) {
-    const { error: gameweekDeleteError } = await supabase
+    const { error: gameweekDeleteError } = await adminSupabase
       .from("gameweeks")
       .delete()
       .in("id", gameweekIds);
@@ -1524,10 +1527,33 @@ export async function deleteSeason(formData: FormData) {
     }
   }
 
-  await supabase.from("fixture_picker_order").delete().eq("season_id", seasonId);
-  await supabase.from("leaderboard_entries").delete().eq("season_id", seasonId);
+  const { error: pickerOrderDeleteError } = await adminSupabase
+    .from("fixture_picker_order")
+    .delete()
+    .eq("season_id", seasonId);
 
-  const { error: seasonDeleteError } = await supabase
+  if (pickerOrderDeleteError) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: pickerOrderDeleteError.message,
+      }),
+    );
+  }
+
+  const { error: leaderboardDeleteError } = await adminSupabase
+    .from("leaderboard_entries")
+    .delete()
+    .eq("season_id", seasonId);
+
+  if (leaderboardDeleteError) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: leaderboardDeleteError.message,
+      }),
+    );
+  }
+
+  const { error: seasonDeleteError } = await adminSupabase
     .from("seasons")
     .delete()
     .eq("id", seasonId);

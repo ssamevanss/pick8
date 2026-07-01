@@ -17,7 +17,16 @@ type FixtureStatusRow = {
   status: string;
 };
 
+type FixtureActionRow = {
+  id: string;
+  status: string;
+};
+
 const slotNumbers = [1, 2, 3, 4];
+
+function isTerminalFixtureStatus(status: string) {
+  return ["completed", "postponed", "void"].includes(status);
+}
 
 function formatDateTimeLocal(value: string) {
   const date = new Date(value);
@@ -47,37 +56,67 @@ async function getEligiblePickerGameweeks({
   const eligibleGameweeks: PickerGameweek[] = [];
 
   for (const gameweek of assignedGameweeks) {
+    let previousGameweekComplete = gameweek.gameweek_number === 1;
+
     if (gameweek.gameweek_number === 1) {
-      eligibleGameweeks.push(gameweek);
+      previousGameweekComplete = true;
+    } else {
+      const { data: previousGameweek } = await supabase
+        .from("gameweeks")
+        .select("id")
+        .eq("season_id", gameweek.season_id)
+        .eq("gameweek_number", gameweek.gameweek_number - 1)
+        .maybeSingle();
+
+      if (!previousGameweek) {
+        continue;
+      }
+
+      const { data: previousFixtures } = await supabase
+        .from("fixtures")
+        .select("status")
+        .eq("gameweek_id", previousGameweek.id);
+
+      const previousFixtureList =
+        (previousFixtures as FixtureStatusRow[] | null) ?? [];
+
+      previousGameweekComplete =
+        previousFixtureList.length > 0 &&
+        previousFixtureList.every((fixture) =>
+          isTerminalFixtureStatus(fixture.status),
+        );
+    }
+
+    if (!previousGameweekComplete) {
       continue;
     }
 
-    const { data: previousGameweek } = await supabase
-      .from("gameweeks")
-      .select("id")
-      .eq("season_id", gameweek.season_id)
-      .eq("gameweek_number", gameweek.gameweek_number - 1)
-      .maybeSingle();
-
-    if (!previousGameweek) {
-      continue;
-    }
-
-    const { data: previousFixtures } = await supabase
+    const { data: fixtures } = await supabase
       .from("fixtures")
-      .select("status")
-      .eq("gameweek_id", previousGameweek.id);
+      .select("id, status")
+      .eq("gameweek_id", gameweek.id);
 
-    const previousFixtureList =
-      (previousFixtures as FixtureStatusRow[] | null) ?? [];
+    const fixtureList = (fixtures as FixtureActionRow[] | null) ?? [];
+    const allFixturesClosed =
+      fixtureList.length > 0 &&
+      fixtureList.every((fixture) => isTerminalFixtureStatus(fixture.status));
 
-    const previousGameweekComplete =
-      previousFixtureList.length > 0 &&
-      previousFixtureList.every((fixture) =>
-        ["completed", "postponed", "void"].includes(fixture.status),
-      );
+    if (allFixturesClosed) {
+      continue;
+    }
 
-    if (previousGameweekComplete) {
+    const fixtureIds = fixtureList.map((fixture) => fixture.id);
+    const { data: existingPrediction } =
+      fixtureIds.length > 0
+        ? await supabase
+            .from("predictions")
+            .select("fixture_id")
+            .in("fixture_id", fixtureIds)
+            .limit(1)
+            .maybeSingle()
+        : { data: null };
+
+    if (!existingPrediction) {
       eligibleGameweeks.push(gameweek);
     }
   }
@@ -150,7 +189,8 @@ export default async function PickFixturesPage({
           </p>
           <p className="mt-2 text-sm text-slate-400">
             Your assigned gameweek may still be locked until the previous
-            gameweek is complete, or you may not be scheduled as a picker.
+            gameweek is complete, predictions may already exist, or you may not
+            be scheduled as a picker.
           </p>
         </section>
       </>

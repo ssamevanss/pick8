@@ -20,6 +20,15 @@ type FixtureStatusRow = {
   status: string;
 };
 
+type FixtureActionRow = {
+  id: string;
+  status: string;
+};
+
+function isTerminalFixtureStatus(status: string) {
+  return ["completed", "postponed", "void"].includes(status);
+}
+
 export default async function AppLayout({ children }: AppLayoutProps) {
   const supabase = await createClient();
 
@@ -77,37 +86,67 @@ export default async function AppLayout({ children }: AppLayoutProps) {
   let canPickFixtures = false;
 
   for (const assignedGameweek of assignedGameweekList) {
+    let previousGameweekComplete = assignedGameweek.gameweek_number === 1;
+
     if (assignedGameweek.gameweek_number === 1) {
-      canPickFixtures = true;
-      break;
+      previousGameweekComplete = true;
+    } else {
+      const { data: previousGameweek } = await supabase
+        .from("gameweeks")
+        .select("id")
+        .eq("season_id", assignedGameweek.season_id)
+        .eq("gameweek_number", assignedGameweek.gameweek_number - 1)
+        .maybeSingle();
+
+      if (!previousGameweek) {
+        continue;
+      }
+
+      const { data: previousFixtures } = await supabase
+        .from("fixtures")
+        .select("status")
+        .eq("gameweek_id", previousGameweek.id);
+
+      const previousFixtureList =
+        (previousFixtures as FixtureStatusRow[] | null) ?? [];
+
+      previousGameweekComplete =
+        previousFixtureList.length > 0 &&
+        previousFixtureList.every((fixture) =>
+          isTerminalFixtureStatus(fixture.status),
+        );
     }
 
-    const { data: previousGameweek } = await supabase
-      .from("gameweeks")
-      .select("id")
-      .eq("season_id", assignedGameweek.season_id)
-      .eq("gameweek_number", assignedGameweek.gameweek_number - 1)
-      .maybeSingle();
-
-    if (!previousGameweek) {
+    if (!previousGameweekComplete) {
       continue;
     }
 
-    const { data: previousFixtures } = await supabase
+    const { data: fixtures } = await supabase
       .from("fixtures")
-      .select("status")
-      .eq("gameweek_id", previousGameweek.id);
+      .select("id, status")
+      .eq("gameweek_id", assignedGameweek.id);
 
-    const previousFixtureList =
-      (previousFixtures as FixtureStatusRow[] | null) ?? [];
+    const fixtureList = (fixtures as FixtureActionRow[] | null) ?? [];
+    const allFixturesClosed =
+      fixtureList.length > 0 &&
+      fixtureList.every((fixture) => isTerminalFixtureStatus(fixture.status));
 
-    const previousGameweekComplete =
-      previousFixtureList.length > 0 &&
-      previousFixtureList.every((fixture) =>
-        ["completed", "postponed", "void"].includes(fixture.status),
-      );
+    if (allFixturesClosed) {
+      continue;
+    }
 
-    if (previousGameweekComplete) {
+    const fixtureIds = fixtureList.map((fixture) => fixture.id);
+    const { data: existingPrediction } =
+      fixtureIds.length > 0
+        ? await supabase
+            .from("predictions")
+            .select("fixture_id")
+            .in("fixture_id", fixtureIds)
+            .limit(1)
+            .maybeSingle()
+        : { data: null };
+
+    if (!existingPrediction) {
       canPickFixtures = true;
       break;
     }

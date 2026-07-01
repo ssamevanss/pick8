@@ -46,7 +46,12 @@ type PickerGameweekStatus = PickerGameweekRow & {
   isUnlocked: boolean;
   fixtureCount: number;
   hasPredictions: boolean;
+  isClosed: boolean;
 };
+
+function isTerminalFixtureStatus(status: string) {
+  return ["completed", "postponed", "void"].includes(status);
+}
 
 async function isPreviousGameweekComplete({
   supabase,
@@ -81,9 +86,7 @@ async function isPreviousGameweekComplete({
 
   return (
     fixtureList.length > 0 &&
-    fixtureList.every((fixture) =>
-      ["completed", "postponed", "void"].includes(fixture.status),
-    )
+    fixtureList.every((fixture) => isTerminalFixtureStatus(fixture.status))
   );
 }
 
@@ -102,10 +105,11 @@ async function getPickerGameweekStatus({
 
   const { data: fixtures } = await supabase
     .from("fixtures")
-    .select("id")
+    .select("id, status")
     .eq("gameweek_id", gameweek.id);
 
-  const fixtureRows = (fixtures as { id: string }[] | null) ?? [];
+  const fixtureRows =
+    (fixtures as { id: string; status: string }[] | null) ?? [];
   const fixtureIds = fixtureRows.map((fixture) => fixture.id);
 
   const { data: existingPrediction } =
@@ -123,6 +127,9 @@ async function getPickerGameweekStatus({
     isUnlocked,
     fixtureCount: fixtureRows.length,
     hasPredictions: Boolean(existingPrediction),
+    isClosed:
+      fixtureRows.length > 0 &&
+      fixtureRows.every((fixture) => isTerminalFixtureStatus(fixture.status)),
   };
 }
 
@@ -171,6 +178,7 @@ export default async function HomePage() {
       (gameweek) =>
         gameweek.isUnlocked &&
         !gameweek.hasPredictions &&
+        !gameweek.isClosed &&
         gameweek.fixtureCount < 4,
     ) ?? null;
 
@@ -179,6 +187,7 @@ export default async function HomePage() {
       (gameweek) =>
         gameweek.isUnlocked &&
         !gameweek.hasPredictions &&
+        !gameweek.isClosed &&
         gameweek.fixtureCount >= 4,
     ) ?? null;
 
@@ -231,10 +240,8 @@ export default async function HomePage() {
   const fixtureIds = fixtureList.map((fixture) => fixture.id);
 
   const latestGameweekComplete =
-  fixtureList.length > 0 &&
-  fixtureList.every((fixture) =>
-    ["completed", "postponed", "void"].includes(fixture.status),
-  );
+    fixtureList.length > 0 &&
+    fixtureList.every((fixture) => isTerminalFixtureStatus(fixture.status));
 
   const { data: userPredictions } =
     user && fixtureIds.length > 0
@@ -246,16 +253,28 @@ export default async function HomePage() {
       : { data: null };
 
   const predictionList = (userPredictions as PredictionRow[] | null) ?? [];
-  const predictionCount = predictionList.length;
   const fixtureCount = fixtureList.length;
-  const hasPredictionFixtures = fixtureCount > 0;
+  const now = new Date();
+  const actionablePredictionFixtures = fixtureList.filter(
+    (fixture) =>
+      fixture.status === "scheduled" && new Date(fixture.kickoff_at) > now,
+  );
+  const actionableFixtureIds = new Set(
+    actionablePredictionFixtures.map((fixture) => fixture.id),
+  );
+  const actionablePredictionCount = predictionList.filter((prediction) =>
+    actionableFixtureIds.has(prediction.fixture_id),
+  ).length;
+  const actionableFixtureCount = actionablePredictionFixtures.length;
+  const hasActionablePredictionFixtures = actionableFixtureCount > 0;
   const isPredictionComplete =
-    hasPredictionFixtures && predictionCount >= fixtureCount;
+    hasActionablePredictionFixtures &&
+    actionablePredictionCount >= actionableFixtureCount;
 
   const nextKickoff =
-    fixtureList.length > 0 ? new Date(fixtureList[0].kickoff_at) : null;
-
-  const now = new Date();
+    actionablePredictionFixtures.length > 0
+      ? new Date(actionablePredictionFixtures[0].kickoff_at)
+      : null;
 
   const hoursUntilNextKickoff = nextKickoff
     ? Math.ceil((nextKickoff.getTime() - now.getTime()) / (1000 * 60 * 60))
@@ -369,7 +388,31 @@ export default async function HomePage() {
             </p>
           </div>
         ) : latestGameweek ? (
-          isPredictionComplete ? (
+          !hasActionablePredictionFixtures ? (
+            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+              <p className="text-sm font-semibold text-emerald-300">
+                {latestGameweekComplete ? "Gameweek complete" : "Predictions locked"}
+              </p>
+              <h2 className="mt-1 text-xl font-bold">
+                {formatGameweekName(latestGameweek)}
+              </h2>
+              <p className="mt-2 text-sm text-slate-300">
+                {latestGameweekComplete
+                  ? `${formatGameweekName(
+                      latestGameweek,
+                    )} is complete. Check the results and see how everyone scored.`
+                  : "There are no open fixtures accepting predictions for this gameweek. You can review the locked fixtures and predictions."}
+              </p>
+
+              <Link
+                href={`/predictions?gameweek=${latestGameweek.id}`}
+                prefetch={false}
+                className="mt-4 inline-flex rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
+              >
+                {latestGameweekComplete ? "View results" : "Review predictions"}
+              </Link>
+            </div>
+          ) : isPredictionComplete ? (
             <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
               <p className="text-sm font-semibold text-emerald-300">
                 You’re all set
@@ -401,15 +444,15 @@ export default async function HomePage() {
                 Predictions
               </p>
               <h2 className="mt-1 text-xl font-bold">
-                {predictionCount > 0
+                {actionablePredictionCount > 0
                   ? "Predictions in progress"
                   : `Enter predictions for ${formatGameweekName(
                       latestGameweek,
                     )}`}
               </h2>
               <p className="mt-2 text-sm text-slate-300">
-                {predictionCount > 0
-                  ? `You’ve entered ${predictionCount}/${fixtureCount} predictions for ${formatGameweekName(
+                {actionablePredictionCount > 0
+                  ? `You’ve entered ${actionablePredictionCount}/${actionableFixtureCount} open predictions for ${formatGameweekName(
                       latestGameweek,
                     )}.`
                   : `You haven’t entered predictions for ${formatGameweekName(
@@ -427,7 +470,9 @@ export default async function HomePage() {
                 prefetch={false}
                 className="mt-4 inline-flex rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950"
               >
-                {predictionCount > 0 ? "Finish predictions" : "Go to predictions"}
+                {actionablePredictionCount > 0
+                  ? "Finish predictions"
+                  : "Go to predictions"}
               </Link>
             </div>
           )

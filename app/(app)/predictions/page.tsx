@@ -108,6 +108,12 @@ export default async function DashboardPage({
           .is("refunded_at", null)
       : { data: null, error: null };
 
+  const fixtureList = (fixtures as Fixture[] | null) ?? [];
+  const hasOpenPredictionFixtures = fixtureList.some(
+    (fixture) =>
+      fixture.status === "scheduled" && new Date(fixture.kickoff_at) > new Date(),
+  );
+
   const { data: leaderboardEntry } =
     activeSeason && user
       ? await supabase
@@ -235,7 +241,7 @@ export default async function DashboardPage({
                 value={selectedGameweek?.id ?? ""}
             />
 
-            {(fixtures as Fixture[] | null)?.map((fixture) => (
+            {fixtureList.map((fixture) => (
                 <FixturePredictionCard
                 key={fixture.id}
                 fixture={fixture}
@@ -247,7 +253,7 @@ export default async function DashboardPage({
                 />
             ))}
 
-          {fixtures && fixtures.length > 0 ? (
+          {hasOpenPredictionFixtures ? (
             <SubmitButton
               idleLabel="Save open predictions"
               pendingLabel="Saving predictions..."

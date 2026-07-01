@@ -147,42 +147,24 @@ export default async function LeaderboardPage({
 
   return (
     <>
-      <h1 className="text-3xl font-bold">Leaderboard</h1>
+      <header className="mb-6">
+        <h1 className="text-3xl font-bold">Leaderboard</h1>
 
-      <p className="mt-2 text-sm text-slate-400">
-        {selectedSeason?.name ?? "No active season"}
-        {isArchivedSeason ? " · Final standings" : ""}
-      </p>
-
-      {selectedArchivedSeasonId && !selectedArchivedSeason ? (
-        <p className="mt-4 rounded-xl bg-amber-950 p-4 text-sm text-amber-300">
-          That previous season is not available. It may be hidden, deleted, or
-          not archived for public leaderboard viewing.
+        <p className="mt-2 text-sm text-slate-400">
+          {selectedSeason?.name ?? "No active season"}
+          {isArchivedSeason ? " · Final standings" : " · Current season"}
         </p>
-      ) : null}
 
-      <section className="mt-6 rounded-2xl bg-slate-900 p-4 shadow-lg">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold">
-              {isArchivedSeason ? "Previous season" : "Current season"}
-            </h2>
-            <p className="mt-1 text-sm text-slate-400">
-              {!selectedSeason
-                ? "No active season has been set up yet."
-                : isArchivedSeason
-                ? `Archived leaderboard from ${formatArchiveDate(
-                    selectedSeason?.archived_at ?? null,
-                  )}.`
-                : "Live standings for the active season."}
-            </p>
-          </div>
+        <details className="mt-4 rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-300">
+            Change season
+          </summary>
 
-          <div className="flex flex-col gap-2 md:min-w-64">
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             <Link
               href="/leaderboard"
               prefetch={false}
-              className={`rounded-lg px-3 py-2 text-center text-sm font-semibold ${
+              className={`rounded-lg px-3 py-2 text-sm font-semibold ${
                 !selectedArchivedSeason
                   ? "bg-emerald-500 text-slate-950"
                   : "border border-slate-700 text-slate-300"
@@ -191,38 +173,35 @@ export default async function LeaderboardPage({
               Current season
             </Link>
 
-            {archivedSeasonList.length > 0 ? (
-              <details className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-                <summary className="cursor-pointer text-sm font-semibold text-slate-300">
-                  Previous seasons
-                </summary>
-
-                <div className="mt-3 space-y-2">
-                  {archivedSeasonList.map((season) => (
-                    <Link
-                      key={season.id}
-                      href={`/leaderboard?season=${season.id}`}
-                      prefetch={false}
-                      className={`block rounded-lg px-3 py-2 text-sm ${
-                        selectedArchivedSeason?.id === season.id
-                          ? "bg-emerald-500 text-slate-950"
-                          : "bg-slate-900 text-slate-300"
-                      }`}
-                    >
-                      <span className="block font-semibold">{season.name}</span>
-                      <span className="text-xs opacity-80">
-                        {formatArchiveDate(season.archived_at)}
-                      </span>
-                    </Link>
-                  ))}
-                </div>
-              </details>
-            ) : null}
+            {archivedSeasonList.map((season) => (
+              <Link
+                key={season.id}
+                href={`/leaderboard?season=${season.id}`}
+                prefetch={false}
+                className={`rounded-lg px-3 py-2 text-sm ${
+                  selectedArchivedSeason?.id === season.id
+                    ? "bg-emerald-500 text-slate-950"
+                    : "border border-slate-700 text-slate-300"
+                }`}
+              >
+                <span className="font-semibold">{season.name}</span>
+                <span className="ml-2 text-xs opacity-80">
+                  {formatArchiveDate(season.archived_at)}
+                </span>
+              </Link>
+            ))}
           </div>
-        </div>
-      </section>
+        </details>
+      </header>
 
-      <section className="mt-6 rounded-2xl bg-slate-900 p-4 shadow-lg">
+      {selectedArchivedSeasonId && !selectedArchivedSeason ? (
+        <p className="mt-4 rounded-xl bg-amber-950 p-4 text-sm text-amber-300">
+          That previous season is not available. It may be hidden, deleted, or
+          not archived for public leaderboard viewing.
+        </p>
+      ) : null}
+
+      <section className="rounded-2xl bg-slate-900 p-4 shadow-lg">
         {error ? (
           <p className="rounded-xl bg-red-950 p-4 text-sm text-red-300">
             {error.message}
