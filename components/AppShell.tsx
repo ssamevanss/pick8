@@ -8,13 +8,17 @@ type AppShellProps = {
 };
 
 const baseNavItems = [
-  { href: "/dashboard", label: "Home" },
-  { href: "/predictions", label: "Predictions" },
-  { href: "/leaderboard", label: "Leaderboard" },
+  { href: "/dashboard", label: "Home", mobileLabel: "Home" },
+  { href: "/predictions", label: "Predictions", mobileLabel: "Preds" },
+  { href: "/leaderboard", label: "Leaderboard", mobileLabel: "Table" },
 ];
 
-const pickFixturesNavItem = { href: "/pick-fixtures", label: "Pick Fixtures" };
-const adminNavItem = { href: "/admin", label: "Admin" };
+const pickFixturesNavItem = {
+  href: "/pick-fixtures",
+  label: "Pick Fixtures",
+  mobileLabel: "Pick",
+};
+const adminNavItem = { href: "/admin", label: "Admin", mobileLabel: "Admin" };
 
 export default function AppShell({
   children,
@@ -50,9 +54,9 @@ export default function AppShell({
         <div className="flex-1">{children}</div>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 border-t border-slate-800 bg-slate-950/95 px-4 py-3 backdrop-blur">
+      <nav className="fixed inset-x-0 bottom-0 border-t border-slate-800 bg-slate-950/95 px-2 py-2 backdrop-blur sm:px-4 sm:py-3">
         <div
-          className="mx-auto grid max-w-5xl gap-2"
+          className="mx-auto grid max-w-5xl gap-1 sm:gap-2"
           style={{
             gridTemplateColumns: `repeat(${navItems.length}, minmax(0, 1fr))`,
           }}
@@ -62,9 +66,10 @@ export default function AppShell({
               key={item.href}
               href={item.href}
               prefetch={false}
-              className="rounded-xl bg-slate-900 px-3 py-2 text-center text-sm font-medium text-slate-300"
+              className="flex min-h-11 items-center justify-center rounded-lg bg-slate-900 px-1.5 py-2 text-center text-xs font-medium leading-tight text-slate-300 sm:rounded-xl sm:px-3 sm:text-sm"
             >
-              {item.label}
+              <span className="sm:hidden">{item.mobileLabel}</span>
+              <span className="hidden sm:inline">{item.label}</span>
             </Link>
           ))}
         </div>

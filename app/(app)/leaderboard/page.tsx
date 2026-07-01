@@ -155,19 +155,24 @@ export default async function LeaderboardPage({
           {isArchivedSeason ? " · Final standings" : " · Current season"}
         </p>
 
-        <details className="mt-4 rounded-xl border border-slate-800 bg-slate-900/70 p-3">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-300">
-            Change season
+        <details className="mx-auto mt-4 max-w-sm rounded-2xl bg-slate-950 p-2 ring-1 ring-slate-800">
+          <summary className="list-none cursor-pointer px-3 py-2 text-center [&::-webkit-details-marker]:hidden">
+            <p className="text-xs uppercase tracking-wide text-slate-500">
+              Selected season
+            </p>
+            <p className="mt-1 truncate text-sm font-semibold text-white sm:text-base">
+              {selectedSeason?.name ?? "No season selected"}
+            </p>
           </summary>
 
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <div className="mt-2 space-y-2 border-t border-slate-800 pt-2">
             <Link
               href="/leaderboard"
               prefetch={false}
-              className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+              className={`block rounded-lg px-3 py-2 text-center text-sm font-semibold ${
                 !selectedArchivedSeason
                   ? "bg-emerald-500 text-slate-950"
-                  : "border border-slate-700 text-slate-300"
+                  : "bg-slate-900 text-slate-300"
               }`}
             >
               Current season
@@ -178,14 +183,16 @@ export default async function LeaderboardPage({
                 key={season.id}
                 href={`/leaderboard?season=${season.id}`}
                 prefetch={false}
-                className={`rounded-lg px-3 py-2 text-sm ${
+                className={`block rounded-lg px-3 py-2 text-center text-sm ${
                   selectedArchivedSeason?.id === season.id
                     ? "bg-emerald-500 text-slate-950"
-                    : "border border-slate-700 text-slate-300"
+                    : "bg-slate-900 text-slate-300"
                 }`}
               >
-                <span className="font-semibold">{season.name}</span>
-                <span className="ml-2 text-xs opacity-80">
+                <span className="block truncate font-semibold">
+                  {season.name}
+                </span>
+                <span className="text-xs opacity-80">
                   {formatArchiveDate(season.archived_at)}
                 </span>
               </Link>
