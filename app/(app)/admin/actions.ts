@@ -2004,6 +2004,8 @@ async function upsertGameweekCompleteActivity({
     type: "results_available",
     title: `${gameweekName} complete`,
     body: `${gameweekName} is complete. ${winnerText} ${movementText}`,
+    seasonId: typedGameweek.season_id,
+    gameweekId,
     metadata: {
       gameweekId,
       gameweekName,
@@ -2064,6 +2066,13 @@ async function upsertNextPickerActivity({
     type: "info",
     title: `${pickerName} is up next`,
     body: `${pickerName} is to pick fixtures for ${gameweekName}.`,
+    seasonId: completedGameweek.season_id,
+    gameweekId: typedNextGameweek.id,
+    metadata: {
+      gameweekId: typedNextGameweek.id,
+      gameweekName,
+      pickerName,
+    },
   });
 }
 

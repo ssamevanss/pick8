@@ -280,12 +280,14 @@ export default async function HomePage() {
     ? Math.ceil((nextKickoff.getTime() - now.getTime()) / (1000 * 60 * 60))
     : null;
 
-  // TODO: Filter activity by active season after notifications has season_id.
-  const { data: notifications } = await supabase
-    .from("notifications")
-    .select("id, type, title, body, created_at, metadata")
-    .order("created_at", { ascending: false })
-    .limit(10);
+  const { data: notifications } = activeSeason
+    ? await supabase
+        .from("notifications")
+        .select("id, type, title, body, created_at, metadata")
+        .eq("season_id", activeSeason.id)
+        .order("created_at", { ascending: false })
+        .limit(10)
+    : { data: [] };
 
   const notificationList = (notifications as NotificationRow[] | null) ?? [];
 

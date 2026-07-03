@@ -294,6 +294,19 @@ LEAGUE_SIGNUP_CODE=...
 
 Never expose `SUPABASE_SECRET_KEY` client-side.
 
+Scheduled prediction reminders also require:
+
+```env
+RESEND_API_KEY=...
+REMINDER_EMAIL_FROM=...
+CRON_SECRET=...
+```
+
+Prediction reminders are sent by Vercel Cron through
+`/api/cron/send-prediction-reminders`. Each successful three-hour reminder is
+logged in `prediction_reminders` so the same user/gameweek/reminder type is not
+emailed twice.
+
 ## Development commands
 
 ```bash

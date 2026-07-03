@@ -224,6 +224,8 @@ async function upsertFixturesPickedActivity({
     type: "fixtures_selected",
     title: `${pickerName} picked fixtures for ${gameweekName}`,
     body: `${pickerName} picked the fixtures for ${gameweekName}. ${gameweekName} starts at ${kickoffText}.`,
+    seasonId: typedGameweek.season_id,
+    gameweekId,
     metadata: {
         pickerName,
         gameweekId,

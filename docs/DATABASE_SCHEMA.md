@@ -291,15 +291,18 @@ Important columns:
 - `title`
 - `body`
 - `event_key`
+- `season_id`
+- `gameweek_id`
 - `metadata`
 - `created_at`
 
 Rules:
 
 - `event_key` prevents duplicate generated activity.
+- `season_id` scopes normal Home activity to the active season.
+- `gameweek_id` supports export, cleanup, and future reminders.
 - `metadata` stores structured JSON for rich UI.
-- Notifications are currently not always linked directly to season_id.
-- Future improvement: add `season_id` and/or `gameweek_id` for cleanup/filtering.
+- `season_id` and `gameweek_id` remain nullable so legacy notifications can be kept safely.
 
 Important SQL:
 
@@ -311,6 +314,64 @@ on public.notifications (event_key);
 
 alter table public.notifications
 add column if not exists metadata jsonb not null default '{}'::jsonb;
+
+alter table public.notifications
+add column if not exists season_id uuid
+references public.seasons(id) on delete set null;
+
+alter table public.notifications
+add column if not exists gameweek_id uuid
+references public.gameweeks(id) on delete set null;
+
+create index if not exists notifications_season_created_idx
+on public.notifications (season_id, created_at desc);
+
+create index if not exists notifications_gameweek_idx
+on public.notifications (gameweek_id);
+```
+
+## `prediction_reminders`
+
+Logs sent prediction reminder emails.
+
+Important columns:
+
+- `id`
+- `season_id`
+- `gameweek_id`
+- `user_id`
+- `reminder_type`
+- `sent_at`
+
+Rules:
+
+- One row means one reminder email was sent.
+- `reminder_type` is currently `three_hour`.
+- Unique constraint on `(gameweek_id, user_id, reminder_type)` prevents repeat reminders for the same user and gameweek.
+- Rows are inserted only after a successful email send.
+
+Important SQL:
+
+```sql
+create table if not exists public.prediction_reminders (
+  id uuid primary key default gen_random_uuid(),
+  season_id uuid references public.seasons(id) on delete cascade,
+  gameweek_id uuid references public.gameweeks(id) on delete cascade,
+  user_id uuid references public.profiles(id) on delete cascade,
+  reminder_type text not null default 'three_hour',
+  sent_at timestamptz not null default now(),
+  constraint prediction_reminders_unique_gameweek_user_type
+    unique (gameweek_id, user_id, reminder_type)
+);
+
+create index if not exists prediction_reminders_season_sent_idx
+on public.prediction_reminders (season_id, sent_at desc);
+
+create index if not exists prediction_reminders_gameweek_idx
+on public.prediction_reminders (gameweek_id);
+
+create index if not exists prediction_reminders_user_sent_idx
+on public.prediction_reminders (user_id, sent_at desc);
 ```
 
 ## `fixture_picker_order`

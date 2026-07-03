@@ -40,6 +40,7 @@ import AdminGameweekPickerAssignmentsCard, {
 import AdminMaintenanceCards, {
   type HealthCheckRow,
   type MaintenanceSeasonOption,
+  type ReminderReadinessRow,
 } from "@/components/admin/AdminMaintenanceCards";
 
 type Profile = {
@@ -261,6 +262,19 @@ export default async function AdminPage({
         .eq("season_id", activeSeason.id)
     : { count: 0 };
 
+  const { count: reminderCount, error: reminderCountError } = await supabase
+    .from("prediction_reminders")
+    .select("id", { count: "exact", head: true });
+
+  const { data: latestReminder, error: latestReminderError } = await supabase
+    .from("prediction_reminders")
+    .select("sent_at")
+    .order("sent_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const typedLatestReminder = latestReminder as { sent_at: string } | null;
+
   const completedFixturesWithNullScores = activeSeasonFixtures.filter(
     (fixture) =>
       fixture.status === "completed" &&
@@ -287,6 +301,51 @@ export default async function AdminPage({
   const missingEnvVars = requiredEnvChecks
     .filter((envVar) => !envVar.present)
     .map((envVar) => envVar.name);
+
+  const reminderEnvChecks = [
+    "RESEND_API_KEY",
+    "REMINDER_EMAIL_FROM",
+    "CRON_SECRET",
+  ].map((name) => ({
+    name,
+    present: Boolean(process.env[name]),
+  }));
+
+  const reminderReadiness: ReminderReadinessRow[] = [
+    ...reminderEnvChecks.map((envVar) => ({
+      label: envVar.name,
+      value: envVar.present ? "Present" : "Missing",
+      severity: envVar.present ? ("ok" as const) : ("warning" as const),
+      detail:
+        envVar.name === "CRON_SECRET"
+          ? "Used to protect the Vercel Cron route."
+          : "Required before real reminder emails can be sent.",
+    })),
+    {
+      label: "Reminder log",
+      value: reminderCountError ? "Not ready" : "Ready",
+      severity: reminderCountError ? "warning" : "ok",
+      detail: reminderCountError
+        ? "Run the prediction_reminders SQL before enabling reminders."
+        : `${reminderCount ?? 0} sent reminder log rows.`,
+    },
+    {
+      label: "Last reminder sent",
+      value:
+        latestReminderError || !typedLatestReminder
+          ? "None"
+          : new Intl.DateTimeFormat("en-GB", {
+              day: "2-digit",
+              month: "short",
+              hour: "2-digit",
+              minute: "2-digit",
+            }).format(new Date(typedLatestReminder.sent_at)),
+      severity: latestReminderError ? "warning" : "ok",
+      detail: latestReminderError
+        ? "Run the prediction_reminders SQL before enabling reminders."
+        : "Most recent prediction reminder log row.",
+    },
+  ];
 
   const healthChecks: HealthCheckRow[] = [
     {
@@ -657,6 +716,7 @@ export default async function AdminPage({
           activeSeasonName={activeSeason?.name ?? null}
           seasons={maintenanceSeasonOptions}
           healthChecks={healthChecks}
+          reminderReadiness={reminderReadiness}
           recalculateAction={recalculateActiveSeasonLeaderboard}
           rescoreAction={rescoreActiveSeasonAndRecalculateLeaderboard}
         />

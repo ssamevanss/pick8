@@ -173,6 +173,9 @@ NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 SUPABASE_SECRET_KEY
 LEAGUE_SIGNUP_CODE
+RESEND_API_KEY
+REMINDER_EMAIL_FROM
+CRON_SECRET
 ```
 
 Confirm Supabase redirect URLs include:
@@ -193,6 +196,9 @@ seasons.show_in_archive
 gameweeks.fixture_picker_id
 notifications.event_key
 notifications.metadata
+notifications.season_id
+notifications.gameweek_id
+prediction_reminders
 ```
 
 Confirm one active season max:
@@ -278,4 +284,3 @@ Each gameweek:
 - Check scoring and leaderboard.
 - Check activity feed.
 - Download a season export.
-

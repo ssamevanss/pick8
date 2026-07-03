@@ -28,6 +28,16 @@ LEAGUE_SIGNUP_CODE=...
 
 Never expose `SUPABASE_SECRET_KEY` in client-side code.
 
+Required for scheduled prediction reminder emails:
+
+```env
+RESEND_API_KEY=...
+REMINDER_EMAIL_FROM="Football Predictor <reminders@example.com>"
+CRON_SECRET=...
+```
+
+Never expose `RESEND_API_KEY` client-side.
+
 ## Deployment
 
 The app is deployed on Vercel.
@@ -49,6 +59,45 @@ After deploying:
 - Check Admin -> Season
 - Check Admin -> Results
 - Check Vercel logs for errors
+
+## Scheduled prediction reminders
+
+Vercel Cron calls:
+
+```text
+/api/cron/send-prediction-reminders
+```
+
+The route sends one `three_hour` reminder per approved user per gameweek when:
+
+- the season has `status = active`
+- the gameweek has at least 4 selected fixtures
+- the earliest kickoff is roughly 2.5 to 3.5 hours away
+- the first kickoff has not passed
+- the user has not predicted every fixture in the gameweek
+- no matching row exists in `prediction_reminders`
+
+The cron is configured in `vercel.json` to run hourly.
+
+### Safe testing
+
+Use dry-run mode first. It checks due gameweeks and users but does not send
+email or insert reminder logs:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "https://your-production-domain/api/cron/send-prediction-reminders?dry_run=1"
+```
+
+For local testing:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "http://localhost:3000/api/cron/send-prediction-reminders?dry_run=1"
+```
+
+Only remove `dry_run=1` after confirming the due gameweek, candidate users,
+and environment variables in Admin -> Maintenance.
 
 ## Admin season setup flow
 

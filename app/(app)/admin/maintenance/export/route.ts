@@ -13,6 +13,8 @@ type FixtureRow = {
 type NotificationRow = {
   id: string;
   event_key: string | null;
+  season_id: string | null;
+  gameweek_id: string | null;
   metadata: Record<string, unknown> | null;
 };
 
@@ -156,23 +158,43 @@ export async function GET(request: NextRequest) {
     .eq("season_id", seasonId)
     .order("rank", { ascending: true });
 
-  const { data: notifications } = await supabase
+  const { data: seasonNotifications } = await supabase
     .from("notifications")
     .select("*")
+    .eq("season_id", seasonId)
     .order("created_at", { ascending: true });
 
-  const matchedNotifications = (
-    (notifications as NotificationRow[] | null) ?? []
+  const seasonNotificationRows =
+    (seasonNotifications as NotificationRow[] | null) ?? [];
+
+  const { data: legacyNotifications } = await supabase
+    .from("notifications")
+    .select("*")
+    .is("season_id", null)
+    .order("created_at", { ascending: true });
+
+  const legacyMatchedNotifications = (
+    (legacyNotifications as NotificationRow[] | null) ?? []
   ).filter((notification) =>
     notificationMatchesGameweek(notification, gameweekIdSet),
   );
+
+  const notificationIds = new Set(
+    seasonNotificationRows.map((notification) => notification.id),
+  );
+  const matchedNotifications = [
+    ...seasonNotificationRows,
+    ...legacyMatchedNotifications.filter(
+      (notification) => !notificationIds.has(notification.id),
+    ),
+  ];
 
   const exportedAt = new Date();
   const exportPayload = {
     exported_at: exportedAt.toISOString(),
     export_version: 1,
     notification_export_note:
-      "Notifications are included only when metadata.gameweekId or event_key safely matches an exported gameweek.",
+      "Notifications are included by season_id. Legacy null-season notifications are included only when metadata.gameweekId or event_key safely matches an exported gameweek.",
     season,
     profiles: profiles ?? [],
     gameweeks: gameweeks ?? [],
