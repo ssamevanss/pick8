@@ -22,6 +22,7 @@ Required `.env.local` values:
 ```env
 NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
+NEXT_PUBLIC_SITE_URL=https://whoyougot.ie
 SUPABASE_SECRET_KEY=...
 LEAGUE_SIGNUP_CODE=...
 ```
@@ -85,6 +86,7 @@ The route sends `matchday_predictions` reminders when:
 - at least one fixture in the gameweek has not kicked off yet
 - the user has not predicted every fixture in the gameweek
 - no matching reminder exists for that user, gameweek, reminder type, and date
+- the email links to `NEXT_PUBLIC_SITE_URL/predictions`
 
 Prediction reminders are matchday-only. They do not send every day for a
 gameweek unless fixtures are spread across multiple days and the user still has
@@ -98,6 +100,7 @@ The route also sends `daily_fixture_picker` reminders when:
 - fixture picking is unlocked and not stale
 - no matching picker reminder exists for that picker, gameweek, reminder type,
   and date
+- the email links to `NEXT_PUBLIC_SITE_URL/pick-fixtures`
 
 Fixture picker reminders can repeat daily while the picker still needs to act.
 

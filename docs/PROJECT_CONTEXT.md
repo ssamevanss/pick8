@@ -288,6 +288,7 @@ Required locally and on Vercel:
 ```env
 NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
+NEXT_PUBLIC_SITE_URL=https://whoyougot.ie
 SUPABASE_SECRET_KEY=...
 LEAGUE_SIGNUP_CODE=...
 ```
@@ -307,6 +308,8 @@ Prediction reminders are sent by Vercel Cron through
 Successful matchday prediction reminders and fixture picker reminders are logged
 in `prediction_reminders` with `reminder_date` so the same
 user/gameweek/reminder type is not emailed twice on the same day.
+Reminder emails link to `${NEXT_PUBLIC_SITE_URL}/predictions` or
+`${NEXT_PUBLIC_SITE_URL}/pick-fixtures`.
 
 ## Development commands
 

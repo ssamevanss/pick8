@@ -1,5 +1,10 @@
 import { createAdminClient } from "@/utils/supabase/admin";
-import { getReminderEmailConfig, sendEmail } from "@/utils/email";
+import {
+  buildReminderEmailTemplate,
+  getReminderEmailConfig,
+  getSiteUrl,
+  sendEmail,
+} from "@/utils/email";
 
 export const dynamic = "force-dynamic";
 
@@ -103,78 +108,75 @@ function formatGameweekName(gameweek: Pick<GameweekRow, "gameweek_number" | "nam
   return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
 }
 
-function formatKickoff(value: Date) {
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "long",
-    day: "2-digit",
-    month: "long",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Europe/London",
-    timeZoneName: "short",
-  }).format(value);
-}
-
 function isTerminalFixtureStatus(status: string) {
   return TERMINAL_FIXTURE_STATUSES.includes(status);
 }
 
 function buildPredictionReminderEmail({
-  displayName,
   gameweekName,
-  seasonName,
-  firstKickoffToday,
-  missingCount,
+  siteUrl,
 }: {
-  displayName: string;
   gameweekName: string;
-  seasonName: string;
-  firstKickoffToday: Date;
-  missingCount: number;
+  siteUrl: string;
 }) {
-  const kickoffText = formatKickoff(firstKickoffToday);
-  const subject = `Prediction reminder: ${gameweekName} fixtures today`;
-  const greeting = displayName ? `Hi ${displayName},` : "Hi,";
-  const text = `${greeting}
+  const buttonUrl = `${siteUrl}/predictions`;
+  const subject = "Reminder: enter your predictions";
+  const body = `Fixtures from ${gameweekName} kick off today and you still need to enter your predictions.`;
+  const footer =
+    "You received this because you have incomplete predictions for this gameweek.";
+  const text = `Who You Got?
 
-Reminder: fixtures from ${gameweekName} in ${seasonName} kick off today, starting at ${kickoffText}, and you still need to enter ${missingCount} prediction${missingCount === 1 ? "" : "s"}.
+${body}
 
-Please add your predictions before kickoff.
+Enter predictions: ${buttonUrl}
 
-Football Predictor`;
+${footer}`;
+  const html = buildReminderEmailTemplate({
+    eyebrow: "Predictions needed",
+    title: "Reminder: enter your predictions",
+    body,
+    buttonLabel: "Enter predictions",
+    buttonUrl,
+    footer,
+  });
 
-  const html = `
-    <p>${greeting}</p>
-    <p>Reminder: fixtures from <strong>${gameweekName}</strong> in ${seasonName} kick off today, starting at ${kickoffText}, and you still need to enter <strong>${missingCount}</strong> prediction${missingCount === 1 ? "" : "s"}.</p>
-    <p>Please add your predictions before kickoff.</p>
-    <p>Football Predictor</p>
-  `;
-
-  return { subject, text, html };
+  return { subject, text, html, buttonUrl };
 }
 
 function buildPickerReminderEmail({
-  displayName,
   gameweekName,
+  siteUrl,
 }: {
-  displayName: string;
   gameweekName: string;
+  siteUrl: string;
 }) {
-  const subject = `Fixture picker reminder: ${gameweekName}`;
-  const greeting = displayName ? `Hi ${displayName},` : "Hi,";
-  const text = `${greeting}
+  const buttonUrl = `${siteUrl}/pick-fixtures`;
+  const subject = "You’re up to pick fixtures";
+  const body = `You’re up to pick the fixtures for ${gameweekName}.`;
+  const supportingText =
+    "Choose the four fixtures so everyone can get their predictions in.";
+  const footer =
+    "You received this because you’re the assigned fixture picker for this gameweek.";
+  const text = `Who You Got?
 
-You’re up to pick fixtures for ${gameweekName}. Please choose the four fixtures so everyone can predict.
+${body}
 
-Football Predictor`;
+${supportingText}
 
-  const html = `
-    <p>${greeting}</p>
-    <p>You’re up to pick fixtures for <strong>${gameweekName}</strong>. Please choose the four fixtures so everyone can predict.</p>
-    <p>Football Predictor</p>
-  `;
+Pick fixtures: ${buttonUrl}
 
-  return { subject, text, html };
+${footer}`;
+  const html = buildReminderEmailTemplate({
+    eyebrow: "Fixture picker",
+    title: "You’re up to pick fixtures",
+    body,
+    supportingText,
+    buttonLabel: "Pick fixtures",
+    buttonUrl,
+    footer,
+  });
+
+  return { subject, text, html, buttonUrl };
 }
 
 function groupFixturesByGameweek(fixtures: FixtureRow[]) {
@@ -308,6 +310,7 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const isDryRun = url.searchParams.get("dry_run") === "1";
+  const siteUrl = getSiteUrl(url.origin);
   const emailConfig = getReminderEmailConfig();
 
   if (!emailConfig.isConfigured && !isDryRun) {
@@ -535,6 +538,7 @@ export async function GET(request: Request) {
     gameweekName: string;
     firstKickoffToday: string;
     actionableFixtureCount: number;
+    actionUrl: string;
     candidates: number;
     sent: number;
     skipped: number;
@@ -564,11 +568,8 @@ export async function GET(request: Request) {
       }
 
       const email = buildPredictionReminderEmail({
-        displayName: approvedUser.display_name,
         gameweekName: formatGameweekName(gameweek),
-        seasonName: season.name,
-        firstKickoffToday: gameweek.firstKickoffToday,
-        missingCount,
+        siteUrl,
       });
 
       const result = await sendEmail({
@@ -616,6 +617,7 @@ export async function GET(request: Request) {
       gameweekName: formatGameweekName(gameweek),
       firstKickoffToday: gameweek.firstKickoffToday.toISOString(),
       actionableFixtureCount: gameweek.fixtureIds.length,
+      actionUrl: `${siteUrl}/predictions`,
       candidates: approvedUsers.length,
       sent: gameweekSent,
       skipped: gameweekSkipped,
@@ -637,6 +639,7 @@ export async function GET(request: Request) {
         gameweekId: string;
         gameweekName: string;
         pickerId: string;
+        actionUrl: string;
         sent: number;
         skipped: number;
         errors: number;
@@ -660,6 +663,7 @@ export async function GET(request: Request) {
         gameweekId: pickerGameweek.id,
         gameweekName: formatGameweekName(pickerGameweek),
         pickerId: pickerGameweek.fixture_picker_id,
+        actionUrl: `${siteUrl}/pick-fixtures`,
         sent: 0,
         skipped: 1,
         errors: 0,
@@ -681,6 +685,7 @@ export async function GET(request: Request) {
           gameweekId: pickerGameweek.id,
           gameweekName: formatGameweekName(pickerGameweek),
           pickerId: picker.id,
+          actionUrl: `${siteUrl}/pick-fixtures`,
           sent: 0,
           skipped: 1,
           errors: 0,
@@ -692,14 +697,15 @@ export async function GET(request: Request) {
           gameweekId: pickerGameweek.id,
           gameweekName: formatGameweekName(pickerGameweek),
           pickerId: picker.id,
+          actionUrl: `${siteUrl}/pick-fixtures`,
           sent: 1,
           skipped: 0,
           errors: 0,
         };
       } else {
         const email = buildPickerReminderEmail({
-          displayName: picker.display_name,
           gameweekName: formatGameweekName(pickerGameweek),
+          siteUrl,
         });
 
         const result = await sendEmail({
@@ -719,6 +725,7 @@ export async function GET(request: Request) {
             gameweekId: pickerGameweek.id,
             gameweekName: formatGameweekName(pickerGameweek),
             pickerId: picker.id,
+            actionUrl: `${siteUrl}/pick-fixtures`,
             sent: 0,
             skipped: 0,
             errors: 1,
@@ -744,6 +751,7 @@ export async function GET(request: Request) {
               gameweekId: pickerGameweek.id,
               gameweekName: formatGameweekName(pickerGameweek),
               pickerId: picker.id,
+              actionUrl: `${siteUrl}/pick-fixtures`,
               sent: 0,
               skipped: 0,
               errors: 1,
@@ -755,6 +763,7 @@ export async function GET(request: Request) {
               gameweekId: pickerGameweek.id,
               gameweekName: formatGameweekName(pickerGameweek),
               pickerId: picker.id,
+              actionUrl: `${siteUrl}/pick-fixtures`,
               sent: 1,
               skipped: 0,
               errors: 0,
@@ -775,6 +784,7 @@ export async function GET(request: Request) {
     pickerReminder: pickerSummary ?? {
       candidateFound: false,
       reason: "No actionable fixture picker gameweek found.",
+      actionUrl: `${siteUrl}/pick-fixtures`,
       sent: 0,
       skipped: 0,
       errors: 0,
