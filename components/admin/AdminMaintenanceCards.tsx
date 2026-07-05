@@ -22,12 +22,20 @@ export type ReminderReadinessRow = {
   detail?: string;
 };
 
+export type ExternalFixtureReadinessRow = {
+  label: string;
+  value: string;
+  severity: HealthSeverity;
+  detail?: string;
+};
+
 type AdminMaintenanceCardsProps = {
   activeSeasonId: string | null;
   activeSeasonName: string | null;
   seasons: MaintenanceSeasonOption[];
   healthChecks: HealthCheckRow[];
   reminderReadiness: ReminderReadinessRow[];
+  externalFixtureReadiness: ExternalFixtureReadinessRow[];
   recalculateAction: () => void;
   rescoreAction?: () => void;
 };
@@ -62,6 +70,7 @@ export default function AdminMaintenanceCards({
   seasons,
   healthChecks,
   reminderReadiness,
+  externalFixtureReadiness,
   recalculateAction,
   rescoreAction,
 }: AdminMaintenanceCardsProps) {
@@ -125,6 +134,42 @@ export default function AdminMaintenanceCards({
 
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           {healthChecks.map((check) => (
+            <div
+              key={check.label}
+              className={`rounded-xl border p-3 ${getSeverityClass(
+                check.severity,
+              )}`}
+            >
+              <div className="flex items-start gap-3">
+                <span
+                  className={`mt-1 h-2.5 w-2.5 rounded-full ${getDotClass(
+                    check.severity,
+                  )}`}
+                />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">{check.label}</p>
+                  <p className="mt-1 text-lg font-bold text-white">
+                    {check.value}
+                  </p>
+                  {check.detail ? (
+                    <p className="mt-1 text-xs opacity-80">{check.detail}</p>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+        <h2 className="text-xl font-semibold">External fixture cache</h2>
+        <p className="mt-2 text-sm text-slate-400">
+          football-data.org imports are server-side only and remain disabled
+          until a season is explicitly configured.
+        </p>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {externalFixtureReadiness.map((check) => (
             <div
               key={check.label}
               className={`rounded-xl border p-3 ${getSeverityClass(

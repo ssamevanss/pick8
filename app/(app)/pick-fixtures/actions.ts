@@ -20,6 +20,28 @@ type SavedFixtureRow = {
   kickoff_at: string;
 };
 
+type ExternalFixtureRow = {
+  provider: string;
+  external_fixture_id: string;
+  external_competition_code: string;
+  external_round: string | null;
+  external_matchday: number | null;
+  external_stage: string | null;
+  home_team: string;
+  away_team: string;
+  kickoff_at: string;
+  status: string;
+  raw_payload: Record<string, unknown> | null;
+  last_synced_at: string | null;
+};
+
+type ActiveSeasonExternalConfig = {
+  id: string;
+  base_provider: string | null;
+  base_competition_code: string | null;
+  base_competition_name: string | null;
+};
+
 type GameweekWithPickerRow = {
   id: string;
   season_id: string;
@@ -164,7 +186,7 @@ async function requireFixtureManagerForGameweek(gameweekId: string) {
     }
   }
 
-  return { supabase };
+  return { supabase, gameweek };
 }
 
 async function upsertFixturesPickedActivity({
@@ -338,6 +360,324 @@ export async function savePickerFixtures(formData: FormData) {
         );
       }
     }
+  }
+
+  try {
+    await upsertFixturesPickedActivity({
+      supabase,
+      gameweekId,
+    });
+  } catch (error) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        error instanceof Error
+          ? error.message
+          : "Could not create activity update",
+      )}`,
+    );
+  }
+
+  revalidatePath("/pick-fixtures");
+  revalidatePath("/dashboard");
+
+  redirect(`/pick-fixtures?gameweek=${gameweekId}&saved=1`);
+}
+
+function mapExternalStatusToFixtureStatus(status: string) {
+  if (status === "TIMED" || status === "SCHEDULED") {
+    return "scheduled";
+  }
+
+  return null;
+}
+
+function getExternalFixtureGroupKey(fixture: {
+  external_matchday: number | null;
+  external_stage?: string | null;
+  kickoff_at: string;
+}) {
+  if (fixture.external_matchday !== null) {
+    return `matchday:${fixture.external_matchday}`;
+  }
+
+  if (fixture.external_stage) {
+    return `stage:${fixture.external_stage}`;
+  }
+
+  return `date:${fixture.kickoff_at.slice(0, 10)}`;
+}
+
+function getExpectedExternalPickCount(groupSize: number) {
+  return Math.min(4, groupSize);
+}
+
+export async function saveExternalPickerFixtures(formData: FormData) {
+  const gameweekId = String(formData.get("gameweek_id") ?? "");
+
+  if (!gameweekId) {
+    redirect(
+      `/pick-fixtures?error=${encodeURIComponent("Missing gameweek details")}`,
+    );
+  }
+
+  const selectedExternalIds = formData
+    .getAll("external_fixture_id")
+    .map((value) => String(value))
+    .filter(Boolean);
+  const uniqueExternalIds = [...new Set(selectedExternalIds)];
+
+  if (uniqueExternalIds.length !== selectedExternalIds.length) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        "Each external fixture can only be selected once",
+      )}`,
+    );
+  }
+
+  if (uniqueExternalIds.length === 0 || uniqueExternalIds.length > 4) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        "Select between one and four cached fixtures before saving",
+      )}`,
+    );
+  }
+
+  const { supabase, gameweek } =
+    await requireFixtureManagerForGameweek(gameweekId);
+
+  const { data: activeSeason } = await getActiveSeason(
+    supabase,
+    "id, base_provider, base_competition_code, base_competition_name",
+  );
+  const activeSeasonConfig = activeSeason as ActiveSeasonExternalConfig | null;
+
+  if (
+    !activeSeasonConfig ||
+    activeSeasonConfig.base_provider !== "football_data" ||
+    !activeSeasonConfig.base_competition_code
+  ) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        "External fixtures are not configured for the active season",
+      )}`,
+    );
+  }
+
+  const { data: currentFixtures } = await supabase
+    .from("fixtures")
+    .select("id")
+    .eq("gameweek_id", gameweekId)
+    .order("kickoff_at", { ascending: true });
+
+  const currentFixtureList = (currentFixtures as { id: string }[] | null) ?? [];
+
+  if (currentFixtureList.length > 4) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        "This gameweek has extra admin fixtures. Ask an admin to update it before using external fixture selection.",
+      )}`,
+    );
+  }
+
+  const { data: externalFixtures, error: externalFixturesError } = await supabase
+    .from("external_fixtures")
+    .select(
+      "provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, home_team, away_team, kickoff_at, status, raw_payload, last_synced_at",
+    )
+    .eq("provider", "football_data")
+    .eq("external_competition_code", activeSeasonConfig.base_competition_code)
+    .in("external_fixture_id", uniqueExternalIds);
+
+  if (externalFixturesError) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        externalFixturesError.message,
+      )}`,
+    );
+  }
+
+  const externalFixtureList =
+    (externalFixtures as ExternalFixtureRow[] | null) ?? [];
+
+  if (externalFixtureList.length !== uniqueExternalIds.length) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        "One or more selected cached fixtures could not be found",
+      )}`,
+    );
+  }
+
+  const invalidFixture = externalFixtureList.find(
+    (fixture) => !mapExternalStatusToFixtureStatus(fixture.status),
+  );
+
+  if (invalidFixture) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        `${invalidFixture.home_team} vs ${invalidFixture.away_team} is not selectable`,
+      )}`,
+    );
+  }
+
+  const selectedGroupKeys = [
+    ...new Set(externalFixtureList.map(getExternalFixtureGroupKey)),
+  ];
+
+  if (selectedGroupKeys.length !== 1) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        "Selected cached fixtures must come from the same external matchday or round group",
+      )}`,
+    );
+  }
+
+  const selectedGroupKey = selectedGroupKeys[0];
+
+  const { data: seasonGameweeks } = await supabase
+    .from("gameweeks")
+    .select("id")
+    .eq("season_id", gameweek.season_id);
+
+  const seasonGameweekIds =
+    (seasonGameweeks as { id: string }[] | null)?.map((row) => row.id) ?? [];
+
+  const { data: duplicateFixtures } =
+    seasonGameweekIds.length > 0
+      ? await supabase
+          .from("fixtures")
+          .select("external_fixture_id, gameweek_id")
+          .in("gameweek_id", seasonGameweekIds)
+          .eq("external_provider", "football_data")
+          .in("external_fixture_id", uniqueExternalIds)
+      : { data: [] };
+
+  const duplicateInAnotherGameweek = (
+    (duplicateFixtures as
+      | { external_fixture_id: string | null; gameweek_id: string }[]
+      | null) ?? []
+  ).find((fixture) => fixture.gameweek_id !== gameweekId);
+
+  if (duplicateInAnotherGameweek?.external_fixture_id) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        "One of those fixtures has already been selected for another gameweek",
+      )}`,
+    );
+  }
+
+  const nowIso = new Date().toISOString();
+  const { data: selectableGroupCandidates, error: groupCandidateError } =
+    await supabase
+      .from("external_fixtures")
+      .select(
+        "provider, external_fixture_id, external_competition_code, external_matchday, external_stage, kickoff_at, status",
+      )
+      .eq("provider", "football_data")
+      .eq("external_competition_code", activeSeasonConfig.base_competition_code)
+      .in("status", ["TIMED", "SCHEDULED"])
+      .gt("kickoff_at", nowIso);
+
+  if (groupCandidateError) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        groupCandidateError.message,
+      )}`,
+    );
+  }
+
+  const duplicateExternalIdsInAnotherGameweek = new Set(
+    ((duplicateFixtures as
+      | { external_fixture_id: string | null; gameweek_id: string }[]
+      | null) ?? [])
+      .filter((fixture) => fixture.gameweek_id !== gameweekId)
+      .map((fixture) => fixture.external_fixture_id)
+      .filter((value): value is string => Boolean(value)),
+  );
+  const selectableGroupFixtureCount = (
+    (selectableGroupCandidates as
+      | Pick<
+          ExternalFixtureRow,
+          | "provider"
+          | "external_fixture_id"
+          | "external_competition_code"
+          | "external_matchday"
+          | "external_stage"
+          | "kickoff_at"
+          | "status"
+        >[]
+      | null) ?? []
+  ).filter(
+    (fixture) =>
+      getExternalFixtureGroupKey(fixture) === selectedGroupKey &&
+      !duplicateExternalIdsInAnotherGameweek.has(fixture.external_fixture_id),
+  ).length;
+  const expectedPickCount = getExpectedExternalPickCount(
+    selectableGroupFixtureCount,
+  );
+
+  if (uniqueExternalIds.length !== expectedPickCount) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        `Select exactly ${expectedPickCount} cached fixture${
+          expectedPickCount === 1 ? "" : "s"
+        } from this external group before saving`,
+      )}`,
+    );
+  }
+
+  if (currentFixtureList.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("fixtures")
+      .delete()
+      .eq("gameweek_id", gameweekId)
+      .in(
+        "id",
+        currentFixtureList.map((fixture) => fixture.id),
+      );
+
+    if (deleteError) {
+      redirect(
+        `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+          deleteError.message,
+        )}`,
+      );
+    }
+  }
+
+  const externalFixtureById = new Map(
+    externalFixtureList.map((fixture) => [fixture.external_fixture_id, fixture]),
+  );
+  const rows = uniqueExternalIds.map((externalFixtureId) => {
+    const fixture = externalFixtureById.get(externalFixtureId)!;
+
+    return {
+      gameweek_id: gameweekId,
+      home_team: fixture.home_team,
+      away_team: fixture.away_team,
+      kickoff_at: fixture.kickoff_at,
+      competition:
+        activeSeasonConfig.base_competition_name ??
+        fixture.external_competition_code,
+      status: mapExternalStatusToFixtureStatus(fixture.status),
+      external_provider: fixture.provider,
+      external_fixture_id: fixture.external_fixture_id,
+      external_competition_code: fixture.external_competition_code,
+      external_round: fixture.external_round,
+      external_matchday: fixture.external_matchday,
+      external_status: fixture.status,
+      external_last_synced_at: fixture.last_synced_at,
+      external_raw_payload: fixture.raw_payload,
+    };
+  });
+
+  const { error: insertError } = await supabase.from("fixtures").insert(rows);
+
+  if (insertError) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        insertError.message,
+      )}`,
+    );
   }
 
   try {

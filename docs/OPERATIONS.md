@@ -29,6 +29,15 @@ LEAGUE_SIGNUP_CODE=...
 
 Never expose `SUPABASE_SECRET_KEY` in client-side code.
 
+Required for football-data.org fixture imports:
+
+```env
+FOOTBALL_DATA_API_KEY=...
+```
+
+Never expose `FOOTBALL_DATA_API_KEY` client-side. The provider is only called
+from server-only admin import code.
+
 Required for scheduled prediction reminder emails:
 
 ```env
@@ -38,6 +47,108 @@ CRON_SECRET=...
 ```
 
 Never expose `RESEND_API_KEY` client-side.
+
+## External fixture imports
+
+2.0B uses football-data.org as the first external fixture provider. Provider
+data is cached in local `external_competitions` and `external_fixtures` tables.
+2.0C lets assigned fixture pickers select from that local cache. The picker UI
+must not call football-data.org directly.
+
+Before using imports, run:
+
+```text
+docs/2026-07-05-external-fixture-cache.sql
+```
+
+Configure a season with:
+
+```sql
+update public.seasons
+set
+  base_provider = 'football_data',
+  base_competition_code = 'PL',
+  base_competition_name = 'Premier League',
+  base_competition_external_id = '2021',
+  fixture_import_enabled = false,
+  result_sync_enabled = false
+where id = '<season_id>';
+```
+
+Keep `fixture_import_enabled = false` until dry-run output is reviewed. Keep
+`result_sync_enabled = false`; result sync is deferred until 2.0D.
+
+football-data.org free tier is limited to 10 requests/minute. Import routes
+make one provider request per import and return a clear 429 error with
+`x_requestcounter_reset` if the provider limit is reached. Avoid repeated manual
+imports inside the same minute.
+
+Dry-run locally while logged in as an admin:
+
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"season_id":"<season_id>","dry_run":1}' \
+  "http://localhost:3000/api/admin/external-fixtures/import"
+```
+
+Browser-based dry-run is also available when already signed in as admin:
+
+```text
+http://localhost:3000/api/admin/external-fixtures/import?season_id=<season_id>&dry_run=1
+```
+
+A real import requires `fixture_import_enabled = true` for the target season:
+
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"season_id":"<season_id>","dry_run":0}' \
+  "http://localhost:3000/api/admin/external-fixtures/import"
+```
+
+The import writes only `external_fixtures`. It does not create gameplay
+fixtures, update results, score predictions, or recalculate leaderboards.
+
+For World Cup knockout fixtures, football-data.org may return
+`matchday = null`. Admins can manually assign local grouping values by provider
+fixture id:
+
+```sql
+update public.external_fixtures
+set external_matchday = 7
+where provider = 'football_data'
+  and external_fixture_id in ('<fixture_id_1>', '<fixture_id_2>');
+```
+
+Later imports preserve an existing `external_matchday` when the provider still
+returns `null`. If football-data.org later returns a non-null matchday, the
+provider value is used.
+
+### Testing cached fixture picking
+
+With the current World Cup test setup:
+
+1. Confirm the active season has `base_provider = 'football_data'` and
+   `base_competition_code = 'WC'`.
+2. Confirm `external_fixtures` has upcoming `TIMED` or `SCHEDULED` WC rows.
+3. Log in as the assigned picker for an unlocked active-season gameweek.
+4. Open `/pick-fixtures`.
+5. Use the External fixtures section to select exactly four cached fixtures.
+6. Save selected cached fixtures.
+7. Confirm four rows were inserted into `fixtures` with:
+   - `status = scheduled`
+   - `external_provider = football_data`
+   - `external_fixture_id` populated
+   - `external_competition_code = WC`
+8. Confirm the manual fallback remains visible and editable until predictions
+   exist.
+
+If a cached fixture is missing, run the admin import dry-run/real import flow
+again. If a fixture was already selected in another active-season gameweek, the
+picker excludes it from selectable cached fixtures.
 
 ## Deployment
 

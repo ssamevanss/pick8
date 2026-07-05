@@ -38,6 +38,7 @@ import AdminGameweekPickerAssignmentsCard, {
   type GameweekPickerAssignmentRow,
 } from "@/components/admin/AdminGameweekPickerAssignmentsCard";
 import AdminMaintenanceCards, {
+  type ExternalFixtureReadinessRow,
   type HealthCheckRow,
   type MaintenanceSeasonOption,
   type ReminderReadinessRow,
@@ -112,7 +113,7 @@ export default async function AdminPage({
 
   const { data: activeSeason } = await getActiveSeason(
     supabase,
-    "id, name, status, is_active",
+    "id, name, status, is_active, base_provider, base_competition_code, fixture_import_enabled, result_sync_enabled",
   );
 
   const { data: seasons } = await supabase
@@ -344,6 +345,61 @@ export default async function AdminPage({
       detail: latestReminderError
         ? "Run the prediction_reminders SQL before enabling reminders."
         : "Most recent prediction reminder log row.",
+    },
+  ];
+
+  const activeSeasonExternalConfig = activeSeason as
+    | {
+        base_provider: string | null;
+        base_competition_code: string | null;
+        fixture_import_enabled: boolean | null;
+        result_sync_enabled: boolean | null;
+      }
+    | null;
+
+  const externalFixtureReadiness: ExternalFixtureReadinessRow[] = [
+    {
+      label: "FOOTBALL_DATA_API_KEY",
+      value: process.env.FOOTBALL_DATA_API_KEY ? "Present" : "Missing",
+      severity: process.env.FOOTBALL_DATA_API_KEY ? "ok" : "warning",
+      detail: "Required for admin-only external fixture imports.",
+    },
+    {
+      label: "Base provider",
+      value: activeSeasonExternalConfig?.base_provider ?? "Not set",
+      severity:
+        activeSeasonExternalConfig?.base_provider === "football_data"
+          ? "ok"
+          : "warning",
+      detail: "Active season should use football_data for the 2.0B import spike.",
+    },
+    {
+      label: "Base competition",
+      value: activeSeasonExternalConfig?.base_competition_code ?? "Not set",
+      severity: activeSeasonExternalConfig?.base_competition_code
+        ? "ok"
+        : "warning",
+      detail: "Examples: PL, PD, SA, BL1, FL1, WC.",
+    },
+    {
+      label: "Fixture import",
+      value: activeSeasonExternalConfig?.fixture_import_enabled
+        ? "Enabled"
+        : "Disabled",
+      severity: activeSeasonExternalConfig?.fixture_import_enabled
+        ? "ok"
+        : "warning",
+      detail: "Disabled by default. Dry-run remains available for configured seasons.",
+    },
+    {
+      label: "Result sync",
+      value: activeSeasonExternalConfig?.result_sync_enabled
+        ? "Enabled"
+        : "Disabled",
+      severity: activeSeasonExternalConfig?.result_sync_enabled
+        ? "warning"
+        : "ok",
+      detail: "Result sync is deferred until 2.0D.",
     },
   ];
 
@@ -717,6 +773,7 @@ export default async function AdminPage({
           seasons={maintenanceSeasonOptions}
           healthChecks={healthChecks}
           reminderReadiness={reminderReadiness}
+          externalFixtureReadiness={externalFixtureReadiness}
           recalculateAction={recalculateActiveSeasonLeaderboard}
           rescoreAction={rescoreActiveSeasonAndRecalculateLeaderboard}
         />

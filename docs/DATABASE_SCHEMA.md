@@ -82,6 +82,13 @@ Important columns:
 - `season_type`: text, e.g. `standard`, `test`, `world_cup`
 - `description`
 - `show_in_archive`: boolean
+- `base_provider`: optional external fixture provider, e.g. `football_data`
+- `base_competition_code`: optional provider competition code, e.g. `PL`
+- `base_competition_name`: optional display name, e.g. `Premier League`
+- `base_competition_external_id`: optional provider competition id
+- `provider_season`: optional provider season id/year
+- `fixture_import_enabled`: boolean, default `false`
+- `result_sync_enabled`: boolean, default `false`
 - `created_by`
 - `archived_at`
 - `archived_by`
@@ -95,6 +102,8 @@ Rules:
 - Archived seasons are read-only.
 - Archived real seasons can be shown in previous season leaderboards if `show_in_archive = true`.
 - Test/cup trial seasons usually have `show_in_archive = false`.
+- External fixture imports are disabled by default and should only run for explicitly configured seasons.
+- Result sync is reserved for a later phase and should remain disabled until 2.0D.
 
 Recommended SQL additions already used:
 
@@ -111,6 +120,19 @@ add column if not exists created_by uuid references public.profiles(id),
 add column if not exists description text,
 add column if not exists season_type text not null default 'standard',
 add column if not exists show_in_archive boolean not null default true;
+```
+
+External fixture columns:
+
+```sql
+alter table public.seasons
+add column if not exists base_provider text,
+add column if not exists base_competition_code text,
+add column if not exists base_competition_name text,
+add column if not exists base_competition_external_id text,
+add column if not exists provider_season text,
+add column if not exists fixture_import_enabled boolean not null default false,
+add column if not exists result_sync_enabled boolean not null default false;
 ```
 
 Only one active season:
@@ -176,6 +198,14 @@ Important columns:
 - `status`
 - `home_score`
 - `away_score`
+- `external_provider`
+- `external_fixture_id`
+- `external_competition_code`
+- `external_round`
+- `external_matchday`
+- `external_status`
+- `external_last_synced_at`
+- `external_raw_payload`
 
 Rules:
 
@@ -184,6 +214,8 @@ Rules:
 - Admin can override fixtures.
 - Fixture locks individually at kickoff for prediction editing.
 - Completed fixtures should have scores.
+- External fields record provenance only. Gameplay continues to use the core fixture columns.
+- Picker UI reads local cached provider fixtures, never football-data.org directly.
 
 Picker safety trigger:
 
@@ -218,6 +250,84 @@ before insert on public.fixtures
 for each row
 execute function public.prevent_picker_more_than_four_fixtures();
 ```
+
+External provenance columns:
+
+```sql
+alter table public.fixtures
+add column if not exists external_provider text,
+add column if not exists external_fixture_id text,
+add column if not exists external_competition_code text,
+add column if not exists external_round text,
+add column if not exists external_matchday integer,
+add column if not exists external_status text,
+add column if not exists external_last_synced_at timestamptz,
+add column if not exists external_raw_payload jsonb;
+
+create index if not exists fixtures_external_fixture_idx
+on public.fixtures (external_provider, external_fixture_id)
+where external_provider is not null and external_fixture_id is not null;
+```
+
+## `external_competitions`
+
+Caches app-approved provider competitions.
+
+Important columns:
+
+- `provider`
+- `external_competition_id`
+- `external_competition_code`
+- `name`
+- `country`
+- `type`
+- `enabled`
+- `display_order`
+- `raw_payload`
+
+Seeded football-data.org codes:
+
+- `PL`: Premier League
+- `PD`: La Liga
+- `SA`: Serie A
+- `BL1`: Bundesliga
+- `FL1`: Ligue 1
+- `WC`: FIFA World Cup
+
+## `external_fixtures`
+
+Caches provider fixtures before any picker/admin copies selected fixtures into
+the gameplay `fixtures` table.
+
+Important columns:
+
+- `provider`
+- `external_fixture_id`
+- `external_competition_id`
+- `external_competition_code`
+- `provider_season`
+- `external_round`
+- `external_matchday`
+- `external_stage`
+- `external_group`
+- `home_team`
+- `away_team`
+- `kickoff_at`
+- `status`
+- `home_score`
+- `away_score`
+- `raw_payload`
+- `last_synced_at`
+
+Rules:
+
+- Unique by `(provider, external_fixture_id)`.
+- football-data.org `utcDate` is stored as a UTC instant in `kickoff_at`.
+- Provider status values are cached as returned, for example `SCHEDULED`, `TIMED`, and `FINISHED`.
+- The picker UI reads this local cache, not the provider API.
+- Selected cached fixtures are copied/linked into gameplay `fixtures`.
+- Importing external fixtures must not create gameplay fixtures automatically.
+- Result sync is future 2.0D work.
 
 ## `predictions`
 

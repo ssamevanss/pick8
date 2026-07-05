@@ -56,6 +56,7 @@ utils/supabase/client.ts
 utils/supabase/server.ts
 utils/supabase/admin.ts
 utils/supabase/middleware.ts
+utils/football-data/client.ts
 utils/activity.ts
 proxy.ts
 ```
@@ -97,8 +98,13 @@ Rules:
 - Gameweek 1 is eligible immediately.
 - Later gameweeks unlock after the previous gameweek is complete.
 - Picker chooses exactly four fixtures.
+- If the active season has a configured base provider/competition, the picker can select cached fixtures from `external_fixtures`.
+- Cached external fixtures are grouped by provider stage, matchday, or kickoff date. Provider matchday is not treated as app gameweek number.
+- Selected cached fixtures are copied into the existing `fixtures` table with external provenance fields.
+- The picker never calls football-data.org directly.
 - Picker can edit until predictions exist for that gameweek.
 - Admin override happens via Admin pages, not this picker page.
+- Manual fixture entry remains available as fallback.
 
 ### `/leaderboard`
 
@@ -134,6 +140,17 @@ Future Maintenance tab should include:
 - Health check
 - Recalculate leaderboard
 - Safe test-data cleanup
+
+2.0B adds an admin-only external fixture import endpoint:
+
+```text
+/api/admin/external-fixtures/import
+```
+
+The route supports dry-run output and, when explicitly enabled on the season,
+imports provider fixtures into the local `external_fixtures` cache. 2.0C picker
+selection reads that local cache and copies selected rows into gameplay
+`fixtures`. Result sync and scoring from provider data remain future work.
 
 ## User roles and statuses
 
@@ -177,6 +194,13 @@ Important columns:
 - `seasons.is_active` mirrors `status = 'active'` temporarily
 - `seasons.season_type`
 - `seasons.show_in_archive`
+- `seasons.base_provider`
+- `seasons.base_competition_code`
+- `seasons.base_competition_name`
+- `seasons.base_competition_external_id`
+- `seasons.provider_season`
+- `seasons.fixture_import_enabled`
+- `seasons.result_sync_enabled`
 - `seasons.archived_at`
 - `seasons.archived_by`
 
@@ -275,6 +299,18 @@ Uses `createServerClient` and `cookies()`.
 
 Uses service role / secret key and must only be called server-side.
 
+### football-data.org client
+
+`utils/football-data/client.ts`
+
+Server-only provider helper. Reads `FOOTBALL_DATA_API_KEY`, sends
+`X-Auth-Token`, normalizes football-data.org match payloads, and returns
+clear rate-limit errors without exposing the key.
+
+football-data.org is limited to 10 requests/minute on the free tier. Provider
+data is cached locally in `external_fixtures`. Player-facing picker UI reads
+the local cache, not football-data.org directly.
+
 ### Middleware/proxy
 
 `proxy.ts` calls `updateSession()` from `utils/supabase/middleware.ts`.
@@ -291,9 +327,11 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
 NEXT_PUBLIC_SITE_URL=https://whoyougot.ie
 SUPABASE_SECRET_KEY=...
 LEAGUE_SIGNUP_CODE=...
+FOOTBALL_DATA_API_KEY=...
 ```
 
 Never expose `SUPABASE_SECRET_KEY` client-side.
+Never expose `FOOTBALL_DATA_API_KEY` client-side.
 
 Scheduled prediction reminders also require:
 
@@ -323,10 +361,8 @@ Run lint/build after meaningful changes.
 
 ## Current known next work
 
-- Admin Maintenance tab
-- Season export/backup
-- Health check
-- Recalculate leaderboard control
+- 2.0D selected-fixture final result sync
+- Admin controls for base provider/competition setup
 - Error handling polish
 - Mobile polish
 - Email reminders

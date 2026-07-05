@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "spike:football-data": "node --experimental-strip-types scripts/spike-football-data.ts",
     "lint": "eslint"
   },
   "dependencies": {
