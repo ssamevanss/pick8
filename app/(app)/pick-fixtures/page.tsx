@@ -7,6 +7,7 @@ import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
 import { savePickerFixtures } from "./actions";
 import { redirect } from "next/navigation";
+import { formatInTimeZone } from "date-fns-tz";
 
 type PickerGameweek = Gameweek & {
   fixture_picker_id: string | null;
@@ -29,11 +30,7 @@ function isTerminalFixtureStatus(status: string) {
 }
 
 function formatDateTimeLocal(value: string) {
-  const date = new Date(value);
-  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
-  const localDate = new Date(date.getTime() - offsetMs);
-
-  return localDate.toISOString().slice(0, 16);
+  return formatInTimeZone(value, "Europe/London", "yyyy-MM-dd'T'HH:mm");
 }
 
 async function getEligiblePickerGameweeks({

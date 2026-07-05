@@ -74,6 +74,9 @@ On Vercel Hobby, cron runs once daily. The configured schedule is:
 0 8 * * *
 ```
 
+Vercel cron schedules use UTC, so this runs at 08:00 UTC. During UK/Ireland
+summer time that is 09:00 local time.
+
 The route sends `matchday_predictions` reminders when:
 
 - the season has `status = active`
