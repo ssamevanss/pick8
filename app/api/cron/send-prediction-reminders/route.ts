@@ -3,9 +3,9 @@ import { getReminderEmailConfig, sendEmail } from "@/utils/email";
 
 export const dynamic = "force-dynamic";
 
-const REMINDER_TYPE = "three_hour";
-const WINDOW_START_MS = 2.5 * 60 * 60 * 1000;
-const WINDOW_END_MS = 3.5 * 60 * 60 * 1000;
+const PREDICTION_REMINDER_TYPE = "matchday_predictions";
+const PICKER_REMINDER_TYPE = "daily_fixture_picker";
+const TERMINAL_FIXTURE_STATUSES = ["completed", "postponed", "void"];
 
 type SeasonRow = {
   id: string;
@@ -17,12 +17,14 @@ type GameweekRow = {
   season_id: string;
   gameweek_number: number;
   name: string | null;
+  fixture_picker_id: string | null;
 };
 
 type FixtureRow = {
   id: string;
   gameweek_id: string;
   kickoff_at: string | null;
+  status: string;
 };
 
 type ProfileRow = {
@@ -40,12 +42,27 @@ type ReminderRow = {
   gameweek_id: string;
   user_id: string;
   reminder_type: string;
+  reminder_date: string;
 };
 
-type DueGameweek = GameweekRow & {
+type MatchdayGameweek = GameweekRow & {
   fixtureIds: string[];
-  firstKickoff: Date;
+  firstKickoffToday: Date;
 };
+
+function getCronAdminClient() {
+  try {
+    return {
+      supabase: createAdminClient(),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      supabase: null,
+      error: error instanceof Error ? error.message : "Unknown Supabase error",
+    };
+  }
+}
 
 function verifyCronRequest(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
@@ -67,7 +84,22 @@ function verifyCronRequest(request: Request) {
   return { ok: false, warning: null };
 }
 
-function formatGameweekName(gameweek: GameweekRow) {
+function getLondonDateString(value: Date) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatGameweekName(gameweek: Pick<GameweekRow, "gameweek_number" | "name">) {
   return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
 }
 
@@ -83,38 +115,188 @@ function formatKickoff(value: Date) {
   }).format(value);
 }
 
-function buildReminderEmail({
+function isTerminalFixtureStatus(status: string) {
+  return TERMINAL_FIXTURE_STATUSES.includes(status);
+}
+
+function buildPredictionReminderEmail({
   displayName,
   gameweekName,
   seasonName,
-  firstKickoff,
+  firstKickoffToday,
   missingCount,
 }: {
   displayName: string;
   gameweekName: string;
   seasonName: string;
-  firstKickoff: Date;
+  firstKickoffToday: Date;
   missingCount: number;
 }) {
-  const kickoffText = formatKickoff(firstKickoff);
-  const subject = `Prediction reminder: ${gameweekName}`;
+  const kickoffText = formatKickoff(firstKickoffToday);
+  const subject = `Prediction reminder: ${gameweekName} fixtures today`;
   const greeting = displayName ? `Hi ${displayName},` : "Hi,";
   const text = `${greeting}
 
-${gameweekName} in ${seasonName} kicks off at ${kickoffText}.
+Reminder: fixtures from ${gameweekName} in ${seasonName} kick off today, starting at ${kickoffText}, and you still need to enter ${missingCount} prediction${missingCount === 1 ? "" : "s"}.
 
-You still have ${missingCount} prediction${missingCount === 1 ? "" : "s"} to enter. Please add them before the first kickoff.
+Please add your predictions before kickoff.
 
 Football Predictor`;
 
   const html = `
     <p>${greeting}</p>
-    <p><strong>${gameweekName}</strong> in ${seasonName} kicks off at ${kickoffText}.</p>
-    <p>You still have <strong>${missingCount}</strong> prediction${missingCount === 1 ? "" : "s"} to enter. Please add them before the first kickoff.</p>
+    <p>Reminder: fixtures from <strong>${gameweekName}</strong> in ${seasonName} kick off today, starting at ${kickoffText}, and you still need to enter <strong>${missingCount}</strong> prediction${missingCount === 1 ? "" : "s"}.</p>
+    <p>Please add your predictions before kickoff.</p>
     <p>Football Predictor</p>
   `;
 
   return { subject, text, html };
+}
+
+function buildPickerReminderEmail({
+  displayName,
+  gameweekName,
+}: {
+  displayName: string;
+  gameweekName: string;
+}) {
+  const subject = `Fixture picker reminder: ${gameweekName}`;
+  const greeting = displayName ? `Hi ${displayName},` : "Hi,";
+  const text = `${greeting}
+
+You’re up to pick fixtures for ${gameweekName}. Please choose the four fixtures so everyone can predict.
+
+Football Predictor`;
+
+  const html = `
+    <p>${greeting}</p>
+    <p>You’re up to pick fixtures for <strong>${gameweekName}</strong>. Please choose the four fixtures so everyone can predict.</p>
+    <p>Football Predictor</p>
+  `;
+
+  return { subject, text, html };
+}
+
+function groupFixturesByGameweek(fixtures: FixtureRow[]) {
+  const fixturesByGameweek = new Map<string, FixtureRow[]>();
+
+  for (const fixture of fixtures) {
+    const list = fixturesByGameweek.get(fixture.gameweek_id) ?? [];
+    list.push(fixture);
+    fixturesByGameweek.set(fixture.gameweek_id, list);
+  }
+
+  return fixturesByGameweek;
+}
+
+async function getPreviousGameweekComplete({
+  supabase,
+  seasonId,
+  gameweekNumber,
+}: {
+  supabase: ReturnType<typeof createAdminClient>;
+  seasonId: string;
+  gameweekNumber: number;
+}) {
+  if (gameweekNumber === 1) {
+    return true;
+  }
+
+  const { data: previousGameweek } = await supabase
+    .from("gameweeks")
+    .select("id")
+    .eq("season_id", seasonId)
+    .eq("gameweek_number", gameweekNumber - 1)
+    .maybeSingle();
+
+  if (!previousGameweek) {
+    return false;
+  }
+
+  const { data: previousFixtures } = await supabase
+    .from("fixtures")
+    .select("status")
+    .eq("gameweek_id", previousGameweek.id);
+
+  const fixtureList = (previousFixtures as { status: string }[] | null) ?? [];
+
+  return (
+    fixtureList.length > 0 &&
+    fixtureList.every((fixture) => isTerminalFixtureStatus(fixture.status))
+  );
+}
+
+async function findNextActionablePickerGameweek({
+  supabase,
+  seasonId,
+  gameweeks,
+  fixturesByGameweek,
+  now,
+}: {
+  supabase: ReturnType<typeof createAdminClient>;
+  seasonId: string;
+  gameweeks: GameweekRow[];
+  fixturesByGameweek: Map<string, FixtureRow[]>;
+  now: Date;
+}) {
+  for (const gameweek of gameweeks) {
+    if (!gameweek.fixture_picker_id) {
+      continue;
+    }
+
+    const fixtures = fixturesByGameweek.get(gameweek.id) ?? [];
+
+    if (fixtures.length >= 4) {
+      continue;
+    }
+
+    const previousComplete = await getPreviousGameweekComplete({
+      supabase,
+      seasonId,
+      gameweekNumber: gameweek.gameweek_number,
+    });
+
+    if (!previousComplete) {
+      continue;
+    }
+
+    const fixtureIds = fixtures.map((fixture) => fixture.id);
+    const { data: existingPrediction } =
+      fixtureIds.length > 0
+        ? await supabase
+            .from("predictions")
+            .select("fixture_id")
+            .in("fixture_id", fixtureIds)
+            .limit(1)
+            .maybeSingle()
+        : { data: null };
+
+    if (existingPrediction) {
+      continue;
+    }
+
+    const allFixturesClosed =
+      fixtures.length > 0 &&
+      fixtures.every((fixture) => isTerminalFixtureStatus(fixture.status));
+
+    if (allFixturesClosed) {
+      continue;
+    }
+
+    const allPickedFixturesKickedOff =
+      fixtures.length > 0 &&
+      fixtures.every(
+        (fixture) => fixture.kickoff_at && new Date(fixture.kickoff_at) <= now,
+      );
+
+    if (allPickedFixturesKickedOff) {
+      continue;
+    }
+
+    return gameweek;
+  }
+
+  return null;
 }
 
 export async function GET(request: Request) {
@@ -130,9 +312,7 @@ export async function GET(request: Request) {
 
   if (!emailConfig.isConfigured && !isDryRun) {
     console.warn(
-      `Prediction reminder cron skipped: missing ${emailConfig.missing.join(
-        ", ",
-      )}`,
+      `Reminder cron skipped: missing ${emailConfig.missing.join(", ")}`,
     );
 
     return Response.json({
@@ -141,17 +321,68 @@ export async function GET(request: Request) {
       warning: auth.warning,
       error: "Email is not configured.",
       missingEnv: emailConfig.missing,
-      checkedGameweeks: 0,
-      remindersSent: 0,
+      predictionRemindersSent: 0,
+      pickerRemindersSent: 0,
       skipped: 0,
       errors: 0,
     });
   }
 
-  const supabase = createAdminClient();
+  const adminClient = getCronAdminClient();
+
+  if (!adminClient.supabase) {
+    console.error(
+      `Reminder cron skipped: could not create Supabase admin client. ${adminClient.error}`,
+    );
+
+    return Response.json(
+      {
+        ok: false,
+        dryRun: isDryRun,
+        warning: auth.warning,
+        error:
+          "Supabase admin client is not configured. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY.",
+        detail: adminClient.error,
+        predictionRemindersSent: 0,
+        pickerRemindersSent: 0,
+        skipped: 0,
+        errors: 1,
+      },
+      { status: 500 },
+    );
+  }
+
+  const supabase = adminClient.supabase;
+
+  const { error: reminderPreflightError } = await supabase
+    .from("prediction_reminders")
+    .select("id")
+    .limit(1);
+
+  if (reminderPreflightError) {
+    console.error(
+      `Reminder cron skipped: Supabase admin client cannot read prediction_reminders. ${reminderPreflightError.message}`,
+    );
+
+    return Response.json(
+      {
+        ok: false,
+        dryRun: isDryRun,
+        warning: auth.warning,
+        error:
+          "Supabase admin client cannot access prediction_reminders. Confirm SUPABASE_SECRET_KEY is the service-role key and the reminder table SQL has been run.",
+        detail: reminderPreflightError.message,
+        predictionRemindersSent: 0,
+        pickerRemindersSent: 0,
+        skipped: 0,
+        errors: 1,
+      },
+      { status: 500 },
+    );
+  }
+
   const now = new Date();
-  const windowStart = new Date(now.getTime() + WINDOW_START_MS);
-  const windowEnd = new Date(now.getTime() + WINDOW_END_MS);
+  const londonToday = getLondonDateString(now);
 
   const { data: activeSeason, error: seasonError } = await supabase
     .from("seasons")
@@ -161,7 +392,10 @@ export async function GET(request: Request) {
     .maybeSingle();
 
   if (seasonError) {
-    return Response.json({ ok: false, error: seasonError.message }, { status: 500 });
+    return Response.json(
+      { ok: false, error: seasonError.message },
+      { status: 500 },
+    );
   }
 
   const season = activeSeason as SeasonRow | null;
@@ -171,8 +405,10 @@ export async function GET(request: Request) {
       ok: true,
       dryRun: isDryRun,
       warning: auth.warning,
+      londonDate: londonToday,
       checkedGameweeks: 0,
-      remindersSent: 0,
+      predictionRemindersSent: 0,
+      pickerRemindersSent: 0,
       skipped: 0,
       errors: 0,
       message: "No active season found.",
@@ -181,7 +417,7 @@ export async function GET(request: Request) {
 
   const { data: gameweeks } = await supabase
     .from("gameweeks")
-    .select("id, season_id, gameweek_number, name")
+    .select("id, season_id, gameweek_number, name, fixture_picker_id")
     .eq("season_id", season.id)
     .order("gameweek_number", { ascending: true });
 
@@ -192,67 +428,53 @@ export async function GET(request: Request) {
     gameweekIds.length > 0
       ? await supabase
           .from("fixtures")
-          .select("id, gameweek_id, kickoff_at")
+          .select("id, gameweek_id, kickoff_at, status")
           .in("gameweek_id", gameweekIds)
           .order("kickoff_at", { ascending: true })
       : { data: [] };
 
   const fixtureRows = (fixtures as FixtureRow[] | null) ?? [];
-  const fixturesByGameweek = new Map<string, FixtureRow[]>();
-
-  for (const fixture of fixtureRows) {
-    const list = fixturesByGameweek.get(fixture.gameweek_id) ?? [];
-    list.push(fixture);
-    fixturesByGameweek.set(fixture.gameweek_id, list);
-  }
-
-  const dueGameweeks: DueGameweek[] = [];
+  const fixturesByGameweek = groupFixturesByGameweek(fixtureRows);
+  const matchdayGameweeks: MatchdayGameweek[] = [];
   let skipped = 0;
 
   for (const gameweek of gameweekRows) {
     const gameweekFixtures = fixturesByGameweek.get(gameweek.id) ?? [];
 
-    if (gameweekFixtures.length < 4) {
+    if (gameweekFixtures.length === 0) {
       skipped += 1;
       continue;
     }
 
-    const kickoffDates = gameweekFixtures
-      .map((fixture) =>
-        fixture.kickoff_at ? new Date(fixture.kickoff_at) : null,
+    const fixturesToday = gameweekFixtures
+      .filter(
+        (fixture) =>
+          fixture.kickoff_at &&
+          getLondonDateString(new Date(fixture.kickoff_at)) === londonToday,
       )
-      .filter((date): date is Date => Boolean(date))
-      .sort((a, b) => a.getTime() - b.getTime());
+      .sort(
+        (a, b) =>
+          new Date(a.kickoff_at!).getTime() - new Date(b.kickoff_at!).getTime(),
+      );
 
-    const firstKickoff = kickoffDates[0];
-
-    if (
-      !firstKickoff ||
-      firstKickoff <= now ||
-      firstKickoff < windowStart ||
-      firstKickoff > windowEnd
-    ) {
+    if (fixturesToday.length === 0) {
       skipped += 1;
       continue;
     }
 
-    dueGameweeks.push({
+    const anyFutureFixture = gameweekFixtures.some(
+      (fixture) => fixture.kickoff_at && new Date(fixture.kickoff_at) > now,
+    );
+
+    if (!anyFutureFixture) {
+      skipped += 1;
+      continue;
+    }
+
+    matchdayGameweeks.push({
       ...gameweek,
       fixtureIds: gameweekFixtures.map((fixture) => fixture.id),
-      firstKickoff,
-    });
-  }
-
-  if (dueGameweeks.length === 0) {
-    return Response.json({
-      ok: true,
-      dryRun: isDryRun,
-      warning: auth.warning,
-      checkedGameweeks: 0,
-      remindersSent: 0,
-      skipped,
-      errors: 0,
-      dueGameweeks: [],
+      firstKickoffToday: new Date(fixturesToday[0].kickoff_at!),
     });
   }
 
@@ -265,20 +487,22 @@ export async function GET(request: Request) {
     (profile) => Boolean(profile.email),
   );
 
-  const dueFixtureIds = dueGameweeks.flatMap((gameweek) => gameweek.fixtureIds);
+  const matchdayFixtureIds = matchdayGameweeks.flatMap(
+    (gameweek) => gameweek.fixtureIds,
+  );
 
   const { data: predictions } =
-    dueFixtureIds.length > 0
+    matchdayFixtureIds.length > 0
       ? await supabase
           .from("predictions")
           .select("fixture_id, user_id")
-          .in("fixture_id", dueFixtureIds)
+          .in("fixture_id", matchdayFixtureIds)
       : { data: [] };
 
   const predictionRows = (predictions as PredictionRow[] | null) ?? [];
   const predictionsByGameweekUser = new Map<string, Set<string>>();
 
-  for (const gameweek of dueGameweeks) {
+  for (const gameweek of matchdayGameweeks) {
     const fixtureIdSet = new Set(gameweek.fixtureIds);
 
     for (const prediction of predictionRows) {
@@ -293,59 +517,63 @@ export async function GET(request: Request) {
     }
   }
 
-  const dueGameweekIds = dueGameweeks.map((gameweek) => gameweek.id);
-  const { data: existingReminders } = await supabase
-    .from("prediction_reminders")
-    .select("gameweek_id, user_id, reminder_type")
-    .in("gameweek_id", dueGameweekIds)
-    .eq("reminder_type", REMINDER_TYPE);
+  const matchdayGameweekIds = matchdayGameweeks.map((gameweek) => gameweek.id);
+  const { data: existingPredictionReminders } =
+    matchdayGameweekIds.length > 0
+      ? await supabase
+          .from("prediction_reminders")
+          .select("gameweek_id, user_id, reminder_type, reminder_date")
+          .in("gameweek_id", matchdayGameweekIds)
+          .eq("reminder_type", PREDICTION_REMINDER_TYPE)
+          .eq("reminder_date", londonToday)
+      : { data: [] };
 
-  const existingReminderKeys = new Set(
-    ((existingReminders as ReminderRow[] | null) ?? []).map(
+  const existingPredictionReminderKeys = new Set(
+    ((existingPredictionReminders as ReminderRow[] | null) ?? []).map(
       (reminder) => `${reminder.gameweek_id}:${reminder.user_id}`,
     ),
   );
 
-  let remindersSent = 0;
+  let predictionRemindersSent = 0;
+  let pickerRemindersSent = 0;
   let errors = 0;
-  const dueGameweekSummaries: {
+  const predictionSummaries: {
     gameweekId: string;
     gameweekName: string;
-    firstKickoff: string;
+    firstKickoffToday: string;
     candidates: number;
     sent: number;
     skipped: number;
     errors: number;
   }[] = [];
 
-  for (const gameweek of dueGameweeks) {
+  for (const gameweek of matchdayGameweeks) {
     let gameweekSent = 0;
     let gameweekSkipped = 0;
     let gameweekErrors = 0;
 
     for (const approvedUser of approvedUsers) {
       const key = `${gameweek.id}:${approvedUser.id}`;
-      const predictedCount =
-        predictionsByGameweekUser.get(key)?.size ?? 0;
+      const predictedCount = predictionsByGameweekUser.get(key)?.size ?? 0;
       const missingCount = gameweek.fixtureIds.length - predictedCount;
 
-      if (missingCount <= 0 || existingReminderKeys.has(key)) {
+      if (missingCount <= 0 || existingPredictionReminderKeys.has(key)) {
         skipped += 1;
         gameweekSkipped += 1;
         continue;
       }
 
       if (isDryRun) {
-        remindersSent += 1;
+        predictionRemindersSent += 1;
         gameweekSent += 1;
         continue;
       }
 
-      const email = buildReminderEmail({
+      const email = buildPredictionReminderEmail({
         displayName: approvedUser.display_name,
         gameweekName: formatGameweekName(gameweek),
         seasonName: season.name,
-        firstKickoff: gameweek.firstKickoff,
+        firstKickoffToday: gameweek.firstKickoffToday,
         missingCount,
       });
 
@@ -371,27 +599,28 @@ export async function GET(request: Request) {
           season_id: season.id,
           gameweek_id: gameweek.id,
           user_id: approvedUser.id,
-          reminder_type: REMINDER_TYPE,
+          reminder_type: PREDICTION_REMINDER_TYPE,
+          reminder_date: londonToday,
         });
 
       if (reminderInsertError) {
         console.error(
-          `Prediction reminder log insert failed for ${approvedUser.id}/${gameweek.id}: ${reminderInsertError.message}`,
+          `DUPLICATE SEND RISK: prediction reminder email was sent but reminder log insert failed for ${approvedUser.id}/${gameweek.id}. ${reminderInsertError.message}`,
         );
         errors += 1;
         gameweekErrors += 1;
         continue;
       }
 
-      existingReminderKeys.add(key);
-      remindersSent += 1;
+      existingPredictionReminderKeys.add(key);
+      predictionRemindersSent += 1;
       gameweekSent += 1;
     }
 
-    dueGameweekSummaries.push({
+    predictionSummaries.push({
       gameweekId: gameweek.id,
       gameweekName: formatGameweekName(gameweek),
-      firstKickoff: gameweek.firstKickoff.toISOString(),
+      firstKickoffToday: gameweek.firstKickoffToday.toISOString(),
       candidates: approvedUsers.length,
       sent: gameweekSent,
       skipped: gameweekSkipped,
@@ -399,14 +628,167 @@ export async function GET(request: Request) {
     });
   }
 
+  const pickerGameweek = await findNextActionablePickerGameweek({
+    supabase,
+    seasonId: season.id,
+    gameweeks: gameweekRows,
+    fixturesByGameweek,
+    now,
+  });
+
+  let pickerSummary:
+    | {
+        candidateFound: true;
+        gameweekId: string;
+        gameweekName: string;
+        pickerId: string;
+        sent: number;
+        skipped: number;
+        errors: number;
+      }
+    | null = null;
+
+  if (pickerGameweek?.fixture_picker_id) {
+    const { data: pickerProfile } = await supabase
+      .from("profiles")
+      .select("id, email, display_name")
+      .eq("id", pickerGameweek.fixture_picker_id)
+      .eq("status", "approved")
+      .maybeSingle();
+
+    const picker = pickerProfile as ProfileRow | null;
+
+    if (!picker?.email) {
+      skipped += 1;
+      pickerSummary = {
+        candidateFound: true,
+        gameweekId: pickerGameweek.id,
+        gameweekName: formatGameweekName(pickerGameweek),
+        pickerId: pickerGameweek.fixture_picker_id,
+        sent: 0,
+        skipped: 1,
+        errors: 0,
+      };
+    } else {
+      const { data: existingPickerReminder } = await supabase
+        .from("prediction_reminders")
+        .select("gameweek_id, user_id, reminder_type, reminder_date")
+        .eq("gameweek_id", pickerGameweek.id)
+        .eq("user_id", picker.id)
+        .eq("reminder_type", PICKER_REMINDER_TYPE)
+        .eq("reminder_date", londonToday)
+        .maybeSingle();
+
+      if (existingPickerReminder) {
+        skipped += 1;
+        pickerSummary = {
+          candidateFound: true,
+          gameweekId: pickerGameweek.id,
+          gameweekName: formatGameweekName(pickerGameweek),
+          pickerId: picker.id,
+          sent: 0,
+          skipped: 1,
+          errors: 0,
+        };
+      } else if (isDryRun) {
+        pickerRemindersSent += 1;
+        pickerSummary = {
+          candidateFound: true,
+          gameweekId: pickerGameweek.id,
+          gameweekName: formatGameweekName(pickerGameweek),
+          pickerId: picker.id,
+          sent: 1,
+          skipped: 0,
+          errors: 0,
+        };
+      } else {
+        const email = buildPickerReminderEmail({
+          displayName: picker.display_name,
+          gameweekName: formatGameweekName(pickerGameweek),
+        });
+
+        const result = await sendEmail({
+          to: picker.email,
+          subject: email.subject,
+          text: email.text,
+          html: email.html,
+        });
+
+        if (!result.ok) {
+          console.error(
+            `Picker reminder failed for ${picker.id}/${pickerGameweek.id}: ${result.error}`,
+          );
+          errors += 1;
+          pickerSummary = {
+            candidateFound: true,
+            gameweekId: pickerGameweek.id,
+            gameweekName: formatGameweekName(pickerGameweek),
+            pickerId: picker.id,
+            sent: 0,
+            skipped: 0,
+            errors: 1,
+          };
+        } else {
+          const { error: reminderInsertError } = await supabase
+            .from("prediction_reminders")
+            .insert({
+              season_id: season.id,
+              gameweek_id: pickerGameweek.id,
+              user_id: picker.id,
+              reminder_type: PICKER_REMINDER_TYPE,
+              reminder_date: londonToday,
+            });
+
+          if (reminderInsertError) {
+            console.error(
+              `DUPLICATE SEND RISK: picker reminder email was sent but reminder log insert failed for ${picker.id}/${pickerGameweek.id}. ${reminderInsertError.message}`,
+            );
+            errors += 1;
+            pickerSummary = {
+              candidateFound: true,
+              gameweekId: pickerGameweek.id,
+              gameweekName: formatGameweekName(pickerGameweek),
+              pickerId: picker.id,
+              sent: 0,
+              skipped: 0,
+              errors: 1,
+            };
+          } else {
+            pickerRemindersSent += 1;
+            pickerSummary = {
+              candidateFound: true,
+              gameweekId: pickerGameweek.id,
+              gameweekName: formatGameweekName(pickerGameweek),
+              pickerId: picker.id,
+              sent: 1,
+              skipped: 0,
+              errors: 0,
+            };
+          }
+        }
+      }
+    }
+  }
+
   return Response.json({
     ok: errors === 0,
     dryRun: isDryRun,
     warning: auth.warning,
-    checkedGameweeks: dueGameweeks.length,
-    remindersSent,
+    londonDate: londonToday,
+    checkedGameweeks: gameweekRows.length,
+    matchdayGameweeks: predictionSummaries,
+    pickerReminder: pickerSummary ?? {
+      candidateFound: false,
+      reason: "No actionable fixture picker gameweek found.",
+      sent: 0,
+      skipped: 0,
+      errors: 0,
+    },
+    pickerGameweek: pickerSummary,
+    predictionRemindersSent,
+    pickerRemindersSent,
+    remindersSent: predictionRemindersSent + pickerRemindersSent,
     skipped,
     errors,
-    dueGameweeks: dueGameweekSummaries,
   });
 }

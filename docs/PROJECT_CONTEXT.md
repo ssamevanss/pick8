@@ -303,9 +303,10 @@ CRON_SECRET=...
 ```
 
 Prediction reminders are sent by Vercel Cron through
-`/api/cron/send-prediction-reminders`. Each successful three-hour reminder is
-logged in `prediction_reminders` so the same user/gameweek/reminder type is not
-emailed twice.
+`/api/cron/send-prediction-reminders`. Vercel Hobby runs this once daily.
+Successful matchday prediction reminders and fixture picker reminders are logged
+in `prediction_reminders` with `reminder_date` so the same
+user/gameweek/reminder type is not emailed twice on the same day.
 
 ## Development commands
 

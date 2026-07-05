@@ -68,16 +68,35 @@ Vercel Cron calls:
 /api/cron/send-prediction-reminders
 ```
 
-The route sends one `three_hour` reminder per approved user per gameweek when:
+On Vercel Hobby, cron runs once daily. The configured schedule is:
+
+```text
+0 8 * * *
+```
+
+The route sends `matchday_predictions` reminders when:
 
 - the season has `status = active`
-- the gameweek has at least 4 selected fixtures
-- the earliest kickoff is roughly 2.5 to 3.5 hours away
-- the first kickoff has not passed
+- at least one selected fixture in the gameweek kicks off today
+- today is calculated using the `Europe/London` date
+- at least one fixture in the gameweek has not kicked off yet
 - the user has not predicted every fixture in the gameweek
-- no matching row exists in `prediction_reminders`
+- no matching reminder exists for that user, gameweek, reminder type, and date
 
-The cron is configured in `vercel.json` to run hourly.
+Prediction reminders are matchday-only. They do not send every day for a
+gameweek unless fixtures are spread across multiple days and the user still has
+missing predictions on a later fixture day.
+
+The route also sends `daily_fixture_picker` reminders when:
+
+- the season has `status = active`
+- the next actionable gameweek has an assigned fixture picker
+- fewer than four fixtures have been picked
+- fixture picking is unlocked and not stale
+- no matching picker reminder exists for that picker, gameweek, reminder type,
+  and date
+
+Fixture picker reminders can repeat daily while the picker still needs to act.
 
 ### Safe testing
 

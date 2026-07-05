@@ -155,8 +155,8 @@ export default function AdminMaintenanceCards({
       <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
         <h2 className="text-xl font-semibold">Email reminders</h2>
         <p className="mt-2 text-sm text-slate-400">
-          Vercel Cron sends one three-hour prediction reminder per user and
-          gameweek when users still have predictions missing.
+          Vercel Cron runs daily to send matchday prediction reminders and
+          fixture picker nudges when action is still needed.
         </p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2">
