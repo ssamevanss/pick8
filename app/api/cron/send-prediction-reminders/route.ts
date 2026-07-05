@@ -74,8 +74,10 @@ function verifyCronRequest(request: Request) {
 
   if (!cronSecret) {
     return {
-      ok: true,
-      warning: "CRON_SECRET is not set; route accepted without secret check.",
+      ok: false,
+      status: 500,
+      error: "CRON_SECRET is not configured.",
+      warning: "CRON_SECRET is not set; refusing reminder cron request.",
     };
   }
 
@@ -86,7 +88,12 @@ function verifyCronRequest(request: Request) {
     return { ok: true, warning: null };
   }
 
-  return { ok: false, warning: null };
+  return {
+    ok: false,
+    status: 401,
+    error: "Unauthorized",
+    warning: null,
+  };
 }
 
 function getLondonDateString(value: Date) {
@@ -305,7 +312,14 @@ export async function GET(request: Request) {
   const auth = verifyCronRequest(request);
 
   if (!auth.ok) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+    return Response.json(
+      {
+        ok: false,
+        error: auth.error,
+        warning: auth.warning,
+      },
+      { status: auth.status },
+    );
   }
 
   const url = new URL(request.url);
