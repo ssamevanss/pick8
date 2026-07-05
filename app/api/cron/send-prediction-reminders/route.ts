@@ -446,35 +446,28 @@ export async function GET(request: Request) {
       continue;
     }
 
-    const fixturesToday = gameweekFixtures
+    const actionableFixtures = gameweekFixtures
       .filter(
         (fixture) =>
+          fixture.status === "scheduled" &&
           fixture.kickoff_at &&
-          getLondonDateString(new Date(fixture.kickoff_at)) === londonToday,
+          getLondonDateString(new Date(fixture.kickoff_at)) === londonToday &&
+          new Date(fixture.kickoff_at) > now,
       )
       .sort(
         (a, b) =>
           new Date(a.kickoff_at!).getTime() - new Date(b.kickoff_at!).getTime(),
       );
 
-    if (fixturesToday.length === 0) {
-      skipped += 1;
-      continue;
-    }
-
-    const anyFutureFixture = gameweekFixtures.some(
-      (fixture) => fixture.kickoff_at && new Date(fixture.kickoff_at) > now,
-    );
-
-    if (!anyFutureFixture) {
+    if (actionableFixtures.length === 0) {
       skipped += 1;
       continue;
     }
 
     matchdayGameweeks.push({
       ...gameweek,
-      fixtureIds: gameweekFixtures.map((fixture) => fixture.id),
-      firstKickoffToday: new Date(fixturesToday[0].kickoff_at!),
+      fixtureIds: actionableFixtures.map((fixture) => fixture.id),
+      firstKickoffToday: new Date(actionableFixtures[0].kickoff_at!),
     });
   }
 
@@ -541,6 +534,7 @@ export async function GET(request: Request) {
     gameweekId: string;
     gameweekName: string;
     firstKickoffToday: string;
+    actionableFixtureCount: number;
     candidates: number;
     sent: number;
     skipped: number;
@@ -621,6 +615,7 @@ export async function GET(request: Request) {
       gameweekId: gameweek.id,
       gameweekName: formatGameweekName(gameweek),
       firstKickoffToday: gameweek.firstKickoffToday.toISOString(),
+      actionableFixtureCount: gameweek.fixtureIds.length,
       candidates: approvedUsers.length,
       sent: gameweekSent,
       skipped: gameweekSkipped,
