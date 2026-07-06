@@ -1,4 +1,5 @@
 import SubmitButton from "@/components/forms/SubmitButton";
+import PendingLink from "@/components/navigation/PendingLink";
 import ExternalResultSyncCard, {
   type ExternalResultSyncSummary,
 } from "@/components/admin/ExternalResultSyncCard";
@@ -120,13 +121,12 @@ export default function AdminMaintenanceCards({
             joker usage, leaderboard entries, and safely matched notifications.
           </p>
 
-          <button
-            type="submit"
+          <SubmitButton
+            idleLabel="Download season JSON"
+            pendingLabel="Preparing export..."
             disabled={seasons.length === 0}
-            className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Download season JSON
-          </button>
+            className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
+          />
         </form>
       </div>
 
@@ -200,6 +200,31 @@ export default function AdminMaintenanceCards({
             </div>
           ))}
         </div>
+
+        {activeSeasonId ? (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <PendingLink
+              href={`/api/admin/external-fixtures/import?season_id=${activeSeasonId}&dry_run=1`}
+              className="rounded-lg border border-emerald-500/40 px-4 py-3 text-center text-sm font-semibold text-emerald-300"
+              pendingChildren="Loading dry-run..."
+            >
+              Dry-run external import
+            </PendingLink>
+
+            <form
+              action="/api/admin/external-fixtures/import"
+              method="post"
+            >
+              <input type="hidden" name="season_id" value={activeSeasonId} />
+              <input type="hidden" name="dry_run" value="0" />
+              <SubmitButton
+                idleLabel="Import external fixtures"
+                pendingLabel="Importing fixtures..."
+                className="w-full rounded-lg bg-amber-400 px-4 py-3 text-sm font-semibold text-slate-950"
+              />
+            </form>
+          </div>
+        ) : null}
       </div>
 
       <ExternalResultSyncCard summary={externalResultSyncSummary} />

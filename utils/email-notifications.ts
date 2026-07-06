@@ -414,7 +414,7 @@ export async function sendPickerUpNextEmail({
         selectionStatus.selectedCount === 1 ? "" : "s"
       }`
     : "the fixtures";
-  const intro = `You're up next to pick ${fixtureText} for ${gameweekName}.`;
+  const intro = `You're up next to choose ${fixtureText} for ${gameweekName}.`;
   const subject = "You’re up next to pick fixtures";
   const footer =
     "You received this because you are the assigned fixture picker for this gameweek.";
@@ -502,7 +502,7 @@ export async function sendPredictionsOpenEmails({
   const buttonUrl = `${siteUrl}/predictions?gameweek=${gameweek.id}`;
   const fixtureLines = getFixtureLines(fixtures);
   const subject = `Predictions are open for ${gameweekName}`;
-  const intro = `${gameweekName} fixtures have been selected. Predictions lock at each fixture kickoff.`;
+  const intro = `The ${gameweekName} fixtures are in. Make your calls before each kickoff.`;
   const footer =
     "You received this because you are an approved player in this league.";
   const text = `Who You Got?
@@ -692,7 +692,7 @@ export async function sendPredictionDeadlineReminderEmails({
     const subject = "Less than 24 hours to enter your predictions";
     const intro = `${gameweekName} has fixture${
       actionableFixtures.length === 1 ? "" : "s"
-    } kicking off in the next 24 hours. Predictions lock at each kickoff.`;
+    } kicking off in the next 24 hours. Get your predictions in before kickoff.`;
     const footer =
       "You received this because you still have missing predictions for this gameweek.";
     const text = `Who You Got?

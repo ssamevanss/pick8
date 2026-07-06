@@ -147,15 +147,16 @@ export default async function LeaderboardPage({
 
   return (
     <>
-      <header className="mb-6">
-        <h1 className="text-3xl font-bold">Leaderboard</h1>
+      <header className="brand-card mb-6 p-5 sm:p-6">
+        <p className="brand-eyebrow">Table talk</p>
+        <h1 className="brand-title mt-2">Leaderboard</h1>
 
-        <p className="mt-2 text-sm text-slate-400">
+        <p className="brand-subtitle mt-2">
           {selectedSeason?.name ?? "No active season"}
           {isArchivedSeason ? " · Final standings" : " · Current season"}
         </p>
 
-        <details className="mx-auto mt-4 max-w-sm rounded-2xl bg-slate-950 p-2 ring-1 ring-slate-800">
+        <details className="mt-5 max-w-sm rounded-2xl border border-white/10 bg-slate-950/70 p-2">
           <summary className="list-none cursor-pointer px-3 py-2 text-center [&::-webkit-details-marker]:hidden">
             <p className="text-xs uppercase tracking-wide text-slate-500">
               Selected season
@@ -171,8 +172,8 @@ export default async function LeaderboardPage({
               prefetch={false}
               className={`block rounded-lg px-3 py-2 text-center text-sm font-semibold ${
                 !selectedArchivedSeason
-                  ? "bg-emerald-500 text-slate-950"
-                  : "bg-slate-900 text-slate-300"
+                  ? "bg-emerald-400 text-slate-950"
+                  : "bg-slate-900/80 text-slate-300 hover:text-white"
               }`}
             >
               Current season
@@ -185,8 +186,8 @@ export default async function LeaderboardPage({
                 prefetch={false}
                 className={`block rounded-lg px-3 py-2 text-center text-sm ${
                   selectedArchivedSeason?.id === season.id
-                    ? "bg-emerald-500 text-slate-950"
-                    : "bg-slate-900 text-slate-300"
+                    ? "bg-emerald-400 text-slate-950"
+                    : "bg-slate-900/80 text-slate-300 hover:text-white"
                 }`}
               >
                 <span className="block truncate font-semibold">
@@ -202,21 +203,21 @@ export default async function LeaderboardPage({
       </header>
 
       {selectedArchivedSeasonId && !selectedArchivedSeason ? (
-        <p className="mt-4 rounded-xl bg-amber-950 p-4 text-sm text-amber-300">
+        <p className="brand-alert-warning mt-4">
           That previous season is not available. It may be hidden, deleted, or
           not archived for public leaderboard viewing.
         </p>
       ) : null}
 
-      <section className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+      <section className="brand-card p-4 sm:p-5">
         {error ? (
-          <p className="rounded-xl bg-red-950 p-4 text-sm text-red-300">
+          <p className="brand-alert-danger">
             {error.message}
           </p>
         ) : null}
 
         {!error && entries.length === 0 ? (
-          <p className="rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
+          <p className="brand-card-soft p-4 text-sm text-slate-400">
             {selectedSeason
               ? "No leaderboard entries yet. Standings will appear after results are saved."
               : "No leaderboard is available until an active season exists."}
@@ -224,8 +225,8 @@ export default async function LeaderboardPage({
         ) : null}
 
         {entries.length > 0 ? (
-          <div className="overflow-hidden rounded-xl border border-slate-800">
-            <div className="hidden grid-cols-[70px_1fr_100px_100px_100px_100px] gap-3 border-b border-slate-800 bg-slate-950 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 md:grid">
+          <div className="brand-table">
+            <div className="hidden grid-cols-[70px_1fr_100px_100px_100px_100px] gap-3 border-b border-white/10 bg-slate-950/90 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 md:grid">
               <span>Rank</span>
               <span>Player</span>
               <span className="text-right">Points</span>
@@ -236,28 +237,40 @@ export default async function LeaderboardPage({
               </span>
             </div>
 
-            <div className="divide-y divide-slate-800">
+            <div className="divide-y divide-white/10">
               {entries.map((entry) => (
                 <div
                   key={`${entry.rank}-${getDisplayName(entry)}`}
-                  className="grid gap-2 bg-slate-950 px-4 py-4 md:grid-cols-[70px_1fr_100px_100px_100px_100px] md:items-center md:gap-3"
+                  className="bg-slate-950/70 px-3 py-3 md:grid md:grid-cols-[70px_1fr_100px_100px_100px_100px] md:items-center md:gap-3 md:px-4 md:py-4"
                 >
-                  <div className="flex items-center justify-between md:block">
-                    <span className="text-xs text-slate-500 md:hidden">
-                      Rank
-                    </span>
-                    <span className="text-lg font-bold">
+                  <div className="flex items-center justify-between gap-3 md:block">
+                    <span className="grid h-11 w-11 place-items-center rounded-xl bg-slate-900 text-lg font-black text-white ring-1 ring-white/10 md:h-auto md:w-auto md:bg-transparent md:ring-0">
                       {entry.rank ?? "-"}
                     </span>
+                    <div className="min-w-0 flex-1 md:hidden">
+                      <p className="truncate font-bold">{getDisplayName(entry)}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {entry.exact_scores} exact · {entry.correct_results} results
+                      </p>
+                    </div>
+                    <div className="text-right md:hidden">
+                      <p className="text-2xl font-black text-emerald-300">
+                        {entry.total_points}
+                      </p>
+                      <p
+                        className={`text-xs font-bold ${getMovementClass(
+                          entry,
+                          isArchivedSeason,
+                        )}`}
+                      >
+                        {isArchivedSeason ? "Final" : getMovement(entry, false)}
+                      </p>
+                    </div>
                   </div>
 
-                  <div>
-                    <p className="font-semibold">{getDisplayName(entry)}</p>
-                    <p className="text-xs text-slate-500 md:hidden">
-                      {entry.total_points} pts · {entry.exact_scores} exact ·{" "}
-                      {entry.correct_results} results
-                    </p>
-                  </div>
+                  <p className="hidden font-semibold md:block">
+                    {getDisplayName(entry)}
+                  </p>
 
                   <div className="hidden text-right font-semibold md:block">
                     {entry.total_points}
@@ -278,15 +291,6 @@ export default async function LeaderboardPage({
                     )}`}
                   >
                     {getMovement(entry, isArchivedSeason)}
-                  </div>
-
-                  <div
-                    className={`text-sm font-semibold md:hidden ${getMovementClass(
-                      entry,
-                      isArchivedSeason,
-                    )}`}
-                  >
-                    {isArchivedSeason ? "Final standings" : getMovement(entry, false)}
                   </div>
                 </div>
               ))}

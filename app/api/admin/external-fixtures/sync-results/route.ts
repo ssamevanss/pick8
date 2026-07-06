@@ -64,6 +64,16 @@ async function handleSync(request: NextRequest, forceDryRun: boolean) {
     );
   }
 
+  if (!dryRun && !season.result_sync_enabled) {
+    return Response.json(
+      {
+        error:
+          "Result sync is disabled for this season. Enable result sync in Admin Season Settings before running a real sync.",
+      },
+      { status: 403 },
+    );
+  }
+
   const { fixtures, error: fixturesError } = await getManualSyncFixtures({
     supabase: adminSupabase,
     seasonId,

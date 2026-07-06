@@ -28,6 +28,7 @@ import {
   autoAssignAllGameweekPickers,
   autoAssignFutureGameweekPickers,
   updateSeasonArchiveVisibility,
+  updateActiveSeasonProviderSettings,
   deleteSeason,
   recalculateActiveSeasonLeaderboard,
   rescoreActiveSeasonAndRecalculateLeaderboard,
@@ -37,6 +38,9 @@ import AdminSeasonSetupCard from "@/components/admin/AdminSeasonSetupCard";
 import AdminSeasonControlsCard, {
   type AdminSeasonRow,
 } from "@/components/admin/AdminSeasonControlsCard";
+import AdminSeasonSettingsCard, {
+  type AdminSeasonSettingsSeason,
+} from "@/components/admin/AdminSeasonSettingsCard";
 import AdminGameweekPickerAssignmentsCard, {
   type GameweekPickerAssignmentRow,
 } from "@/components/admin/AdminGameweekPickerAssignmentsCard";
@@ -46,6 +50,11 @@ import AdminMaintenanceCards, {
   type MaintenanceSeasonOption,
   type ReminderReadinessRow,
 } from "@/components/admin/AdminMaintenanceCards";
+import {
+  footballDataCompetitionOptions,
+  getFootballDataCompetitionOption,
+  type FootballCompetitionOption,
+} from "@/utils/football-competitions";
 
 type Profile = {
   id: string;
@@ -55,7 +64,7 @@ type Profile = {
   status: string;
 };
 
-type AdminTab = "create" | "fixtures" | "results" | "users" | "maintenance";
+type AdminTab = "overview" | "users" | "season" | "gameweeks" | "maintenance";
 
 type HealthFixtureRow = {
   id: string;
@@ -77,17 +86,25 @@ type HealthPredictionRow = {
 };
 
 function getSelectedTab(tab: string | undefined): AdminTab {
+  if (tab === "create") {
+    return "season";
+  }
+
+  if (tab === "fixtures" || tab === "results") {
+    return "gameweeks";
+  }
+
   if (
-    tab === "create" ||
-    tab === "fixtures" ||
-    tab === "results" ||
+    tab === "overview" ||
     tab === "users" ||
+    tab === "season" ||
+    tab === "gameweeks" ||
     tab === "maintenance"
   ) {
     return tab;
   }
 
-  return "fixtures";
+  return "overview";
 }
 
 export default async function AdminPage({
@@ -112,17 +129,17 @@ export default async function AdminPage({
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("role")
+    .select("role, status")
     .eq("id", user?.id)
     .single();
 
-  if (profile?.role !== "admin") {
+  if (profile?.role !== "admin" || profile.status !== "approved") {
     redirect("/dashboard?error=Admin access required");
   }
 
   const { data: activeSeason } = await getActiveSeason(
     supabase,
-    "id, name, status, is_active, base_provider, base_competition_code, base_competition_name, fixture_import_enabled, result_sync_enabled",
+    "id, name, status, is_active, base_provider, base_competition_code, base_competition_name, base_competition_external_id, provider_season, fixture_import_enabled, result_sync_enabled",
   );
 
   const { data: seasons } = await supabase
@@ -133,6 +150,47 @@ export default async function AdminPage({
     .order("created_at", { ascending: false });
 
   const seasonList = (seasons as AdminSeasonRow[] | null) ?? [];
+  const { data: externalCompetitionRows } = await supabase
+    .from("external_competitions")
+    .select(
+      "provider, external_competition_code, external_competition_id, name",
+    )
+    .eq("provider", "football_data")
+    .eq("enabled", true)
+    .order("display_order", { ascending: true });
+  const externalCompetitionOptions =
+    (
+      (externalCompetitionRows as
+        | {
+            provider: string;
+            external_competition_code: string;
+            external_competition_id: string | null;
+            name: string;
+          }[]
+        | null) ?? []
+    )
+      .map((row): FootballCompetitionOption | null => {
+        const fallback = getFootballDataCompetitionOption(
+          row.external_competition_code,
+        );
+
+        if (!fallback) {
+          return null;
+        }
+
+        return {
+          provider: "football_data",
+          external_competition_code: row.external_competition_code,
+          name: row.name || fallback.name,
+          external_competition_id:
+            row.external_competition_id ?? fallback.external_competition_id,
+        };
+      })
+      .filter((option): option is FootballCompetitionOption => Boolean(option));
+  const seasonSettingsCompetitionOptions =
+    externalCompetitionOptions.length > 0
+      ? externalCompetitionOptions
+      : footballDataCompetitionOptions;
 
   const { data: gameweeks } = activeSeason
     ? await supabase
@@ -617,11 +675,14 @@ export default async function AdminPage({
 
   return (
     <>
-      <h1 className="text-3xl font-bold">Admin</h1>
-      <p className="mt-2 text-sm text-slate-400">
-        Create gameweeks, manage fixtures, enter final results, and manage
-        users.
-      </p>
+      <header className="brand-card p-5 sm:p-6">
+        <p className="brand-eyebrow">Control room</p>
+        <h1 className="brand-title mt-2">Admin</h1>
+        <p className="brand-subtitle mt-2">
+          Create gameweeks, manage fixtures, enter final results, and manage
+          users.
+        </p>
+      </header>
 
       <AdminTabs
         selectedTab={selectedTab}
@@ -629,18 +690,94 @@ export default async function AdminPage({
       />
 
       {params.saved ? (
-        <p className="mt-4 rounded-xl bg-emerald-950 p-3 text-sm text-emerald-300">
+        <p className="brand-alert-success mt-4">
           Saved successfully.
         </p>
       ) : null}
 
       {params.error ? (
-        <p className="mt-4 rounded-xl bg-red-950 p-3 text-sm text-red-300">
+        <p className="brand-alert-danger mt-4">
           {params.error}
         </p>
       ) : null}
 
-      {selectedTab === "create" ? (
+      {selectedTab === "overview" ? (
+        <section className="mt-6 grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+          <div className="brand-card p-4 sm:p-5">
+            <p className="brand-eyebrow">Active season</p>
+            <h2 className="mt-2 text-2xl font-bold">
+              {activeSeason?.name ?? "No active season"}
+            </h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="brand-card-soft p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Status
+                </p>
+                <p className="mt-1 text-sm font-semibold text-white">
+                  {activeSeason?.status ?? "Not set"}
+                </p>
+              </div>
+              <div className="brand-card-soft p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Competition
+                </p>
+                <p className="mt-1 text-sm font-semibold text-white">
+                  {activeSeasonExternalConfig?.base_competition_name ??
+                    activeSeasonExternalConfig?.base_competition_code ??
+                    "Not set"}
+                </p>
+              </div>
+              <div className="brand-card-soft p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Fixture list
+                </p>
+                <p className="mt-1 text-sm font-semibold text-white">
+                  {activeSeasonExternalConfig?.fixture_import_enabled
+                    ? "Enabled"
+                    : "Off"}
+                </p>
+              </div>
+              <div className="brand-card-soft p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Result updates
+                </p>
+                <p className="mt-1 text-sm font-semibold text-white">
+                  {activeSeasonExternalConfig?.result_sync_enabled
+                    ? "Enabled"
+                    : "Off"}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="brand-card p-4 sm:p-5">
+            <p className="brand-eyebrow">Quick health</p>
+            <div className="mt-4 space-y-3">
+              {healthChecks.slice(0, 5).map((check) => (
+                <div
+                  key={check.label}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2"
+                >
+                  <span className="text-sm text-slate-300">{check.label}</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-bold ${
+                      check.severity === "ok"
+                        ? "bg-emerald-400/10 text-emerald-300"
+                        : check.severity === "warning"
+                          ? "bg-amber-300/10 text-amber-300"
+                          : "bg-red-400/10 text-red-300"
+                    }`}
+                  >
+                    {check.value}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {selectedTab === "season" ? (
         <>
           <AdminSeasonControlsCard
             seasons={seasonList}
@@ -652,6 +789,18 @@ export default async function AdminPage({
             deleteSeasonAction={deleteSeason}
           />
 
+          <AdminSeasonSettingsCard
+            activeSeason={
+              (activeSeason as AdminSeasonSettingsSeason | null) ?? null
+            }
+            competitionOptions={seasonSettingsCompetitionOptions}
+            action={updateActiveSeasonProviderSettings}
+          />
+        </>
+      ) : null}
+
+      {selectedTab === "gameweeks" ? (
+        <section className="brand-card mt-6 p-4 sm:p-5">
           <AdminSeasonSetupCard
             activeSeasonId={activeSeason?.id ?? null}
             activeSeasonName={activeSeason?.name ?? null}
@@ -659,39 +808,39 @@ export default async function AdminPage({
             action={generateMissingGameweeks}
           />
 
-          <AdminGameweekPickerAssignmentsCard
-            activeSeasonId={activeSeason?.id ?? null}
-            gameweeks={gameweekPickerAssignmentList}
-            profiles={(profiles as Profile[] | null) ?? []}
-            saveAction={saveGameweekPickerAssignments}
-            autoAssignAllAction={autoAssignAllGameweekPickers}
-            autoAssignFutureAction={autoAssignFutureGameweekPickers}
-          />
-        </>
-      ) : null}
+          <div className="mt-6">
+            <AdminGameweekPickerAssignmentsCard
+              activeSeasonId={activeSeason?.id ?? null}
+              gameweeks={gameweekPickerAssignmentList}
+              profiles={(profiles as Profile[] | null) ?? []}
+              saveAction={saveGameweekPickerAssignments}
+              autoAssignAllAction={autoAssignAllGameweekPickers}
+              autoAssignFutureAction={autoAssignFutureGameweekPickers}
+            />
+          </div>
 
-      {selectedTab === "fixtures" ? (
-        <section className="mt-6 rounded-2xl bg-slate-900 p-4 shadow-lg">
+          <div className="mt-6">
           <GameweekSelector
             gameweeks={gameweekList}
             selectedGameweekId={selectedGameweek?.id ?? null}
-            basePath="/admin?tab=fixtures"
+            basePath="/admin?tab=gameweeks"
           />
+          </div>
 
-          <h2 className="text-xl font-semibold">Manage fixtures</h2>
+          <h2 className="mt-5 text-xl font-semibold">Manage fixtures</h2>
           <p className="mt-2 text-sm text-slate-400">
             Edit teams, kickoff times, and competitions for the selected
             gameweek.
           </p>
 
           {error ? (
-            <p className="mt-4 rounded-xl bg-red-950 p-4 text-sm text-red-300">
+            <p className="brand-alert-danger mt-4">
               {error.message}
             </p>
           ) : null}
 
           {!error && fixtureList.length === 0 ? (
-            <p className="mt-4 rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
+            <p className="brand-card-soft mt-4 p-4 text-sm text-slate-400">
               No fixtures found for this gameweek.
             </p>
           ) : null}
@@ -716,7 +865,7 @@ export default async function AdminPage({
 
             <AdminAddFixtureForm gameweekId={selectedGameweek?.id ?? null} />
           </div>
-          <details className="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-lg">
+          <details className="brand-card mt-6 p-4">
             <summary className="cursor-pointer select-none text-sm font-semibold text-slate-300">
               Advanced: manually create a gameweek
             </summary>
@@ -730,17 +879,8 @@ export default async function AdminPage({
               />
             </div>
           </details>
-        </section>
-      ) : null}
 
-      {selectedTab === "results" ? (
-        <section className="mt-6 rounded-2xl bg-slate-900 p-4 shadow-lg">
-          <GameweekSelector
-            gameweeks={gameweekList}
-            selectedGameweekId={selectedGameweek?.id ?? null}
-            basePath="/admin?tab=results"
-          />
-
+          <div className="mt-8 border-t border-white/10 pt-6">
           <h2 className="text-xl font-semibold">Enter results</h2>
           <p className="mt-2 text-sm text-slate-400">
             Add final scores for the selected gameweek. This will calculate
@@ -748,13 +888,13 @@ export default async function AdminPage({
           </p>
 
           {error ? (
-            <p className="mt-4 rounded-xl bg-red-950 p-4 text-sm text-red-300">
+            <p className="brand-alert-danger mt-4">
               {error.message}
             </p>
           ) : null}
 
           {!error && fixtureList.length === 0 ? (
-            <p className="mt-4 rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
+            <p className="brand-card-soft mt-4 p-4 text-sm text-slate-400">
               No fixtures found for this gameweek.
             </p>
           ) : null}
@@ -772,11 +912,12 @@ export default async function AdminPage({
               />
             ) : null}
           </form>
+          </div>
         </section>
       ) : null}
 
       {selectedTab === "users" ? (
-        <section className="mt-6 rounded-2xl bg-slate-900 p-4 shadow-lg">
+        <section className="brand-card mt-6 p-4 sm:p-5">
           <h2 className="text-xl font-semibold">Users</h2>
           <p className="mt-2 text-sm text-slate-400">
             Review account requests and manage display names and roles for league
@@ -784,13 +925,13 @@ export default async function AdminPage({
           </p>
 
           {adminUsersError ? (
-            <p className="mt-4 rounded-xl bg-red-950 p-4 text-sm text-red-300">
+            <p className="brand-alert-danger mt-4">
               {adminUsersError.message}
             </p>
           ) : null}
 
           {!adminUsersError && userList.length === 0 ? (
-            <p className="mt-4 rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
+            <p className="brand-card-soft mt-4 p-4 text-sm text-slate-400">
               No users found.
             </p>
           ) : null}

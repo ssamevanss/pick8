@@ -1,5 +1,6 @@
 import { formatInTimeZone } from "date-fns-tz";
 import type { Fixture } from "@/components/predictions/types";
+import SubmitButton from "@/components/forms/SubmitButton";
 import {
   deleteFixture,
   updateFixtureDetails,
@@ -69,9 +70,11 @@ export default function AdminManageFixtureCard({
         <div className="flex items-center justify-between gap-3 pt-1">
           <p className="text-xs text-slate-500">Status: {fixture.status}</p>
 
-          <button className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950">
-            Save fixture
-          </button>
+          <SubmitButton
+            idleLabel="Save fixture"
+            pendingLabel="Saving fixture..."
+            className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
+          />
         </div>
       </form>
 
@@ -81,9 +84,11 @@ export default function AdminManageFixtureCard({
       >
         <input type="hidden" name="fixture_id" value={fixture.id} />
 
-        <button className="rounded-lg border border-red-900 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-950">
-          Delete fixture
-        </button>
+        <SubmitButton
+          idleLabel="Delete fixture"
+          pendingLabel="Deleting fixture..."
+          className="rounded-lg border border-red-900 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-950"
+        />
 
         <p className="mt-2 text-xs text-slate-500">
           Delete is blocked if predictions already exist for this fixture.

@@ -1,4 +1,5 @@
 import { addFixtureToGameweek } from "@/app/(app)/admin/actions";
+import SubmitButton from "@/components/forms/SubmitButton";
 
 type AdminAddFixtureFormProps = {
   gameweekId: string | null;
@@ -61,9 +62,11 @@ export default function AdminAddFixtureForm({
           </div>
         </div>
 
-        <button className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950">
-          Add fixture
-        </button>
+        <SubmitButton
+          idleLabel="Add fixture"
+          pendingLabel="Adding fixture..."
+          className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
+        />
       </form>
     </div>
   );

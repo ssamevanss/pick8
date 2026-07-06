@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Football Predictor",
-  description: "Private football score prediction league",
+  title: "Who You Got?",
+  description: "Private football prediction league",
   robots: {
     index: false,
     follow: false,

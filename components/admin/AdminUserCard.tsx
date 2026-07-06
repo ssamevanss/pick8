@@ -5,6 +5,7 @@ import {
   rejectUser,
   updateUserProfile,
 } from "@/app/(app)/admin/actions";
+import SubmitButton from "@/components/forms/SubmitButton";
 
 export type AdminUser = {
   id: string;
@@ -46,7 +47,7 @@ export default function AdminUserCard({
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-      <form action={updateUserProfile} id={`update-user-${user.id}`}>
+      <form action={updateUserProfile}>
         <input type="hidden" name="user_id" value={user.id} />
 
         <div className="grid gap-3 md:grid-cols-[1fr_220px] md:items-end">
@@ -90,30 +91,35 @@ export default function AdminUserCard({
             <span className="text-emerald-300">This is you.</span>
           ) : null}
         </div>
+
+        <div className="mt-4 border-t border-slate-800 pt-3">
+          <SubmitButton
+            idleLabel="Save user"
+            pendingLabel="Saving user..."
+            className="w-full rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 sm:w-auto"
+          />
+        </div>
       </form>
 
-      <div className="mt-4 flex flex-col gap-2 border-t border-slate-800 pt-3 sm:flex-row">
-        <button
-          form={`update-user-${user.id}`}
-          className="w-full rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 sm:w-auto"
-        >
-          Save user
-        </button>
-
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
         {isPending ? (
           <>
             <form action={approveUser}>
               <input type="hidden" name="user_id" value={user.id} />
-              <button className="w-full rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 sm:w-auto">
-                Approve
-              </button>
+              <SubmitButton
+                idleLabel="Approve"
+                pendingLabel="Approving..."
+                className="w-full rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 sm:w-auto"
+              />
             </form>
 
             <form action={rejectUser}>
               <input type="hidden" name="user_id" value={user.id} />
-              <button className="w-full rounded-lg border border-red-900 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-950 sm:w-auto">
-                Reject
-              </button>
+              <SubmitButton
+                idleLabel="Reject"
+                pendingLabel="Rejecting..."
+                className="w-full rounded-lg border border-red-900 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-950 sm:w-auto"
+              />
             </form>
           </>
         ) : null}
@@ -121,18 +127,22 @@ export default function AdminUserCard({
         {isApproved && !isCurrentUser ? (
           <form action={disableUser}>
             <input type="hidden" name="user_id" value={user.id} />
-            <button className="w-full rounded-lg border border-red-900 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-950 sm:w-auto">
-              Disable user
-            </button>
+            <SubmitButton
+              idleLabel="Disable user"
+              pendingLabel="Disabling..."
+              className="w-full rounded-lg border border-red-900 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-950 sm:w-auto"
+            />
           </form>
         ) : null}
 
         {isDisabled ? (
           <form action={enableUser}>
             <input type="hidden" name="user_id" value={user.id} />
-            <button className="w-full rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 sm:w-auto">
-              Re-enable user
-            </button>
+            <SubmitButton
+              idleLabel="Re-enable user"
+              pendingLabel="Re-enabling..."
+              className="w-full rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 sm:w-auto"
+            />
           </form>
         ) : null}
       </div>

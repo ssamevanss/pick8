@@ -31,6 +31,7 @@ type LocalExternalFixture = {
 type SeasonRow = {
   id: string;
   name: string;
+  result_sync_enabled?: boolean | null;
 };
 
 type PlannedUpdate = {
@@ -163,7 +164,7 @@ export async function getSeasonById({
 }) {
   const { data, error } = await supabase
     .from("seasons")
-    .select("id, name")
+    .select("id, name, result_sync_enabled")
     .eq("id", seasonId)
     .single();
 

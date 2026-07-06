@@ -10,6 +10,21 @@ export type Fixture = {
   away_score: number | null;
 };
 
+export type TeamFormResult = {
+  fixtureId: string;
+  opponent: string;
+  kickoffAt: string;
+  goalsFor: number;
+  goalsAgainst: number;
+  result: "W" | "D" | "L";
+  venue: "H" | "A";
+};
+
+export type FixtureTeamForm = {
+  home: TeamFormResult[];
+  away: TeamFormResult[];
+};
+
 export type Gameweek = {
   id: string;
   gameweek_number: number;

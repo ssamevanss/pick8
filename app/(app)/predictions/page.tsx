@@ -5,15 +5,74 @@ import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import FixturePredictionCard from "@/components/predictions/FixturePredictionCard";
 import type {
   Fixture,
+  FixtureTeamForm,
   Gameweek,
   JokerUsage,
   LeaderboardSummary,
   Prediction,
+  TeamFormResult,
 } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
 import { savePredictions } from "./actions";
 import SubmitButton from "@/components/forms/SubmitButton";
+
+type CompletedFixtureForForm = {
+  id: string;
+  home_team: string;
+  away_team: string;
+  kickoff_at: string;
+  home_score: number;
+  away_score: number;
+};
+
+function getTeamFormResult({
+  teamName,
+  fixture,
+}: {
+  teamName: string;
+  fixture: CompletedFixtureForForm;
+}): TeamFormResult {
+  const isHome = fixture.home_team === teamName;
+  const goalsFor = isHome ? fixture.home_score : fixture.away_score;
+  const goalsAgainst = isHome ? fixture.away_score : fixture.home_score;
+  const opponent = isHome ? fixture.away_team : fixture.home_team;
+  const result =
+    goalsFor > goalsAgainst ? "W" : goalsFor === goalsAgainst ? "D" : "L";
+
+  return {
+    fixtureId: fixture.id,
+    opponent,
+    kickoffAt: fixture.kickoff_at,
+    goalsFor,
+    goalsAgainst,
+    result,
+    venue: isHome ? "H" : "A",
+  };
+}
+
+function getRecentTeamForm({
+  teamName,
+  fixtureKickoffAt,
+  completedFixtures,
+}: {
+  teamName: string;
+  fixtureKickoffAt: string;
+  completedFixtures: CompletedFixtureForForm[];
+}) {
+  return completedFixtures
+    .filter(
+      (fixture) =>
+        fixture.kickoff_at < fixtureKickoffAt &&
+        (fixture.home_team === teamName || fixture.away_team === teamName),
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.kickoff_at).getTime() - new Date(a.kickoff_at).getTime(),
+    )
+    .slice(0, 6)
+    .map((fixture) => getTeamFormResult({ teamName, fixture }));
+}
 
 export default async function DashboardPage({
   searchParams,
@@ -109,6 +168,55 @@ export default async function DashboardPage({
       : { data: null, error: null };
 
   const fixtureList = (fixtures as Fixture[] | null) ?? [];
+  const latestFixtureKickoff =
+    fixtureList
+      .map((fixture) => fixture.kickoff_at)
+      .sort()
+      .at(-1) ?? null;
+
+  const { data: completedFormFixtures } =
+    activeSeason && latestFixtureKickoff
+      ? await supabase
+          .from("fixtures")
+          .select(
+            `
+            id,
+            home_team,
+            away_team,
+            kickoff_at,
+            home_score,
+            away_score,
+            gameweeks!inner (
+              season_id
+            )
+          `,
+          )
+          .eq("gameweeks.season_id", activeSeason.id)
+          .eq("status", "completed")
+          .not("home_score", "is", null)
+          .not("away_score", "is", null)
+          .lt("kickoff_at", latestFixtureKickoff)
+          .order("kickoff_at", { ascending: false })
+      : { data: [] };
+  const completedFixtureRows =
+    (completedFormFixtures as CompletedFixtureForForm[] | null) ?? [];
+  const formByFixture = new Map<string, FixtureTeamForm>();
+
+  for (const fixture of fixtureList) {
+    formByFixture.set(fixture.id, {
+      home: getRecentTeamForm({
+        teamName: fixture.home_team,
+        fixtureKickoffAt: fixture.kickoff_at,
+        completedFixtures: completedFixtureRows,
+      }),
+      away: getRecentTeamForm({
+        teamName: fixture.away_team,
+        fixtureKickoffAt: fixture.kickoff_at,
+        completedFixtures: completedFixtureRows,
+      }),
+    });
+  }
+
   const hasOpenPredictionFixtures = fixtureList.some(
     (fixture) =>
       fixture.status === "scheduled" && new Date(fixture.kickoff_at) > new Date(),
@@ -149,23 +257,22 @@ export default async function DashboardPage({
 
   return (
     <>
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">
-          Predictions
-        </h1>
-        <p className="mt-2 text-sm text-slate-400">
+      <header className="brand-card mb-8 p-5 sm:p-6">
+        <p className="brand-eyebrow">Match calls</p>
+        <h1 className="brand-title mt-2">Predictions</h1>
+        <p className="brand-subtitle mt-2">
           Enter your score predictions for the selected gameweek.
         </p>
       </header>
 
       {params.saved ? (
-        <p className="mb-4 rounded-xl bg-emerald-950 p-3 text-sm text-emerald-300">
+        <p className="brand-alert-success mb-4">
           Predictions saved.
         </p>
       ) : null}
 
       {params.error ? (
-        <p className="mb-4 rounded-xl bg-red-950 p-3 text-sm text-red-300">
+        <p className="brand-alert-danger mb-4">
           {params.error}
         </p>
       ) : null}
@@ -175,7 +282,7 @@ export default async function DashboardPage({
         jokersLeft={jokersLeft}
       />
 
-      <section className="mt-8 rounded-2xl bg-slate-900 p-4 shadow-lg">
+      <section className="brand-card mt-8 p-4 sm:p-5">
         <GameweekSelector
           gameweeks={gameweekList}
           selectedGameweekId={selectedGameweek?.id ?? null}
@@ -183,7 +290,7 @@ export default async function DashboardPage({
         />
 
         <div className="mb-4">
-          <h2 className="text-xl font-semibold">
+          <h2 className="text-2xl font-black tracking-tight">
             {selectedGameweek?.name ||
               (selectedGameweek
                 ? `Gameweek ${selectedGameweek.gameweek_number}`
@@ -195,32 +302,32 @@ export default async function DashboardPage({
         </div>
 
         {!activeSeason ? (
-          <p className="rounded-xl bg-amber-950 p-4 text-sm text-amber-300">
+          <p className="brand-alert-warning">
             No active season is available yet. Predictions will open once an
             admin activates a season.
           </p>
         ) : null}
 
         {activeSeason && gameweekList.length === 0 ? (
-          <p className="rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
+          <p className="brand-card-soft p-4 text-sm text-slate-400">
             No gameweeks have been created for the active season yet.
           </p>
         ) : null}
 
         {fixturesError ? (
-          <p className="rounded-xl bg-red-950 p-4 text-sm text-red-300">
+          <p className="brand-alert-danger">
             Could not load fixtures. Please try again shortly.
           </p>
         ) : null}
 
         {predictionsError ? (
-          <p className="mt-3 rounded-xl bg-red-950 p-4 text-sm text-red-300">
+          <p className="brand-alert-danger mt-3">
             Could not load predictions. Please try again shortly.
           </p>
         ) : null}
 
         {jokerUsageError ? (
-          <p className="mt-3 rounded-xl bg-red-950 p-4 text-sm text-red-300">
+          <p className="brand-alert-danger mt-3">
             Could not load Joker usage. Please try again shortly.
           </p>
         ) : null}
@@ -229,7 +336,7 @@ export default async function DashboardPage({
         gameweekList.length > 0 &&
         !fixturesError &&
         (!fixtures || fixtures.length === 0) ? (
-          <p className="rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
+          <p className="brand-card-soft p-4 text-sm text-slate-400">
             No fixtures have been selected for this gameweek yet.
           </p>
         ) : null}
@@ -250,6 +357,9 @@ export default async function DashboardPage({
                 jokerPredictionKeys={jokerPredictionKeys}
                 ownJokerFixtureIds={ownJokerFixtureIds}
                 jokersLeft={jokersLeft}
+                teamForm={
+                  formByFixture.get(fixture.id) ?? { home: [], away: [] }
+                }
                 />
             ))}
 
@@ -257,7 +367,7 @@ export default async function DashboardPage({
             <SubmitButton
               idleLabel="Save open predictions"
               pendingLabel="Saving predictions..."
-              className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
+              className="brand-button-primary w-full"
             />
           ) : null}
         </form>

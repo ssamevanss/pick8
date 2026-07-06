@@ -1,5 +1,6 @@
 import { formatInTimeZone } from "date-fns-tz";
 import { addExternalFixturesToGameweek } from "@/app/(app)/admin/actions";
+import SubmitButton from "@/components/forms/SubmitButton";
 import { getExternalFixtureGroupKey } from "@/utils/external-fixtures";
 
 export type AdminExternalFixtureOption = {
@@ -175,9 +176,11 @@ export default function AdminExternalFixturePickerCard({
             </fieldset>
           ))}
 
-          <button className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950">
-            Add selected cached fixtures
-          </button>
+          <SubmitButton
+            idleLabel="Add selected cached fixtures"
+            pendingLabel="Adding cached fixtures..."
+            className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
+          />
         </form>
       )}
     </div>

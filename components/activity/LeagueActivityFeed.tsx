@@ -73,12 +73,16 @@ function ActivityShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-      <p className="text-lg font-bold">{notification.title ?? "League update"}</p>
+    <div className="brand-card-soft p-4 transition hover:border-emerald-400/25">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-lg font-black tracking-tight text-white">
+          {notification.title ?? "League update"}
+        </p>
+        <span className="brand-pill shrink-0">
+          {formatCreatedAt(notification.created_at)}
+        </span>
+      </div>
       {children}
-      <p className="mt-4 text-xs text-slate-500">
-        {formatCreatedAt(notification.created_at)}
-      </p>
     </div>
   );
 }
@@ -101,7 +105,7 @@ function FixturesSelectedActivity({
           {fixtures.map((fixture, index) => (
             <div
               key={`${fixture.homeTeam}-${fixture.awayTeam}-${index}`}
-              className="rounded-lg bg-slate-900 px-3 py-2 text-sm"
+              className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
             >
               <span className="font-semibold">{fixture.homeTeam}</span>
               <span className="px-2 text-slate-500">v</span>
@@ -140,7 +144,7 @@ function ResultsAvailableActivity({
             {fixtures.map((fixture, index) => (
               <div
                 key={`${fixture.homeTeam}-${fixture.awayTeam}-${index}`}
-                className="rounded-lg bg-slate-900 px-3 py-2 text-sm"
+                className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
               >
                 <div className="flex items-center justify-between gap-3">
                   <span className="font-semibold">{fixture.homeTeam}</span>
@@ -165,11 +169,11 @@ function ResultsAvailableActivity({
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
             Weekly leaderboard
           </p>
-          <div className="mt-2 overflow-hidden rounded-lg border border-slate-800">
+          <div className="mt-2 overflow-hidden rounded-xl border border-white/10 bg-slate-900/50">
             {weeklyLeaderboard.slice(0, 5).map((row) => (
               <div
                 key={`${row.rank}-${row.name}`}
-                className="grid grid-cols-[48px_1fr_auto] items-center gap-3 border-t border-slate-800 px-3 py-2 text-sm first:border-t-0"
+                className="grid grid-cols-[48px_1fr_auto] items-center gap-3 border-t border-white/10 px-3 py-2 text-sm first:border-t-0"
               >
                 <span className="text-slate-500">#{row.rank}</span>
                 <span className="font-semibold">{row.name}</span>
@@ -185,7 +189,7 @@ function ResultsAvailableActivity({
       {biggestRisers.length > 0 || biggestFallers.length > 0 ? (
         <div className="mt-4 grid gap-2 md:grid-cols-2">
           {biggestRisers.length > 0 ? (
-            <div className="rounded-lg bg-emerald-500/10 p-3">
+            <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
                 Biggest risers
               </p>
@@ -203,7 +207,7 @@ function ResultsAvailableActivity({
           ) : null}
 
           {biggestFallers.length > 0 ? (
-            <div className="rounded-lg bg-red-500/10 p-3">
+            <div className="rounded-xl border border-red-400/20 bg-red-500/10 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-red-300">
                 Biggest fallers
               </p>
@@ -239,18 +243,19 @@ export default function LeagueActivityFeed({
   notifications,
 }: LeagueActivityFeedProps) {
   return (
-    <section className="mt-8 rounded-2xl bg-slate-900 p-4 shadow-lg">
-      <div className="mb-4">
-        <h2 className="text-xl font-semibold">League activity</h2>
-        <p className="text-sm text-slate-400">
-          Recent updates from the league.
+    <section className="brand-card mt-8 p-4 sm:p-5">
+      <div className="brand-section-header">
+        <p className="brand-eyebrow">League room</p>
+        <h2 className="text-2xl font-black tracking-tight">Activity</h2>
+        <p className="brand-subtitle">
+          The latest picks, results, movers, and next-player nudges.
         </p>
       </div>
 
       {notifications.length === 0 ? (
-        <p className="rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
-          No activity yet. Updates will appear here as fixtures are picked,
-          predictions close, and results are entered.
+        <p className="brand-card-soft p-4 text-sm text-slate-400">
+          No league activity yet. Picks, results, and leaderboard moments will
+          land here once the season starts moving.
         </p>
       ) : (
         <div className="space-y-3">

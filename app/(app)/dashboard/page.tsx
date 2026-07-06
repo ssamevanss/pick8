@@ -160,7 +160,7 @@ export default async function HomePage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+  const { data: activeSeason } = await getActiveSeason(supabase, "id, name");
 
   const { data: pickerGameweeks } =
     user && activeSeason
@@ -306,16 +306,42 @@ export default async function HomePage() {
 
   return (
     <>
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">Home</h1>
-        <p className="mt-2 text-sm text-slate-400">
-          Your league hub: actions, updates and recent activity.
-        </p>
+      <header className="brand-card mb-8 overflow-hidden p-5 sm:p-6">
+        <p className="brand-eyebrow">League hub</p>
+        <div className="mt-3 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h1 className="brand-title">Who You Got?</h1>
+            <p className="brand-subtitle mt-2">
+              {activeSeason?.name
+                ? `${activeSeason.name}: picks, predictions, and the latest league movement.`
+                : "Your private football prediction league will open once a season is live."}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 sm:min-w-64">
+            <div className="brand-card-soft p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                Gameweeks
+              </p>
+              <p className="mt-1 text-2xl font-black text-white">
+                {activeGameweekCount ?? 0}
+              </p>
+            </div>
+            <div className="brand-card-soft p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                Latest picks
+              </p>
+              <p className="mt-1 text-2xl font-black text-white">
+                {fixtureCount}
+              </p>
+            </div>
+          </div>
+        </div>
       </header>
 
       <section className="space-y-4">
         {activePickerGameweek ? (
-          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <div className="brand-card border-amber-300/30 bg-amber-300/10 p-4">
             <p className="text-sm font-semibold text-amber-300">
               You’re up next
             </p>
@@ -331,7 +357,7 @@ export default async function HomePage() {
             <Link
               href={`/pick-fixtures?gameweek=${activePickerGameweek.id}`}
               prefetch={false}
-              className="mt-4 inline-flex rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950"
+              className="brand-button-gold mt-4"
             >
               Pick fixtures
             </Link>
@@ -339,7 +365,7 @@ export default async function HomePage() {
         ) : null}
 
         {!activePickerGameweek && submittedPickerGameweek ? (
-          <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+          <div className="brand-card border-emerald-400/30 bg-emerald-400/10 p-4">
             <p className="text-sm font-semibold text-emerald-300">
               Fixtures submitted
             </p>
@@ -355,7 +381,7 @@ export default async function HomePage() {
             <Link
               href={`/pick-fixtures?gameweek=${submittedPickerGameweek.id}`}
               prefetch={false}
-              className="mt-4 inline-flex rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
+              className="brand-button-primary mt-4"
             >
               Review fixtures
             </Link>
@@ -365,7 +391,7 @@ export default async function HomePage() {
         {!activePickerGameweek &&
           !submittedPickerGameweek &&
           nextFuturePickerGameweek ? (
-            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+            <div className="brand-card p-4">
               <p className="text-sm font-semibold text-slate-300">Your next pick</p>
               <h2 className="mt-1 text-xl font-bold">
                 You’re scheduled for {formatGameweekName(nextFuturePickerGameweek)}
@@ -381,7 +407,7 @@ export default async function HomePage() {
           !submittedPickerGameweek &&
           !nextFuturePickerGameweek &&
           lockedPickerGameweek ? (
-            <div className="rounded-2xl border border-slate-700 bg-slate-900 p-4">
+            <div className="brand-card p-4">
               <p className="text-sm font-semibold text-slate-300">Fixtures locked</p>
               <h2 className="mt-1 text-xl font-bold">
                 {formatGameweekName(lockedPickerGameweek)} fixtures are locked
@@ -394,7 +420,7 @@ export default async function HomePage() {
           ) : null}
 
         {!activeSeason ? (
-          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+          <div className="brand-alert-warning">
             <p className="text-sm font-semibold text-amber-300">
               No active season
             </p>
@@ -406,7 +432,7 @@ export default async function HomePage() {
           </div>
         ) : latestGameweek ? (
           !hasActionablePredictionFixtures ? (
-            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+            <div className="brand-card border-emerald-400/30 bg-emerald-400/10 p-4">
               <p className="text-sm font-semibold text-emerald-300">
                 {latestGameweekComplete ? "Gameweek complete" : "Predictions locked"}
               </p>
@@ -424,13 +450,13 @@ export default async function HomePage() {
               <Link
                 href={`/predictions?gameweek=${latestGameweek.id}`}
                 prefetch={false}
-                className="mt-4 inline-flex rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
+                className="brand-button-primary mt-4"
               >
                 {latestGameweekComplete ? "View results" : "Review predictions"}
               </Link>
             </div>
           ) : isPredictionComplete ? (
-            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+            <div className="brand-card border-emerald-400/30 bg-emerald-400/10 p-4">
               <p className="text-sm font-semibold text-emerald-300">
                 You’re all set
               </p>
@@ -450,13 +476,13 @@ export default async function HomePage() {
               <Link
                 href={`/predictions?gameweek=${latestGameweek.id}`}
                 prefetch={false}
-                className="mt-4 inline-flex rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
+                className="brand-button-primary mt-4"
               >
                 {latestGameweekComplete ? "View results" : "Review predictions"}
               </Link>
             </div>
           ) : (
-            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+            <div className="brand-card border-amber-300/30 bg-amber-300/10 p-4">
               <p className="text-sm font-semibold text-amber-300">
                 Predictions
               </p>
@@ -485,7 +511,7 @@ export default async function HomePage() {
               <Link
                 href={`/predictions?gameweek=${latestGameweek.id}`}
                 prefetch={false}
-                className="mt-4 inline-flex rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950"
+                className="brand-button-gold mt-4"
               >
                 {actionablePredictionCount > 0
                   ? "Finish predictions"
@@ -494,7 +520,7 @@ export default async function HomePage() {
             </div>
           )
         ) : (
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div className="brand-card p-4">
             <p className="text-sm font-semibold text-slate-300">
               {(activeGameweekCount ?? 0) === 0
                 ? "No gameweeks yet"

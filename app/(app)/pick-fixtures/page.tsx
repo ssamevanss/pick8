@@ -172,15 +172,16 @@ export default async function PickFixturesPage({
   if (eligibleGameweeks.length === 0) {
     return (
       <>
-        <header className="mb-8">
-          <h1 className="text-3xl font-bold tracking-tight">Pick Fixtures</h1>
-          <p className="mt-2 text-sm text-slate-400">
+        <header className="brand-card mb-8 p-5 sm:p-6">
+          <p className="brand-eyebrow">Fixture picker</p>
+          <h1 className="brand-title mt-2">Pick Fixtures</h1>
+          <p className="brand-subtitle mt-2">
             You are not currently assigned to pick fixtures for an unlocked
             active-season gameweek.
           </p>
         </header>
 
-        <section className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+        <section className="brand-card p-4 sm:p-5">
           <p className="text-sm font-semibold text-slate-300">
             Nothing to pick right now
           </p>
@@ -335,30 +336,31 @@ export default async function PickFixturesPage({
       .at(-1) ?? null;
 
   const inputClassName =
-    "mt-1 w-full rounded-lg bg-slate-900 px-3 py-2 outline-none ring-1 ring-slate-800 disabled:cursor-not-allowed disabled:opacity-60";
+    "brand-input";
 
   return (
     <>
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">Pick Fixtures</h1>
-        <p className="mt-2 text-sm text-slate-400">
+      <header className="brand-card mb-8 p-5 sm:p-6">
+        <p className="brand-eyebrow">Fixture picker</p>
+        <h1 className="brand-title mt-2">Pick Fixtures</h1>
+        <p className="brand-subtitle mt-2">
           Choose fixtures for your assigned gameweek.
         </p>
       </header>
 
       {params.saved ? (
-        <p className="mb-4 rounded-xl bg-emerald-950 p-3 text-sm text-emerald-300">
+        <p className="brand-alert-success mb-4">
           Fixtures saved.
         </p>
       ) : null}
 
       {params.error ? (
-        <p className="mb-4 rounded-xl bg-red-950 p-3 text-sm text-red-300">
+        <p className="brand-alert-danger mb-4">
           {params.error}
         </p>
       ) : null}
 
-      <section className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+      <section className="brand-card p-4 sm:p-5">
         <GameweekSelector
           gameweeks={eligibleGameweeks}
           selectedGameweekId={selectedGameweek?.id ?? null}
@@ -367,7 +369,7 @@ export default async function PickFixturesPage({
 
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className="text-xl font-semibold">
+            <h2 className="text-2xl font-black tracking-tight">
               {selectedGameweek?.name ||
                 `Gameweek ${selectedGameweek.gameweek_number}`}
             </h2>
@@ -377,10 +379,10 @@ export default async function PickFixturesPage({
           </div>
 
           <span
-            className={`inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold ${
+            className={`inline-flex w-fit rounded-full border px-3 py-1 text-xs font-bold ${
               activePickerIsComplete
-                ? "bg-emerald-500/15 text-emerald-300"
-                : "bg-amber-500/15 text-amber-300"
+                ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+                : "border-amber-300/25 bg-amber-300/10 text-amber-300"
             }`}
           >
             {activeSelectedFixtureCount}/{activeExpectedFixtureCount} fixtures
@@ -389,20 +391,20 @@ export default async function PickFixturesPage({
         </div>
 
         {fixturesError ? (
-          <p className="rounded-xl bg-red-950 p-4 text-sm text-red-300">
+          <p className="brand-alert-danger">
             Could not load fixtures for this gameweek. Please try again shortly.
           </p>
         ) : null}
 
         {isLockedByPredictions ? (
-          <p className="mb-4 rounded-xl bg-amber-950 p-4 text-sm text-amber-300">
+          <p className="brand-alert-warning mb-4">
             Fixture selection is locked because predictions have already been
             entered. Ask an admin if a fixture needs to be changed.
           </p>
         ) : null}
 
         {extraFixtureCount > 0 ? (
-          <p className="mb-4 rounded-xl bg-amber-950 p-4 text-sm text-amber-300">
+          <p className="brand-alert-warning mb-4">
             This gameweek has {extraFixtureCount} extra fixture
             {extraFixtureCount === 1 ? "" : "s"} created by admin. Pickers can
             only edit the first four fixtures.
@@ -410,46 +412,46 @@ export default async function PickFixturesPage({
         ) : null}
 
         {externalFixturesConfigured ? (
-          <section className="mb-6 rounded-xl border border-slate-800 bg-slate-950 p-4">
+          <section className="brand-card-soft mb-6 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
-                  External fixtures
+                  Fixture list
                 </p>
                 <h3 className="mt-1 text-lg font-semibold">
                   {activeSeasonConfig?.base_competition_name ??
                     activeSeasonConfig?.base_competition_code}
                 </h3>
                 <p className="mt-1 text-sm text-slate-400">
-                  Cached fixtures from football-data.org. Last imported:{" "}
-                  {formatLastImported(latestExternalImport)}. If fixtures are
-                  missing, ask an admin to refresh the external fixture cache.
+                  Latest available matches. Last refreshed:{" "}
+                  {formatLastImported(latestExternalImport)}. If something is
+                  missing, ask an admin to refresh the list.
                 </p>
               </div>
 
-              <span className="inline-flex w-fit rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-300">
+              <span className="brand-pill w-fit">
                 {currentSelectedExternalCount} of {expectedExternalPickCount}{" "}
                 selected
               </span>
             </div>
 
             {externalFixturesError ? (
-              <p className="mt-4 rounded-lg bg-red-950 p-3 text-sm text-red-300">
-                Could not load cached external fixtures.
+              <p className="brand-alert-danger mt-4">
+                Could not load the fixture list.
               </p>
             ) : null}
 
             {!externalFixturesError && allExternalFixtureRows.length === 0 ? (
-              <p className="mt-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-300">
-                No upcoming cached fixtures are available for this competition.
+              <p className="brand-alert-warning mt-4">
+                No upcoming fixtures are available for this competition.
               </p>
             ) : null}
 
             {!externalFixturesError &&
             allExternalFixtureRows.length > 0 &&
             selectableExternalFixtureRows.length === 0 ? (
-              <p className="mt-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-300">
-                Cached fixtures exist, but all selectable fixtures have already
+              <p className="brand-alert-warning mt-4">
+                Fixtures exist, but all selectable matches have already
                 been used in another active-season gameweek.
               </p>
             ) : null}
@@ -473,7 +475,7 @@ export default async function PickFixturesPage({
                       <h4 className="text-sm font-semibold text-slate-200">
                         {selectedExternalGroup.label}
                       </h4>
-                      <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300">
+                      <span className="brand-pill border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
                         {currentSelectedExternalCount > 0
                           ? "Selected group"
                           : "Next group"}
@@ -490,7 +492,7 @@ export default async function PickFixturesPage({
                         return (
                           <label
                             key={fixture.external_fixture_id}
-                            className="flex cursor-pointer gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 has-[:checked]:border-emerald-500/60 has-[:checked]:bg-emerald-500/10"
+                            className="flex cursor-pointer gap-3 rounded-xl border border-white/10 bg-slate-900/70 p-3 transition has-[:checked]:border-emerald-400/70 has-[:checked]:bg-emerald-400/10 hover:border-emerald-400/30"
                           >
                             <input
                               type="checkbox"
@@ -522,32 +524,32 @@ export default async function PickFixturesPage({
                   </div>
                 </div>
 
-                <p className="mt-3 rounded-lg bg-slate-900 p-3 text-xs text-slate-400">
-                  Select {expectedExternalPickCount} cached fixture
+                <p className="mt-3 rounded-xl border border-white/10 bg-slate-900/70 p-3 text-xs text-slate-400">
+                  Select {expectedExternalPickCount} fixture
                   {expectedExternalPickCount === 1 ? "" : "s"}. Saving
-                  external fixtures replaces the current editable picker
+                  these fixtures replaces the current editable picker
                   fixtures for this gameweek.
                 </p>
 
                 <SubmitButton
-                  idleLabel="Save selected cached fixtures"
-                  pendingLabel="Saving cached fixtures..."
-                  className="mt-4 w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
+                  idleLabel="Save selected fixtures"
+                  pendingLabel="Saving fixtures..."
+                  className="brand-button-primary mt-4 w-full"
                 />
               </form>
             ) : null}
 
             {isLockedByPredictions ? (
-              <p className="mt-4 rounded-lg bg-slate-900 p-3 text-sm text-slate-400">
-                Cached fixture selection is read-only because predictions have
+              <p className="brand-card-soft mt-4 p-3 text-sm text-slate-400">
+                Fixture selection is read-only because predictions have
                 already been entered.
               </p>
             ) : null}
           </section>
         ) : (
-          <section className="mb-6 rounded-xl border border-slate-800 bg-slate-950 p-4">
+          <section className="brand-card-soft mb-6 p-4">
             <p className="text-sm font-semibold text-slate-300">
-              External fixtures are not configured for this season.
+              The match list is not set up for this season.
             </p>
             <p className="mt-2 text-sm text-slate-400">
               Use the manual fallback below.
@@ -558,7 +560,7 @@ export default async function PickFixturesPage({
         <details
           className={
             externalModeAvailable
-              ? "rounded-xl border border-slate-800 bg-slate-950 p-4"
+              ? "brand-card-soft p-4"
               : ""
           }
           open={!externalModeAvailable}
@@ -582,7 +584,7 @@ export default async function PickFixturesPage({
               </h3>
               <p className="text-sm text-slate-400">
                 {externalModeAvailable
-                  ? "Use this only if cached fixtures are missing or need an admin-style override."
+                  ? "Use this only if the match list is missing something or needs an admin-style override."
                   : "Enter fixtures manually or edit the current editable picks."}
               </p>
             </div>
@@ -596,7 +598,7 @@ export default async function PickFixturesPage({
             return (
               <div
                 key={slotNumber}
-                className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                className="brand-card-soft p-4"
               >
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <h3 className="text-sm font-semibold">
@@ -604,11 +606,11 @@ export default async function PickFixturesPage({
                   </h3>
 
                   {fixture ? (
-                    <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300">
+                    <span className="brand-pill border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
                       Saved
                     </span>
                   ) : (
-                    <span className="rounded-full bg-slate-800 px-2 py-1 text-xs font-semibold text-slate-400">
+                    <span className="brand-pill text-slate-400">
                       Empty
                     </span>
                   )}
@@ -678,14 +680,14 @@ export default async function PickFixturesPage({
           })}
 
           {isLockedByPredictions ? (
-            <p className="rounded-xl bg-slate-950 p-4 text-sm text-slate-400">
+            <p className="brand-card-soft p-4 text-sm text-slate-400">
               These fixtures are now read-only for the picker.
             </p>
           ) : (
             <SubmitButton
               idleLabel="Save fixtures"
               pendingLabel="Saving fixtures..."
-              className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
+              className="brand-button-primary w-full"
             />
           )}
             </form>

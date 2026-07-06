@@ -50,6 +50,20 @@ Expected values:
 
 ## Tables
 
+## Non-database UI assets
+
+Team visual identity for prediction cards is file-backed, not stored in
+Supabase:
+
+- `utils/team-assets.ts` maps known team names to asset paths.
+- `public/team-assets/flags/` stores app-owned World Cup flag SVGs.
+- `public/team-assets/crests/` stores app-owned lightweight club crest-style
+  SVGs.
+
+Missing teams fall back to generated initials badges. Prediction split and team
+form displays are calculated from existing `predictions` and completed
+`fixtures`; no schema changes are required.
+
 ## `profiles`
 
 Represents app users and their league profile.
@@ -104,6 +118,8 @@ Rules:
 - Test/cup trial seasons usually have `show_in_archive = false`.
 - External fixture imports are disabled by default and should only run for explicitly configured seasons.
 - Result sync is triggered manually through the admin-only 2.0D endpoint until cron automation is added.
+- Provider/competition fields and import/result-sync toggles are managed from
+  Admin -> Season -> Season settings for the active season.
 
 Recommended SQL additions already used:
 

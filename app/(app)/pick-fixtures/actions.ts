@@ -289,7 +289,7 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   if (uniqueExternalIds.length !== selectedExternalIds.length) {
     redirect(
       `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
-        "Each external fixture can only be selected once",
+        "Each fixture can only be selected once",
       )}`,
     );
   }
@@ -297,7 +297,7 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   if (uniqueExternalIds.length === 0 || uniqueExternalIds.length > 4) {
     redirect(
       `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
-        "Select between one and four cached fixtures before saving",
+        "Select between one and four fixtures before saving",
       )}`,
     );
   }
@@ -318,7 +318,7 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   ) {
     redirect(
       `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
-        "External fixtures are not configured for the active season",
+        "The fixture list is not set up for the active season",
       )}`,
     );
   }
@@ -334,7 +334,7 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   if (currentFixtureList.length > 4) {
     redirect(
       `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
-        "This gameweek has extra admin fixtures. Ask an admin to update it before using external fixture selection.",
+        "This gameweek has extra admin fixtures. Ask an admin to update it before using the fixture list.",
       )}`,
     );
   }
@@ -362,7 +362,7 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   if (externalFixtureList.length !== uniqueExternalIds.length) {
     redirect(
       `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
-        "One or more selected cached fixtures could not be found",
+        "One or more selected fixtures could not be found",
       )}`,
     );
   }
@@ -386,7 +386,7 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   if (selectedGroupKeys.length !== 1) {
     redirect(
       `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
-        "Selected cached fixtures must come from the same external matchday or round group",
+        "Selected fixtures must come from the same matchday or round group",
       )}`,
     );
   }
@@ -478,9 +478,9 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   if (uniqueExternalIds.length !== expectedPickCount) {
     redirect(
       `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
-        `Select exactly ${expectedPickCount} cached fixture${
+        `Select exactly ${expectedPickCount} fixture${
           expectedPickCount === 1 ? "" : "s"
-        } from this external group before saving`,
+        } from this matchday before saving`,
       )}`,
     );
   }

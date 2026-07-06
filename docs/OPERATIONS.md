@@ -29,6 +29,29 @@ LEAGUE_SIGNUP_CODE=...
 
 Never expose `SUPABASE_SECRET_KEY` in client-side code.
 
+## Auth and password reset
+
+Login and signup preserve safe form values after validation errors. Passwords
+are never echoed back into the page. Password reset uses Supabase Auth emails,
+not Resend.
+
+Required setup:
+
+1. Set `NEXT_PUBLIC_SITE_URL` to the canonical app URL, for example
+   `https://whoyougot.ie`.
+2. In Supabase Dashboard -> Authentication -> URL Configuration, set the Site
+   URL to the same production URL.
+3. Add allowed redirect URLs for:
+   - `https://whoyougot.ie/auth/callback`
+   - the current Vercel preview URL if testing previews
+   - `http://localhost:3000/auth/callback` for local development
+4. In Supabase Dashboard -> Authentication -> Email Templates, keep the reset
+   password template using Supabase's confirmation URL. The app callback will
+   exchange the code and send users to `/reset-password`.
+
+The forgot-password page intentionally returns the same success message whether
+or not an email exists, to avoid account enumeration.
+
 Required for football-data.org fixture imports:
 
 ```env
@@ -65,23 +88,14 @@ Before using imports, run:
 docs/2026-07-05-external-fixture-cache.sql
 ```
 
-Configure a season with:
-
-```sql
-update public.seasons
-set
-  base_provider = 'football_data',
-  base_competition_code = 'PL',
-  base_competition_name = 'Premier League',
-  base_competition_external_id = '2021',
-  fixture_import_enabled = false,
-  result_sync_enabled = false
-where id = '<season_id>';
-```
+Configure the active season in Admin -> Season -> Season settings. Choose
+`football_data`, select the base competition, and save. The UI fills the
+competition name and provider id automatically.
 
 Keep `fixture_import_enabled = false` until dry-run output is reviewed. Keep
-`result_sync_enabled = false` until scheduled result sync is added and tested.
-The manual 2.0D admin sync endpoint can still be used for explicit checks.
+`result_sync_enabled = false` until selected-fixture result sync has been
+tested for the season. Dry-run result sync remains available while disabled;
+real manual and cron sync require `result_sync_enabled = true`.
 
 football-data.org free tier is limited to 10 requests/minute. Import routes
 make one provider request per import and return a clear 429 error with
@@ -104,7 +118,9 @@ Browser-based dry-run is also available when already signed in as admin:
 http://localhost:3000/api/admin/external-fixtures/import?season_id=<season_id>&dry_run=1
 ```
 
-A real import requires `fixture_import_enabled = true` for the target season:
+A real import requires `fixture_import_enabled = true` for the target season.
+Enable it from Admin -> Season -> Season settings after reviewing dry-run
+output:
 
 ```bash
 curl -X POST \
@@ -136,12 +152,11 @@ provider value is used.
 
 With the current World Cup test setup:
 
-1. Confirm the active season has `base_provider = 'football_data'` and
-   `base_competition_code = 'WC'`.
+1. Confirm Admin -> Season -> Season settings has `football_data` and `WC`.
 2. Confirm `external_fixtures` has upcoming `TIMED` or `SCHEDULED` WC rows.
 3. Log in as the assigned picker for an unlocked active-season gameweek.
 4. Open `/pick-fixtures`.
-5. Use the External fixtures section to select the available cached fixtures
+5. Use the Fixture list section to select the available cached fixtures
    for the selected external matchday group.
 6. Save selected cached fixtures.
 7. Confirm the expected number of rows were inserted into `fixtures` with:
@@ -156,7 +171,7 @@ If a cached fixture is missing, run the admin import dry-run/real import flow
 again. If a fixture was already selected in another active-season gameweek, the
 picker excludes it from selectable cached fixtures.
 
-Admins can also add cached external fixtures from Admin -> Fixtures. The admin
+Admins can also add cached external fixtures from Admin -> Gameweeks. The admin
 card reads the same local `external_fixtures` cache, does not call
 football-data.org from the browser, copies the same provenance fields into
 `fixtures`, and rejects duplicates that are already selected in another active
@@ -293,6 +308,21 @@ every 5 minutes. Vercel Hobby cron is daily only, so it is not suitable for
 frequent result polling. Keep the scheduler disabled outside active match
 windows unless you specifically want the endpoint's DB-window skip response.
 
+Production scheduler checklist:
+
+1. Confirm `CRON_SECRET` is set in Vercel Production and matches the external
+   scheduler secret.
+2. Confirm the active season has `base_provider = football_data` and
+   `result_sync_enabled = true` only when selected external fixtures are ready
+   for automated result checks.
+3. Test the scheduler URL with `Authorization: Bearer <CRON_SECRET>` and check
+   that idle windows return `api_call_count = 0`.
+4. Keep `/api/cron/sync-external-results` separate from
+   `/api/cron/send-prediction-reminders`; result sync never sends emails, and
+   reminder cron never syncs scores.
+5. Review Vercel logs after the first live match window for provider errors,
+   scoring updates, and duplicate-notification warnings.
+
 ## Deployment
 
 The app is deployed on Vercel.
@@ -312,7 +342,7 @@ After deploying:
 - Check Predictions
 - Check Leaderboard
 - Check Admin -> Season
-- Check Admin -> Results
+- Check Admin -> Gameweeks
 - Check Vercel logs for errors
 
 ## Scheduled prediction reminders
@@ -440,16 +470,16 @@ For each gameweek:
 2. Wait for picker to select fixtures.
 3. Check fixtures/kickoff times.
 4. Players enter predictions.
-5. After matches finish, enter results via Admin -> Results.
+5. After matches finish, enter results via Admin -> Gameweeks.
 6. Confirm leaderboard updates.
 7. Confirm activity feed updates.
 8. Export season data.
 
 ## Scoring and corrections
 
-Scores are calculated when results are saved through Admin -> Results.
+Scores are calculated when results are saved through Admin -> Gameweeks.
 
-If an admin enters the wrong result, correct it in Admin -> Results and save again.
+If an admin enters the wrong result, correct it in Admin -> Gameweeks and save again.
 
 Expected recalculation:
 

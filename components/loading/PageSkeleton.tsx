@@ -6,12 +6,16 @@ type PageSkeletonProps = {
 };
 
 function SkeletonLine({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded bg-slate-800 ${className}`} />;
+  return (
+    <div
+      className={`animate-pulse rounded bg-slate-800/80 ${className}`}
+    />
+  );
 }
 
 function SkeletonCard() {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+    <div className="brand-card-soft p-4">
       <SkeletonLine className="h-3 w-40" />
 
       <div className="mt-4 flex items-center justify-between gap-3">
@@ -40,31 +44,32 @@ export default function PageSkeleton({
 }: PageSkeletonProps) {
   return (
     <>
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">{title}</h1>
-        <p className="mt-2 text-sm text-slate-400">{subtitle}</p>
+      <header className="brand-card mb-8 p-5 sm:p-6">
+        <p className="brand-eyebrow">Loading</p>
+        <h1 className="brand-title mt-2">{title}</h1>
+        <p className="brand-subtitle mt-2">{subtitle}</p>
       </header>
 
       {showSummaryCards ? (
         <section className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+          <div className="brand-card p-4">
             <SkeletonLine className="h-4 w-20" />
             <SkeletonLine className="mt-3 h-8 w-12" />
           </div>
 
-          <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+          <div className="brand-card p-4">
             <SkeletonLine className="h-4 w-24" />
             <SkeletonLine className="mt-3 h-8 w-16" />
           </div>
 
-          <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+          <div className="brand-card p-4">
             <SkeletonLine className="h-4 w-20" />
             <SkeletonLine className="mt-3 h-8 w-12" />
           </div>
         </section>
       ) : null}
 
-      <section className="mt-8 rounded-2xl bg-slate-900 p-4 shadow-lg">
+      <section className="brand-card mt-8 p-4">
         <SkeletonLine className="mb-4 h-14 w-full rounded-2xl" />
 
         <div className="mb-4">

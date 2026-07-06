@@ -35,6 +35,11 @@ app/layout.tsx
 app/robots.ts
 app/login/page.tsx
 app/login/actions.ts
+app/forgot-password/page.tsx
+app/forgot-password/actions.ts
+app/auth/callback/route.ts
+app/reset-password/page.tsx
+app/reset-password/actions.ts
 app/logout/route.ts
 app/signup/page.tsx
 app/signup/actions.ts
@@ -51,12 +56,15 @@ app/(app)/leaderboard/page.tsx
 components/AppShell.tsx
 components/forms/SubmitButton.tsx
 components/activity/LeagueActivityFeed.tsx
+components/predictions/TeamIdentity.tsx
 components/admin/*
+public/team-assets/
 utils/supabase/client.ts
 utils/supabase/server.ts
 utils/supabase/admin.ts
 utils/supabase/middleware.ts
 utils/football-data/client.ts
+utils/team-assets.ts
 utils/activity.ts
 proxy.ts
 ```
@@ -87,6 +95,13 @@ Rules:
 - Players can only see their own predictions before kickoff.
 - After kickoff, all predictions become visible.
 - Joker can be applied before kickoff.
+- Team visual identity uses local assets from `public/team-assets` via
+  `utils/team-assets.ts`. Missing teams fall back to initials badges.
+- Locked fixtures show a home/draw/away prediction split calculated from
+  submitted predictions for that fixture. This is never shown before lock.
+- Fixture form panels use completed app fixtures from the active season before
+  the selected fixture kickoff. No external football API is called from the
+  prediction screen.
 
 ### `/pick-fixtures`
 
@@ -100,7 +115,9 @@ Rules:
 - Picker chooses the expected fixture count for the current gameweek. Standard
   league gameweeks normally use four fixtures; cup/test gameweeks can use fewer
   when the selected external matchday has fewer available fixtures.
-- If the active season has a configured base provider/competition, the picker can select cached fixtures from `external_fixtures`.
+- If the active season has a configured base provider/competition, the picker
+  can select from a player-facing fixture list backed by local
+  `external_fixtures`.
 - Cached external fixtures are grouped by provider matchday first, then stage or kickoff date. Provider matchday is not treated as app gameweek number.
 - Selected cached fixtures are copied into the existing `fixtures` table with external provenance fields.
 - The picker never calls football-data.org directly.
@@ -125,23 +142,42 @@ Admin hub.
 
 Current tabs include:
 
-- Season
-- Fixtures
-- Results
+- Overview
 - Users
+- Season
+- Gameweeks
+- Maintenance
 
-Season tab includes:
+Overview includes:
+
+- Active season summary
+- Provider/competition status
+- Import/result-update status
+- Quick health checks
+
+Season includes:
 
 - Season lifecycle controls
+- Active season provider/competition/result-sync settings
+
+Gameweeks includes:
+
 - Gameweek generation
 - Gameweek picker assignments
+- Fixture management
+- Cached external fixture picker
+- Manual fixture fallback
+- Result entry
 
-Future Maintenance tab should include:
+Maintenance includes:
 
 - Export season data
-- Health check
+- Health checks
 - Recalculate leaderboard
-- Safe test-data cleanup
+- Re-score completed fixtures
+- External fixture import controls
+- External result sync controls
+- Email reminder dry-run/run visibility
 
 2.0B adds an admin-only external fixture import endpoint:
 
@@ -163,8 +199,18 @@ selection reads that local cache and copies selected rows into gameplay
 GET requests are dry-run only. POST can update selected linked fixtures from
 football-data.org batch ID results, update the matching external cache rows, and
 reuse the existing scoring, leaderboard recalculation, and post-result activity
-notification flow when final scores arrive. Cron-based result sync remains
-future work.
+notification flow when final scores arrive.
+
+2.0E adds protected scheduled result sync:
+
+```text
+/api/cron/sync-external-results
+```
+
+It requires `CRON_SECRET`, only runs for an active football-data season with
+`result_sync_enabled = true`, and checks local selected fixtures before calling
+football-data.org. If no selected fixture is inside the sync window, it returns
+without making a provider request.
 
 The Admin fixtures tab can also add selected cached external fixtures from the
 local `external_fixtures` table. It uses the same external-to-local provenance
@@ -173,6 +219,21 @@ duplicate external fixture selection across the active season. Fixture-picked
 activity is upserted from the current gameweek fixture count, so admin edits
 before predictions do not leave stale four-fixture notifications in cup/test
 seasons.
+
+## Auth and account recovery
+
+Signup is invite-code gated and creates pending player profiles for admin
+approval. Login/signup errors use friendly copy and preserve safe non-password
+fields after validation failures.
+
+Password reset uses Supabase Auth:
+
+- `/forgot-password` requests the reset link with a neutral success message.
+- `/auth/callback` exchanges Supabase email link codes server-side.
+- `/reset-password` lets the signed reset session choose a new password.
+
+Reset links use `NEXT_PUBLIC_SITE_URL`; no app-owned Resend email is sent for
+password recovery.
 
 ## User roles and statuses
 
@@ -226,6 +287,10 @@ Important columns:
 - `seasons.archived_at`
 - `seasons.archived_by`
 
+Admins can edit the provider/competition and import/result-sync toggles from
+Admin -> Season -> Season settings. Normal users cannot access these controls,
+and API keys remain server-side only.
+
 ## Fixture picker assignment
 
 The source of truth is now:
@@ -264,7 +329,7 @@ Prediction scoring:
   - correct result = 6
   - incorrect = 0
 
-Scores are calculated when Admin saves results through Admin -> Results.
+Scores are calculated when Admin saves results through Admin -> Gameweeks.
 
 Expected flow:
 
@@ -340,6 +405,20 @@ Selected external fixture results are synced only through the admin-only
 `/api/admin/external-fixtures/sync-results` route. Player-facing pages do not
 call football-data.org.
 
+### Team assets
+
+`utils/team-assets.ts` maps known World Cup teams and Premier League clubs to
+local assets under:
+
+```text
+public/team-assets/flags/
+public/team-assets/crests/
+```
+
+These are app-owned lightweight SVG badges, not hotlinked provider images.
+Unknown teams render as stable initials badges so fixture cards do not shift or
+break when a new team appears.
+
 ### Middleware/proxy
 
 `proxy.ts` calls `updateSession()` from `utils/supabase/middleware.ts`.
@@ -400,9 +479,8 @@ Run lint/build after meaningful changes.
 
 ## Current known next work
 
-- Cron scheduling for selected-fixture result sync
-- Admin controls for base provider/competition setup
+- Production trial monitoring and invite-user smoke testing
 - Error handling polish
-- Mobile polish
-- Email reminders
-- Football API integration
+- Mobile polish after real-device QA
+- Optional richer stats and live/provisional score display after final-score
+  automation is stable

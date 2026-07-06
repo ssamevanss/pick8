@@ -11,29 +11,29 @@ export default function DashboardSummary({
 }: DashboardSummaryProps) {
   return (
     <section className="grid grid-cols-3 gap-2 sm:gap-4">
-      <div className="min-w-0 rounded-xl bg-slate-900 p-3 shadow-lg sm:rounded-2xl sm:p-4">
-        <p className="truncate text-[11px] text-slate-400 sm:text-sm">
+      <div className="brand-card min-w-0 p-3 sm:p-4">
+        <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">
           Your rank
         </p>
-        <p className="mt-1 text-xl font-bold sm:mt-2 sm:text-3xl">
+        <p className="mt-1 text-xl font-black text-white sm:mt-2 sm:text-3xl">
           {leaderboardEntry?.rank ? `${leaderboardEntry.rank}` : "-"}
         </p>
       </div>
 
-      <div className="min-w-0 rounded-xl bg-slate-900 p-3 shadow-lg sm:rounded-2xl sm:p-4">
-        <p className="truncate text-[11px] text-slate-400 sm:text-sm">
+      <div className="brand-card min-w-0 p-3 sm:p-4">
+        <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">
           Total points
         </p>
-        <p className="mt-1 text-xl font-bold sm:mt-2 sm:text-3xl">
+        <p className="mt-1 text-xl font-black text-emerald-300 sm:mt-2 sm:text-3xl">
           {leaderboardEntry?.total_points ?? 0}
         </p>
       </div>
 
-      <div className="min-w-0 rounded-xl bg-slate-900 p-3 shadow-lg sm:rounded-2xl sm:p-4">
-        <p className="truncate text-[11px] text-slate-400 sm:text-sm">
+      <div className="brand-card min-w-0 p-3 sm:p-4">
+        <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">
           Jokers left
         </p>
-        <p className="mt-1 text-xl font-bold sm:mt-2 sm:text-3xl">
+        <p className="mt-1 text-xl font-black text-amber-300 sm:mt-2 sm:text-3xl">
           {jokersLeft}
         </p>
       </div>

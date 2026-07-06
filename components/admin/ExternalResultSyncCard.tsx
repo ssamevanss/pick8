@@ -166,6 +166,7 @@ export default function ExternalResultSyncCard({
           type="button"
           onClick={() => runSync("dry-run")}
           disabled={!summary.activeSeasonId || isLoading}
+          aria-busy={isLoading && activeAction === "dry-run"}
           className="rounded-lg border border-emerald-500/40 px-4 py-3 text-sm font-semibold text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isLoading && activeAction === "dry-run"
@@ -177,6 +178,7 @@ export default function ExternalResultSyncCard({
           type="button"
           onClick={() => runSync("sync")}
           disabled={!summary.activeSeasonId || isLoading}
+          aria-busy={isLoading && activeAction === "sync"}
           className="rounded-lg bg-amber-400 px-4 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isLoading && activeAction === "sync"

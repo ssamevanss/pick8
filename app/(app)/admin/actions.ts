@@ -10,6 +10,7 @@ import { upsertActivityNotification } from "@/utils/activity";
 import { upsertFixturesPickedActivity } from "@/utils/fixture-activity";
 import { sendPickerUpNextEmail } from "@/utils/email-notifications";
 import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
+import { getFootballDataCompetitionOption } from "@/utils/football-competitions";
 import {
   buildLocalFixtureFromExternal,
   mapExternalStatusToFixtureStatus,
@@ -142,11 +143,11 @@ async function requireAdmin() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("role")
+    .select("role, status")
     .eq("id", user.id)
     .single();
 
-  if (profile?.role !== "admin") {
+  if (profile?.role !== "admin" || profile.status !== "approved") {
     redirect("/dashboard?error=Admin access required");
   }
 
@@ -1444,6 +1445,128 @@ export async function activateSeason(formData: FormData) {
   revalidatePath("/predictions");
   revalidatePath("/pick-fixtures");
   revalidatePath("/leaderboard");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
+export async function updateActiveSeasonProviderSettings(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const seasonId = String(formData.get("season_id") ?? "");
+  const baseProviderRaw = String(formData.get("base_provider") ?? "none");
+  const baseCompetitionCode = String(
+    formData.get("base_competition_code") ?? "",
+  );
+  const providerSeason =
+    String(formData.get("provider_season") ?? "").trim() || null;
+  const fixtureImportEnabled =
+    String(formData.get("fixture_import_enabled") ?? "") === "on";
+  const resultSyncEnabled =
+    String(formData.get("result_sync_enabled") ?? "") === "on";
+
+  if (!seasonId) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No active season selected",
+      }),
+    );
+  }
+
+  const { data: activeSeason, error: activeSeasonError } = await supabase
+    .from("seasons")
+    .select("id, status")
+    .eq("id", seasonId)
+    .eq("status", "active")
+    .single();
+
+  if (activeSeasonError || !activeSeason) {
+    redirect(
+      getSeasonRedirectUrl({
+        error:
+          activeSeasonError?.message ??
+          "Provider settings can only be changed for the active season",
+      }),
+    );
+  }
+
+  if (baseProviderRaw === "none") {
+    const { error } = await supabase
+      .from("seasons")
+      .update({
+        base_provider: null,
+        base_competition_code: null,
+        base_competition_name: null,
+        base_competition_external_id: null,
+        provider_season: providerSeason,
+        fixture_import_enabled: false,
+        result_sync_enabled: false,
+      })
+      .eq("id", seasonId);
+
+    if (error) {
+      redirect(
+        getSeasonRedirectUrl({
+          error: error.message,
+        }),
+      );
+    }
+
+    revalidatePath("/admin");
+    revalidatePath("/pick-fixtures");
+
+    redirect(
+      getSeasonRedirectUrl({
+        saved: "1",
+      }),
+    );
+  }
+
+  if (baseProviderRaw !== "football_data") {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "Unsupported provider",
+      }),
+    );
+  }
+
+  const competition = getFootballDataCompetitionOption(baseCompetitionCode);
+
+  if (!competition) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "Unsupported football-data competition",
+      }),
+    );
+  }
+
+  const { error } = await supabase
+    .from("seasons")
+    .update({
+      base_provider: "football_data",
+      base_competition_code: competition.external_competition_code,
+      base_competition_name: competition.name,
+      base_competition_external_id: competition.external_competition_id,
+      provider_season: providerSeason,
+      fixture_import_enabled: fixtureImportEnabled,
+      result_sync_enabled: resultSyncEnabled,
+    })
+    .eq("id", seasonId);
+
+  if (error) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: error.message,
+      }),
+    );
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/pick-fixtures");
+  revalidatePath("/dashboard");
 
   redirect(
     getSeasonRedirectUrl({

@@ -46,11 +46,11 @@ async function requireAdmin() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("role")
+    .select("role, status")
     .eq("id", user.id)
     .single();
 
-  if (profile?.role !== "admin") {
+  if (profile?.role !== "admin" || profile.status !== "approved") {
     return { error: Response.json({ error: "Forbidden" }, { status: 403 }) };
   }
 

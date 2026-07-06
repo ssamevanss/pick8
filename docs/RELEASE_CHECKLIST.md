@@ -6,6 +6,9 @@ Use this checklist before inviting real users, launching a real season, or deplo
 
 - Open the app while logged out and confirm protected pages redirect to `/login`.
 - Sign up with a valid email, display name, password, and the correct league code.
+- Try an invalid invite code and confirm email, display name, and invite code
+  remain filled while passwords stay empty.
+- Try mismatched signup passwords and confirm the client-side message appears.
 - Confirm the new user lands on `/pending`.
 - Confirm the pending user cannot access Home, Predictions, Pick Fixtures, Leaderboard, or Admin.
 - Log in as an admin.
@@ -17,6 +20,12 @@ Use this checklist before inviting real users, launching a real season, or deplo
 - Re-enable the user.
 - Confirm the user can log in again.
 - Confirm a normal player cannot open `/admin`.
+- Use Forgot password from the login page.
+- Confirm `/forgot-password` preserves the email after submit and shows the
+  neutral success message.
+- Open a Supabase password reset email in the test account and confirm it lands
+  on `/reset-password`.
+- Set a new password and confirm the new password can sign in.
 
 ## 2. Season Lifecycle
 
@@ -24,6 +33,7 @@ In Admin -> Season:
 
 - Create a draft test season.
 - Confirm draft/test season is not visible in normal player flows.
+- Go to Admin -> Gameweeks.
 - Generate gameweeks for the test season.
 - Auto-assign fixture pickers.
 - Manually change one gameweek picker.
@@ -45,9 +55,11 @@ In Admin -> Season:
 
 - Log in as the assigned picker for an eligible active-season gameweek.
 - Confirm Pick Fixtures is visible when the picker has an unlocked assigned gameweek.
-- Select four fixtures with home team, away team, kickoff, and competition.
+- For a normal PL-style gameweek, select four fixtures with home team, away team, kickoff, and competition.
+- For a WC/cup/test gameweek, select the expected available fixture count for the chosen external matchday group, such as two fixtures for a two-match block.
 - Save fixtures.
 - Confirm fixtures picked activity appears on Home.
+- Confirm fixture-picked activity says the current fixture count, not always four.
 - Log in as a non-assigned user and confirm they cannot pick fixtures for that gameweek.
 - As the assigned picker, edit fixtures before any predictions exist.
 - Save and confirm changes persist.
@@ -76,7 +88,7 @@ In Admin -> Season:
 
 ## 5. Results And Scoring
 
-In Admin -> Results:
+In Admin -> Gameweeks:
 
 - Open a gameweek with selected fixtures.
 - Confirm a friendly message appears when no fixtures exist.
@@ -102,7 +114,7 @@ In Admin -> Results:
 
 ## 6. Activity And Leaderboard
 
-- Confirm fixtures picked activity appears after four fixtures are saved.
+- Confirm fixtures picked activity appears after the expected fixture count is saved.
 - Complete all fixtures in a gameweek.
 - Confirm gameweek complete activity appears.
 - Confirm weekly winners, weekly leaderboard, biggest risers/fallers, and next picker appear where applicable.
@@ -150,8 +162,10 @@ Check on a phone-sized viewport:
 - Predictions
 - Pick Fixtures
 - Leaderboard
+- Admin -> Overview
+- Admin -> Users
 - Admin -> Season
-- Admin -> Results
+- Admin -> Gameweeks
 - Admin -> Maintenance
 
 Minimum acceptable standard:
@@ -182,7 +196,11 @@ CRON_SECRET
 Confirm Supabase redirect URLs include:
 
 - Production Vercel URL
-- Localhost URL
+- `https://whoyougot.ie/auth/callback`
+- Local development `/auth/callback` URL when testing locally
+
+Confirm Supabase Auth password reset email uses the Supabase confirmation URL
+that redirects through `/auth/callback`.
 
 Confirm expected schema fields exist:
 
@@ -199,7 +217,9 @@ notifications.event_key
 notifications.metadata
 notifications.season_id
 notifications.gameweek_id
-prediction_reminders
+external_competitions
+external_fixtures
+email_notifications
 ```
 
 Confirm one active season max:
@@ -237,8 +257,11 @@ Then:
 - Check Pick Fixtures if the admin is assigned to an unlocked gameweek.
 - Check Leaderboard.
 - Check Admin -> Season.
-- Check Admin -> Results.
+- In Admin -> Season settings, confirm the active season provider/competition and import/result-sync toggles.
+- Check Admin -> Gameweeks.
 - Check Admin -> Maintenance.
+- Dry-run prediction reminders with `dry_run=1` and confirm no emails or email logs are written.
+- Test `/api/cron/sync-external-results` during an idle window and confirm it returns `api_call_count = 0`.
 - Download a production baseline export before inviting users.
 - Check Vercel logs.
 - Check Supabase logs if anything looks wrong.
@@ -261,6 +284,9 @@ Ready for real users when:
 - Archived leaderboard visibility works.
 - Maintenance export works.
 - Health check has no unexpected red warnings.
+- External fixture import/result sync settings are correct for the active season.
+- Reminder and result-sync scheduler secrets have been tested.
+- `email_notifications` de-dupe table exists.
 - Baseline export has been downloaded and stored safely.
 - Mobile pages are usable.
 
@@ -272,6 +298,9 @@ Do not launch if:
 - Partial score entry is accepted.
 - Prediction or fixture picker actions can affect non-active seasons.
 - Result save does not update scoring/leaderboard.
+- Cron endpoints accept missing or invalid secrets.
+- Reminder dry-runs send email or insert email logs.
+- Result sync calls football-data.org when no selected fixture is in the sync window.
 - Export fails or cannot be opened.
 
 ## 12. Post-Launch Weekly Routine
@@ -281,7 +310,9 @@ Each gameweek:
 - Confirm the assigned picker has selected fixtures.
 - Confirm kickoff times are correct.
 - Confirm predictions are open.
-- Enter results after fixtures complete.
+- Confirm reminder cron dry-run shows only incomplete users.
+- If using external result sync, confirm selected linked fixtures are inside the sync window and monitor the scheduler response.
+- Enter or correct results manually after fixtures complete when provider sync is unavailable or needs override.
 - Check scoring and leaderboard.
 - Check activity feed.
 - Download a season export.

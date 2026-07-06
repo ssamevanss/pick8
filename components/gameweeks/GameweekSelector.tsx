@@ -52,17 +52,17 @@ export default function GameweekSelector({
   }
 
   return (
-    <div className="mb-4 grid grid-cols-[40px_minmax(0,1fr)_40px] items-center rounded-2xl bg-slate-950 p-2 ring-1 ring-slate-800 sm:grid-cols-[48px_minmax(0,1fr)_48px]">
+    <div className="mb-4 grid grid-cols-[40px_minmax(0,1fr)_40px] items-center rounded-2xl border border-white/10 bg-slate-950/70 p-2 sm:grid-cols-[48px_minmax(0,1fr)_48px]">
       {previousGameweek ? (
         <Link
           href={getGameweekHref(basePath, previousGameweek.id)}
-          className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-slate-200 sm:h-10 sm:w-10"
+          className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-slate-200 transition hover:text-white active:scale-95 sm:h-10 sm:w-10"
           aria-label="Previous gameweek"
         >
           ←
         </Link>
       ) : (
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-slate-700 sm:h-10 sm:w-10">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900/70 text-lg font-bold text-slate-700 sm:h-10 sm:w-10">
           ←
         </span>
       )}
@@ -76,7 +76,7 @@ export default function GameweekSelector({
           <select
             value={selectedGameweek?.id ?? ""}
             onChange={handleGameweekChange}
-            className="mt-1 max-w-full cursor-pointer appearance-none rounded-lg bg-slate-950 px-2 py-1 text-center text-sm font-semibold text-white outline-none ring-1 ring-transparent hover:bg-slate-900 focus:ring-emerald-500 sm:px-3 sm:text-base"
+            className="mt-1 max-w-full cursor-pointer appearance-none rounded-lg bg-slate-900/70 px-2 py-1 text-center text-sm font-bold text-white outline-none ring-1 ring-transparent hover:bg-slate-900 focus:ring-emerald-400 sm:px-3 sm:text-base"
             aria-label="Select gameweek"
           >
             {gameweeks.map((gameweek) => (
@@ -93,13 +93,13 @@ export default function GameweekSelector({
       {nextGameweek ? (
         <Link
           href={getGameweekHref(basePath, nextGameweek.id)}
-          className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-slate-200 sm:h-10 sm:w-10"
+          className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-slate-200 transition hover:text-white active:scale-95 sm:h-10 sm:w-10"
           aria-label="Next gameweek"
         >
           →
         </Link>
       ) : (
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-slate-700 sm:h-10 sm:w-10">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900/70 text-lg font-bold text-slate-700 sm:h-10 sm:w-10">
           →
         </span>
       )}
