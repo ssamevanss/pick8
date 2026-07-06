@@ -1,6 +1,12 @@
 import PredictionOutcomeBadge from "./PredictionOutcomeBadge";
 import TeamIdentity from "./TeamIdentity";
-import type { Fixture, FixtureTeamForm, Prediction, TeamFormResult } from "./types";
+import type {
+  ExternalFixtureScore,
+  Fixture,
+  FixtureTeamForm,
+  Prediction,
+  TeamFormResult,
+} from "./types";
 
 type FixturePredictionCardProps = {
   fixture: Fixture;
@@ -10,6 +16,8 @@ type FixturePredictionCardProps = {
   ownJokerFixtureIds: Set<string>;
   jokersLeft: number;
   teamForm: FixtureTeamForm;
+  isDoubleGameweek?: boolean;
+  externalScore?: ExternalFixtureScore | null;
 };
 
 function formatKickoff(kickoffAt: string) {
@@ -95,6 +103,35 @@ function formatFormDate(value: string) {
   return new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
     month: "short",
+  }).format(new Date(value));
+}
+
+function formatExternalStatus(status: string | null | undefined) {
+  if (!status) return "Provider";
+
+  const labels: Record<string, string> = {
+    IN_PLAY: "Live",
+    LIVE: "Live",
+    PAUSED: "Paused",
+    TIMED: "Timed",
+    SCHEDULED: "Scheduled",
+    FINISHED: "Final",
+    POSTPONED: "Postponed",
+    SUSPENDED: "Suspended",
+    CANCELLED: "Cancelled",
+  };
+
+  return labels[status] ?? status.replaceAll("_", " ").toLowerCase();
+}
+
+function formatLastSynced(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
   }).format(new Date(value));
 }
 
@@ -234,6 +271,95 @@ function PredictionSplit({
   );
 }
 
+function JokerPlayingCard({
+  selected,
+  muted = false,
+}: {
+  selected: boolean;
+  muted?: boolean;
+}) {
+  return (
+    <span
+      className={`relative grid h-10 w-8 shrink-0 place-items-center rounded-lg border text-[9px] font-black shadow-sm transition ${
+        selected
+          ? "border-amber-100 bg-gradient-to-br from-amber-200 to-amber-400 text-slate-950 shadow-lg shadow-amber-500/30 ring-2 ring-amber-200/60"
+          : muted
+            ? "border-slate-700 bg-slate-900 text-slate-500"
+            : "border-amber-300/35 bg-slate-950/90 text-amber-200 opacity-75"
+      }`}
+      aria-hidden="true"
+    >
+      <span className="absolute left-1 top-0.5 text-[8px]">J</span>
+      <span className="text-[12px] leading-none">2x</span>
+      <span className="absolute bottom-0.5 right-1 rotate-180 text-[8px]">
+        J
+      </span>
+    </span>
+  );
+}
+
+function JokerControl({
+  fixtureId,
+  hasJoker,
+  disabled,
+  isLocked,
+}: {
+  fixtureId: string;
+  hasJoker: boolean;
+  disabled: boolean;
+  isLocked: boolean;
+}) {
+  if (disabled) {
+    return (
+      <div
+        className={`inline-flex min-h-11 items-center gap-2 rounded-2xl border px-2.5 py-1.5 text-xs font-bold shadow-sm ${
+          hasJoker
+            ? "border-amber-300/50 bg-gradient-to-br from-amber-300/25 to-amber-600/10 text-amber-100 shadow-amber-950/30"
+            : "border-slate-700 bg-slate-900 text-slate-400"
+        }`}
+        title={
+          hasJoker
+            ? "Joker applied"
+            : isLocked
+              ? "Fixture locked"
+              : "No Jokers left"
+        }
+      >
+        <JokerPlayingCard selected={hasJoker} muted={!hasJoker} />
+        <span className="hidden leading-tight min-[380px]:inline">
+          {hasJoker ? "Joker" : isLocked ? "Locked" : "No Jokers"}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-2xl border border-amber-300/25 bg-gradient-to-br from-slate-900 to-amber-950/20 px-2.5 py-1.5 text-xs font-bold text-slate-200 shadow-sm shadow-black/20 transition hover:border-amber-300/50 hover:text-white has-[:checked]:border-amber-200 has-[:checked]:from-amber-300/35 has-[:checked]:to-amber-600/25 has-[:checked]:text-amber-50 has-[:checked]:shadow-lg has-[:checked]:shadow-amber-950/40 has-[:checked]:ring-2 has-[:checked]:ring-amber-300/35">
+      <input
+        name={`use_joker_${fixtureId}`}
+        type="checkbox"
+        defaultChecked={hasJoker}
+        className="peer sr-only"
+        aria-label={hasJoker ? "Joker active for 2x points" : "Use Joker for 2x points on this fixture"}
+      />
+
+      <span className="peer-checked:hidden">
+        <JokerPlayingCard selected={false} />
+      </span>
+      <span className="hidden peer-checked:inline">
+        <JokerPlayingCard selected />
+      </span>
+
+      <span className="transition peer-checked:hidden min-[380px]:inline">
+        Joker
+      </span>
+      <span className="hidden transition peer-checked:inline">
+        Joker active
+      </span>
+    </label>
+  );
+}
+
 export default function FixturePredictionCard({
   fixture,
   predictions,
@@ -242,6 +368,8 @@ export default function FixturePredictionCard({
   ownJokerFixtureIds,
   jokersLeft,
   teamForm,
+  isDoubleGameweek = false,
+  externalScore,
 }: FixturePredictionCardProps) {
   const ownPrediction = predictions.find(
     (prediction) => prediction.user_id === currentUserId,
@@ -253,9 +381,34 @@ export default function FixturePredictionCard({
 
   const hasActualResult =
     fixture.home_score !== null && fixture.away_score !== null;
+  const hasExternalDisplayScore =
+    !hasActualResult &&
+    externalScore?.home_score !== null &&
+    externalScore?.home_score !== undefined &&
+    externalScore?.away_score !== null &&
+    externalScore?.away_score !== undefined;
+  const displayedHomeScore = hasActualResult
+    ? fixture.home_score
+    : hasExternalDisplayScore
+      ? externalScore.home_score
+      : null;
+  const displayedAwayScore = hasActualResult
+    ? fixture.away_score
+    : hasExternalDisplayScore
+      ? externalScore.away_score
+      : null;
+  const scoreLabel = hasActualResult
+    ? "Actual result"
+    : hasExternalDisplayScore
+      ? formatExternalStatus(externalScore?.status)
+      : "Result pending";
+  const externalSyncedText = hasExternalDisplayScore
+    ? formatLastSynced(externalScore?.last_synced_at ?? fixture.external_last_synced_at)
+    : null;
 
-  const hasJoker = ownJokerFixtureIds.has(fixture.id);
-  const jokerDisabled = isLocked || (!hasJoker && jokersLeft <= 0);
+  const hasJoker = !isDoubleGameweek && ownJokerFixtureIds.has(fixture.id);
+  const jokerDisabled =
+    isLocked || isDoubleGameweek || (!hasJoker && jokersLeft <= 0);
 
   const sortedPredictions = [...predictions].sort(sortPredictions);
   const predictionGroups = [
@@ -290,15 +443,28 @@ export default function FixturePredictionCard({
       {isLocked ? (
         <div className="mt-3 rounded-xl border border-white/10 bg-slate-900/70 p-3">
           <p className="text-xs uppercase tracking-wide text-slate-500">
-            {hasActualResult ? "Actual result" : "Result pending"}
+            {scoreLabel}
           </p>
 
           <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
             <TeamIdentity teamName={fixture.home_team} />
-            <span className="rounded-xl bg-slate-950 px-3 py-2 text-lg font-black tabular-nums text-white">
-              {hasActualResult ? fixture.home_score : "-"} -{" "}
-              {hasActualResult ? fixture.away_score : "-"}
-            </span>
+            <div className="text-center">
+              <span
+                className={`rounded-xl px-3 py-2 text-lg font-black tabular-nums text-white ${
+                  hasExternalDisplayScore
+                    ? "bg-emerald-400/15 ring-1 ring-emerald-300/30"
+                    : "bg-slate-950"
+                }`}
+              >
+                {displayedHomeScore ?? "-"} - {displayedAwayScore ?? "-"}
+              </span>
+              {hasExternalDisplayScore ? (
+                <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                  {formatExternalStatus(externalScore?.status)}
+                  {externalSyncedText ? ` · updated ${externalSyncedText}` : ""}
+                </p>
+              ) : null}
+            </div>
             <TeamIdentity teamName={fixture.away_team} align="right" />
           </div>
 
@@ -339,97 +505,55 @@ export default function FixturePredictionCard({
           )}
         </div>
       ) : (
-        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0 flex-1">
-            <TeamIdentity teamName={fixture.home_team} />
-            <div className="mt-2">
-              <TeamIdentity teamName={fixture.away_team} />
-            </div>
-          </div>
+        <div className="mt-3 rounded-2xl border border-white/10 bg-slate-900/55 p-3">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]">
+            <TeamIdentity teamName={fixture.home_team} compact />
 
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-1.5 rounded-2xl bg-slate-950/60 p-1.5">
               <input
                 name={`home_score_${fixture.id}`}
-                type="number"
+                type="text"
                 inputMode="numeric"
-                min="0"
+                pattern="[0-9]*"
+                maxLength={1}
                 defaultValue={ownPrediction?.home_score ?? ""}
-                className="h-12 w-16 appearance-none rounded-xl border border-white/10 bg-slate-900 text-center text-xl font-black outline-none transition focus:border-emerald-400/60 [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                data-score-input="true"
+                autoComplete="off"
+                className="h-11 w-11 appearance-none rounded-xl border border-white/10 bg-slate-900 text-center text-xl font-black text-white outline-none transition focus:border-emerald-300/60 disabled:border-emerald-300/30 disabled:bg-emerald-300/10 disabled:text-white disabled:opacity-100"
                 aria-label={`${fixture.home_team} score`}
               />
-              <span className="text-slate-500">-</span>
+              <span className="text-sm font-black text-slate-500">-</span>
               <input
                 name={`away_score_${fixture.id}`}
-                type="number"
+                type="text"
                 inputMode="numeric"
-                min="0"
+                pattern="[0-9]*"
+                maxLength={1}
                 defaultValue={ownPrediction?.away_score ?? ""}
-                className="h-12 w-16 appearance-none rounded-xl border border-white/10 bg-slate-900 text-center text-xl font-black outline-none transition focus:border-emerald-400/60 [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                data-score-input="true"
+                autoComplete="off"
+                className="h-11 w-11 appearance-none rounded-xl border border-white/10 bg-slate-900 text-center text-xl font-black text-white outline-none transition focus:border-emerald-300/60 disabled:border-emerald-300/30 disabled:bg-emerald-300/10 disabled:text-white disabled:opacity-100"
                 aria-label={`${fixture.away_team} score`}
               />
             </div>
 
-            {jokerDisabled ? (
-              <div
-                className={`inline-flex min-h-11 items-center gap-2 rounded-2xl border px-3 text-sm font-bold shadow-sm ${
-                  hasJoker
-                    ? "border-amber-300/50 bg-gradient-to-br from-amber-300/25 to-amber-600/10 text-amber-100 shadow-amber-950/30"
-                    : "border-slate-700 bg-slate-900 text-slate-400"
-                }`}
-                title={
-                  hasJoker
-                    ? "Joker applied"
-                    : isLocked
-                      ? "Fixture locked"
-                      : "No Jokers left"
-                }
-              >
-                <span
-                  className={`inline-flex h-7 w-7 items-center justify-center rounded-xl text-xs font-black ring-1 ring-inset ${
-                    hasJoker
-                      ? "bg-amber-300 text-slate-950 ring-amber-500/30"
-                      : "bg-slate-950/70 text-slate-500 ring-slate-700"
-                  }`}
-                >
-                  J
-                </span>
+            <TeamIdentity teamName={fixture.away_team} align="right" compact />
 
-                <span className="leading-tight">
-                  {hasJoker
-                    ? "Joker active"
-                    : isLocked
-                      ? "Locked"
-                      : "No Jokers left"}
+            {isDoubleGameweek ? (
+              <div className="col-span-3 flex justify-center pt-1 sm:col-span-1 sm:justify-end sm:pt-0">
+                <span className="inline-flex min-h-11 items-center rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-xs font-black uppercase tracking-wide text-emerald-200">
+                  Double GW 2x
                 </span>
-
-                {hasJoker ? (
-                  <span className="rounded-full bg-slate-950/60 px-2 py-0.5 text-[11px] font-black text-amber-200">
-                    2x
-                  </span>
-                ) : null}
               </div>
             ) : (
-              <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-2xl border border-amber-300/25 bg-gradient-to-br from-slate-900 to-amber-950/20 px-3 py-2 text-sm font-bold text-slate-200 shadow-sm shadow-black/20 transition hover:border-amber-300/50 hover:text-white has-[:checked]:border-amber-300/70 has-[:checked]:from-amber-300/25 has-[:checked]:to-amber-700/15">
-                <input
-                  name={`use_joker_${fixture.id}`}
-                  type="checkbox"
-                  defaultChecked={hasJoker}
-                  className="peer sr-only"
+              <div className="col-span-3 flex justify-center pt-1 sm:col-span-1 sm:justify-end sm:pt-0">
+                <JokerControl
+                  fixtureId={fixture.id}
+                  hasJoker={hasJoker}
+                  disabled={jokerDisabled}
+                  isLocked={isLocked}
                 />
-
-                <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl bg-slate-950/70 text-xs font-black ring-1 ring-inset ring-slate-700 transition peer-checked:bg-amber-300 peer-checked:text-slate-950 peer-checked:ring-amber-500/30">
-                  J
-                </span>
-
-                <span className="transition peer-checked:text-amber-200">
-                  Joker
-                </span>
-
-                <span className="rounded-full bg-slate-950/60 px-2 py-0.5 text-[11px] font-black text-amber-200 transition">
-                  2x
-                </span>
-              </label>
+              </div>
             )}
           </div>
         </div>
@@ -466,9 +590,11 @@ export default function FixturePredictionCard({
                 <div className="mt-2 space-y-2">
                   {group.predictions.map((prediction) => {
                     const isOwnPrediction = prediction.user_id === currentUserId;
-                    const usedJoker = jokerPredictionKeys.has(
-                      `${prediction.fixture_id}:${prediction.user_id}`,
-                    );
+                    const usedJoker =
+                      !isDoubleGameweek &&
+                      jokerPredictionKeys.has(
+                        `${prediction.fixture_id}:${prediction.user_id}`,
+                      );
 
                     return (
                       <div

@@ -148,7 +148,7 @@ async function requireFixtureManagerForGameweek(gameweekId: string) {
     }
   }
 
-  return { supabase, gameweek };
+  return { supabase, gameweek, user };
 }
 
 export async function savePickerFixtures(formData: FormData) {
@@ -160,7 +160,7 @@ export async function savePickerFixtures(formData: FormData) {
     );
   }
 
-  const { supabase } = await requireFixtureManagerForGameweek(gameweekId);
+  const { supabase, user } = await requireFixtureManagerForGameweek(gameweekId);
 
   for (const slotNumber of slotNumbers) {
     const fixtureId = String(formData.get(`fixture_id_${slotNumber}`) ?? "");
@@ -254,6 +254,7 @@ export async function savePickerFixtures(formData: FormData) {
     await upsertFixturesPickedActivity({
       supabase,
       gameweekId,
+      actioningUserId: user.id,
     });
   } catch (error) {
     redirect(
@@ -302,7 +303,7 @@ export async function saveExternalPickerFixtures(formData: FormData) {
     );
   }
 
-  const { supabase, gameweek } =
+  const { supabase, gameweek, user } =
     await requireFixtureManagerForGameweek(gameweekId);
 
   const { data: activeSeason } = await getActiveSeason(
@@ -529,6 +530,7 @@ export async function saveExternalPickerFixtures(formData: FormData) {
     await upsertFixturesPickedActivity({
       supabase,
       gameweekId,
+      actioningUserId: user.id,
     });
   } catch (error) {
     redirect(

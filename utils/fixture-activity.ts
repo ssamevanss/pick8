@@ -22,6 +22,7 @@ type GameweekWithPickerRow = {
   season_id: string;
   gameweek_number: number;
   name: string | null;
+  is_double_gameweek: boolean | null;
   fixture_picker_id: string | null;
   profiles:
     | {
@@ -62,9 +63,11 @@ function formatKickoffForActivity(kickoffAt: string) {
 export async function upsertFixturesPickedActivity({
   supabase,
   gameweekId,
+  actioningUserId,
 }: {
   supabase: SupabaseLikeClient;
   gameweekId: string;
+  actioningUserId?: string | null;
 }) {
   const { data: gameweek } = await supabase
     .from("gameweeks")
@@ -74,6 +77,7 @@ export async function upsertFixturesPickedActivity({
       season_id,
       gameweek_number,
       name,
+      is_double_gameweek,
       fixture_picker_id,
       profiles (
         display_name
@@ -131,12 +135,15 @@ export async function upsertFixturesPickedActivity({
   const fixtureCountText = `${fixtureCount} fixture${
     fixtureCount === 1 ? "" : "s"
   }`;
+  const doubleGameweekText = typedGameweek.is_double_gameweek
+    ? " It is a Double Gameweek, so all points count 2x."
+    : "";
 
   await upsertActivityNotification({
     eventKey,
     type: "fixtures_selected",
     title: `${pickerName} picked fixtures for ${gameweekName}`,
-    body: `${pickerName} picked ${fixtureCountText} for ${gameweekName}. ${gameweekName} starts at ${kickoffText}.`,
+    body: `${pickerName} picked ${fixtureCountText} for ${gameweekName}. ${gameweekName} starts at ${kickoffText}.${doubleGameweekText}`,
     seasonId: typedGameweek.season_id,
     gameweekId,
     metadata: {
@@ -144,6 +151,7 @@ export async function upsertFixturesPickedActivity({
       gameweekId,
       gameweekName,
       fixtureCount,
+      isDoubleGameweek: Boolean(typedGameweek.is_double_gameweek),
       firstKickoff,
       kickoffText,
       fixtures: fixtureList.map((fixture) => ({
@@ -159,10 +167,23 @@ export async function upsertFixturesPickedActivity({
       const emailResult = await sendPredictionsOpenEmails({
         supabase: createAdminClient(),
         gameweekId,
+        excludeUserId: actioningUserId ?? null,
       });
 
       if (emailResult.error) {
         console.warn(`Predictions-open email skipped: ${emailResult.error}`);
+      }
+
+      const errored = emailResult.summaries.filter(
+        (summary) => summary.status === "error",
+      );
+
+      if (errored.length > 0) {
+        console.warn(
+          `Predictions-open email errors for ${gameweekId}: ${errored
+            .map((summary) => `${summary.email ?? summary.user_id}: ${summary.reason}`)
+            .join("; ")}`,
+        );
       }
     } catch (error) {
       console.warn(

@@ -251,7 +251,87 @@ uses the current fixture count for the gameweek, so edited two-fixture or
 one-fixture matchdays should not leave future notifications saying four
 fixtures were picked.
 
+Double Gameweeks require:
+
+```bash
+docs/2026-07-06-double-gameweeks.sql
+```
+
+Admins can toggle Double Gameweek in Admin -> Gameweeks. All prediction points
+in that gameweek count 2x, Jokers are disabled, and existing Joker rows for the
+gameweek are removed so users do not lose a season Joker. If a completed
+gameweek is toggled, the save action rescoring path recalculates completed
+fixtures and the leaderboard.
+
 ### Scheduled external result sync
+
+Fixture refresh and result sync are separate jobs:
+
+- Fixture refresh updates upcoming team names, kickoff times, provider status,
+  and round/stage metadata before kickoff.
+- Result sync updates final scores after kickoff and triggers scoring,
+  leaderboard recalculation, and post-result activity.
+
+### Scheduled external fixture refresh
+
+Upcoming fixture refresh uses:
+
+```text
+/api/cron/refresh-external-fixtures
+```
+
+It requires `CRON_SECRET` and accepts:
+
+```text
+Authorization: Bearer <CRON_SECRET>
+```
+
+or:
+
+```text
+?token=<CRON_SECRET>
+```
+
+Dry-run local test:
+
+```bash
+curl "http://localhost:3000/api/cron/refresh-external-fixtures?token=$CRON_SECRET&dry_run=1"
+```
+
+Real local test:
+
+```bash
+curl "http://localhost:3000/api/cron/refresh-external-fixtures?token=$CRON_SECRET"
+```
+
+The route only runs when the active season has:
+
+```text
+base_provider = football_data
+fixture_import_enabled = true
+```
+
+If no eligible active season is configured, it returns a skipped response and
+does not call football-data.org. Refresh keeps provider calls low by fetching
+the active competition window once, then updating local cache rows and selected
+linked fixtures safely.
+
+Safe selected-fixture propagation:
+
+- kickoff changes are applied only to non-terminal linked fixtures
+- team names are updated when predictions do not exist, or when the local team
+  name is a placeholder such as `TBD`, `TBC`, `Winner of`, or `Loser of`
+- selected fixture scores are never changed by fixture refresh
+- completed/void/postponed selected fixtures are skipped
+- manually assigned World Cup `external_matchday` values are preserved when
+  football-data.org returns `matchday = null`
+
+Recommended scheduler frequency:
+
+- every 6 or 12 hours during normal league weeks
+- every 1 to 3 hours during cup/tournament knockout periods if teams are
+  resolving quickly
+- keep result sync separate at every 5 to 15 minutes around live match windows
 
 2.0E adds a protected cron-compatible route:
 
@@ -377,7 +457,11 @@ The email layer sends/logs:
   actionable. It is triggered by post-result activity and also checked by cron
   as a fallback.
 - `predictions_open`: one email per approved user when the current fixture set
-  is saved and complete.
+  is saved and complete. When the assigned picker saves fixtures, the picker is
+  excluded from the immediate email; they can still receive the 24h reminder if
+  their predictions are incomplete. Admin fixture saves can send/recover this
+  email even if predictions have already started, but event keys prevent
+  duplicates.
 - `predictions_24h`: one email per incomplete approved user when at least one
   selected fixture is within 24 hours of kickoff.
 
@@ -398,6 +482,8 @@ note outside the app if a fixture change is important after the first email.
 The 24-hour reminder checks actual selected/actionable fixtures. A two-fixture
 World Cup gameweek is complete once a user has predictions for those two
 fixtures; normal PL gameweeks still normally have four selected fixtures.
+Prediction-open and reminder emails mention Double Gameweek when the selected
+gameweek is marked as double.
 
 Expected full PL season volume for 30 players and 38 gameweeks:
 

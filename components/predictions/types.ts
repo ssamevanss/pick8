@@ -8,6 +8,17 @@ export type Fixture = {
   status: string;
   home_score: number | null;
   away_score: number | null;
+  external_provider?: string | null;
+  external_fixture_id?: string | null;
+  external_status?: string | null;
+  external_last_synced_at?: string | null;
+};
+
+export type ExternalFixtureScore = {
+  status: string | null;
+  home_score: number | null;
+  away_score: number | null;
+  last_synced_at: string | null;
 };
 
 export type TeamFormResult = {
@@ -29,6 +40,7 @@ export type Gameweek = {
   id: string;
   gameweek_number: number;
   name: string | null;
+  is_double_gameweek?: boolean;
 };
 
 export type Prediction = {

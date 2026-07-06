@@ -192,6 +192,7 @@ Important columns:
 - `gameweek_number`
 - `name`
 - `fixture_picker_id`
+- `is_double_gameweek`
 
 Rules:
 
@@ -199,6 +200,8 @@ Rules:
 - Source of truth for fixture picker is `gameweeks.fixture_picker_id`.
 - Gameweek picker assignment is directly editable by admin.
 - Auto-assignment rotates approved users across gameweeks.
+- `is_double_gameweek = true` doubles all prediction points in that gameweek
+  and disables Joker use for that gameweek.
 
 ## `fixtures`
 
@@ -385,6 +388,8 @@ Rules:
 - Joker doubles scoring for one fixture.
 - Three Jokers per season is the intended rule.
 - Joker should be refunded if fixture is postponed/voided.
+- Joker usage in Double Gameweeks is ignored/removed and should not count
+  against the season Joker allowance.
 
 ## `leaderboard_entries`
 

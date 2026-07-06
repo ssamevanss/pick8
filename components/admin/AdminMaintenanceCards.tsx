@@ -3,6 +3,7 @@ import PendingLink from "@/components/navigation/PendingLink";
 import ExternalResultSyncCard, {
   type ExternalResultSyncSummary,
 } from "@/components/admin/ExternalResultSyncCard";
+import ExternalFixtureRefreshCard from "@/components/admin/ExternalFixtureRefreshCard";
 
 export type MaintenanceSeasonOption = {
   id: string;
@@ -226,6 +227,8 @@ export default function AdminMaintenanceCards({
           </div>
         ) : null}
       </div>
+
+      <ExternalFixtureRefreshCard />
 
       <ExternalResultSyncCard summary={externalResultSyncSummary} />
 

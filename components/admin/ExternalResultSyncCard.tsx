@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useToast } from "@/components/toast/ToastProvider";
 
 export type ExternalResultSyncSummary = {
   activeSeasonId: string | null;
@@ -49,6 +50,7 @@ function formatJson(value: unknown) {
 export default function ExternalResultSyncCard({
   summary,
 }: ExternalResultSyncCardProps) {
+  const { showToast } = useToast();
   const [result, setResult] = useState<SyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -92,6 +94,17 @@ export default function ExternalResultSyncCard({
 
       if (!response.ok) {
         setError(payload.error ?? `Result sync failed with ${response.status}.`);
+      } else {
+        showToast({
+          title:
+            mode === "sync"
+              ? "Result updated"
+              : "Maintenance action completed",
+          description:
+            mode === "sync"
+              ? "External result sync completed."
+              : "Dry-run result sync completed.",
+        });
       }
     } catch (syncError) {
       setError(

@@ -14,6 +14,7 @@ import AdminUserCard, {
 import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import type { Fixture, Gameweek } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/admin";
 import { getActiveSeason } from "@/utils/seasons";
 import { redirect } from "next/navigation";
 import {
@@ -34,6 +35,7 @@ import {
   rescoreActiveSeasonAndRecalculateLeaderboard,
 } from "./actions";
 import SubmitButton from "@/components/forms/SubmitButton";
+import ToastTrigger from "@/components/toast/ToastTrigger";
 import AdminSeasonSetupCard from "@/components/admin/AdminSeasonSetupCard";
 import AdminSeasonControlsCard, {
   type AdminSeasonRow,
@@ -107,6 +109,30 @@ function getSelectedTab(tab: string | undefined): AdminTab {
   return "overview";
 }
 
+function getAdminSavedToastTitle(tab: string | undefined) {
+  if (tab === "results") {
+    return "Result updated";
+  }
+
+  if (tab === "users") {
+    return "User updated";
+  }
+
+  if (tab === "maintenance") {
+    return "Maintenance action completed";
+  }
+
+  if (tab === "season" || tab === "create") {
+    return "Settings saved";
+  }
+
+  if (tab === "fixtures" || tab === "gameweeks") {
+    return "Fixtures picked";
+  }
+
+  return "Settings saved";
+}
+
 export default async function AdminPage({
   searchParams,
 }: {
@@ -122,6 +148,7 @@ export default async function AdminPage({
   const selectedGameweekId = params.gameweek;
 
   const supabase = await createClient();
+  const adminSupabase = createAdminClient();
 
   const {
     data: { user },
@@ -195,7 +222,7 @@ export default async function AdminPage({
   const { data: gameweeks } = activeSeason
     ? await supabase
         .from("gameweeks")
-        .select("id, gameweek_number, name")
+        .select("id, gameweek_number, name, is_double_gameweek")
         .eq("season_id", activeSeason.id)
         .order("gameweek_number", { ascending: true })
     : { data: null };
@@ -283,9 +310,14 @@ export default async function AdminPage({
           id,
           gameweek_number,
           name,
+          is_double_gameweek,
           fixture_picker_id,
           fixtures (
-            id
+            id,
+            status,
+            predictions (
+              id
+            )
           )
         `,
         )
@@ -356,18 +388,21 @@ export default async function AdminPage({
         .eq("season_id", activeSeason.id)
     : { count: 0 };
 
-  const { count: reminderCount, error: reminderCountError } = await supabase
+  const { count: reminderCount, error: reminderCountError } = await adminSupabase
     .from("email_notifications")
     .select("id", { count: "exact", head: true });
 
-  const { data: latestReminder, error: latestReminderError } = await supabase
+  const { data: latestReminder, error: latestReminderError } = await adminSupabase
     .from("email_notifications")
-    .select("sent_at")
+    .select("email_type, sent_at")
     .order("sent_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  const typedLatestReminder = latestReminder as { sent_at: string } | null;
+  const typedLatestReminder = latestReminder as {
+    email_type: string;
+    sent_at: string;
+  } | null;
 
   const completedFixturesWithNullScores = activeSeasonFixtures.filter(
     (fixture) =>
@@ -419,7 +454,7 @@ export default async function AdminPage({
       value: reminderCountError ? "Not ready" : "Ready",
       severity: reminderCountError ? "warning" : "ok",
       detail: reminderCountError
-        ? "Run the email_notifications SQL before enabling email notifications."
+        ? reminderCountError.message
         : `${reminderCount ?? 0} sent email notification log rows.`,
     },
     {
@@ -427,16 +462,21 @@ export default async function AdminPage({
       value:
         latestReminderError || !typedLatestReminder
           ? "None"
-          : new Intl.DateTimeFormat("en-GB", {
-              day: "2-digit",
-              month: "short",
-              hour: "2-digit",
-              minute: "2-digit",
-            }).format(new Date(typedLatestReminder.sent_at)),
+          : `${typedLatestReminder.email_type} · ${new Intl.DateTimeFormat(
+              "en-GB",
+              {
+                day: "2-digit",
+                month: "short",
+                hour: "2-digit",
+                minute: "2-digit",
+              },
+            ).format(new Date(typedLatestReminder.sent_at))}`,
       severity: latestReminderError ? "warning" : "ok",
       detail: latestReminderError
-        ? "Run the email_notifications SQL before enabling email notifications."
-        : "Most recent email notification log row.",
+        ? latestReminderError.message
+        : typedLatestReminder
+          ? `Most recent email notification: ${typedLatestReminder.email_type}.`
+          : "No email notification log rows yet.",
     },
   ];
 
@@ -690,9 +730,10 @@ export default async function AdminPage({
       />
 
       {params.saved ? (
-        <p className="brand-alert-success mt-4">
-          Saved successfully.
-        </p>
+        <ToastTrigger
+          title={getAdminSavedToastTitle(params.tab)}
+          triggerKey={`admin:${params.tab ?? selectedTab}:${params.saved}`}
+        />
       ) : null}
 
       {params.error ? (

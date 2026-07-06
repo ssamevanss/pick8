@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import SubmitButton from "@/components/forms/SubmitButton";
+import ToastTrigger from "@/components/toast/ToastTrigger";
 import type { Fixture, Gameweek } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
@@ -349,9 +350,7 @@ export default async function PickFixturesPage({
       </header>
 
       {params.saved ? (
-        <p className="brand-alert-success mb-4">
-          Fixtures saved.
-        </p>
+        <ToastTrigger title="Fixtures picked" triggerKey={`pick:${params.saved}`} />
       ) : null}
 
       {params.error ? (

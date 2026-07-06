@@ -1,6 +1,7 @@
 import Link from "next/link";
 import BrandMark from "@/components/brand/BrandMark";
 import ResetPasswordForm from "@/components/auth/ResetPasswordForm";
+import ToastTrigger from "@/components/toast/ToastTrigger";
 import { createClient } from "@/utils/supabase/server";
 import { updatePassword } from "./actions";
 
@@ -29,9 +30,11 @@ export default async function ResetPasswordPage({
 
         {params.updated ? (
           <>
-            <p className="brand-alert-success mt-4">
-              Your password has been updated.
-            </p>
+            <ToastTrigger
+              title="Password updated"
+              description="You can continue to the league."
+              triggerKey={`reset:${params.updated}`}
+            />
             <Link href="/dashboard" className="brand-button-primary mt-6 w-full">
               Continue to league
             </Link>

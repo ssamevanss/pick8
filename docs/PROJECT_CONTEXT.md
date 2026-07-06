@@ -95,6 +95,8 @@ Rules:
 - Players can only see their own predictions before kickoff.
 - After kickoff, all predictions become visible.
 - Joker can be applied before kickoff.
+- Double Gameweeks are marked on `gameweeks.is_double_gameweek`. In a Double
+  Gameweek, all prediction points count 2x and Jokers cannot be used or stacked.
 - Team visual identity uses local assets from `public/team-assets` via
   `utils/team-assets.ts`. Missing teams fall back to initials badges.
 - Locked fixtures show a home/draw/away prediction split calculated from
@@ -112,6 +114,9 @@ Rules:
 - Only visible to the assigned picker when they have an eligible gameweek.
 - Gameweek 1 is eligible immediately.
 - Later gameweeks unlock after the previous gameweek is complete.
+- The picker only sees the next actionable assigned active-season gameweek.
+  Future gameweeks stay hidden until prior gameweeks are terminal, and stale
+  completed gameweeks are skipped.
 - Picker chooses the expected fixture count for the current gameweek. Standard
   league gameweeks normally use four fixtures; cup/test gameweeks can use fewer
   when the selected external matchday has fewer available fixtures.
@@ -124,6 +129,27 @@ Rules:
 - Picker can edit until predictions exist for that gameweek.
 - Admin override happens via Admin pages, not this picker page.
 - Manual fixture entry remains available as fallback.
+
+### External fixture refresh
+
+Upcoming external fixture refresh is separate from result sync. The cron/admin
+refresh path updates local `external_fixtures` cache rows and safely propagates
+team-name, kickoff-time, provider-status, and round/stage metadata changes to
+selected linked app fixtures before kickoff. It does not update scores or
+rescore predictions.
+
+Rules:
+
+- Runs only for the active `football_data` season when `fixture_import_enabled`
+  is true.
+- Does not call football-data.org when no eligible active season/provider is
+  configured.
+- Preserves manually assigned World Cup `external_matchday` values when the
+  provider still returns `matchday = null`.
+- For selected linked fixtures, kickoff changes can apply to non-terminal
+  fixtures, while team-name changes after predictions exist only apply when the
+  local team name is a placeholder such as `TBD`, `TBC`, or `Winner of`.
+- Completed, void, and postponed selected fixtures are not modified by refresh.
 
 ### `/leaderboard`
 
@@ -466,6 +492,10 @@ sends missed picker-up-next emails and less-than-24-hours prediction reminders.
 Reminder completeness is based on the selected/actionable fixtures in that
 gameweek, so cup/test gameweeks with one or two fixtures do not require four
 predictions.
+
+Double Gameweeks are managed in Admin -> Gameweeks. Enabling one removes
+Joker usage for that gameweek and completed fixtures should be rescored so the
+leaderboard reflects the 2x gameweek multiplier.
 
 ## Development commands
 

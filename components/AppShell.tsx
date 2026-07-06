@@ -88,18 +88,35 @@ export default function AppShell({
         <header className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-[#0b1627]/80 px-3 py-3 shadow-xl shadow-black/20 backdrop-blur sm:px-4">
           <BrandMark />
 
-          <Link
-            href="/logout"
-            prefetch={false}
-            onClick={(event) => handleNavigate(event, "/logout")}
-            className={`min-h-10 shrink-0 rounded-full border px-3 py-2 text-sm font-semibold transition ${
-              activePendingHref === "/logout"
-                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                : "border-white/10 bg-slate-900/70 text-slate-300 hover:text-white active:bg-slate-800"
-            }`}
-          >
-            {activePendingHref === "/logout" ? "Signing out..." : "Sign out"}
-          </Link>
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              href="/rules"
+              prefetch={false}
+              onClick={(event) => handleNavigate(event, "/rules")}
+              className={`min-h-10 rounded-full border px-3 py-2 text-sm font-semibold transition ${
+                isCurrentRoute(pathname, "/rules")
+                  ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
+                  : activePendingHref === "/rules"
+                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                    : "border-white/10 bg-slate-900/70 text-slate-300 hover:text-white active:bg-slate-800"
+              }`}
+            >
+              {activePendingHref === "/rules" ? "Loading..." : "Rules"}
+            </Link>
+
+            <Link
+              href="/logout"
+              prefetch={false}
+              onClick={(event) => handleNavigate(event, "/logout")}
+              className={`min-h-10 rounded-full border px-3 py-2 text-sm font-semibold transition ${
+                activePendingHref === "/logout"
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                  : "border-white/10 bg-slate-900/70 text-slate-300 hover:text-white active:bg-slate-800"
+              }`}
+            >
+              {activePendingHref === "/logout" ? "Signing out..." : "Sign out"}
+            </Link>
+          </div>
         </header>
 
         <div

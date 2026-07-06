@@ -38,6 +38,8 @@ In Admin -> Season:
 - Auto-assign fixture pickers.
 - Manually change one gameweek picker.
 - Save picker assignments and confirm the changed picker persists.
+- Mark a test gameweek as Double Gameweek and confirm the warning copy appears.
+- Unmark it and confirm the setting persists correctly.
 - Activate the test season.
 - Confirm activating a season archives any previously active season.
 - Confirm Home, Predictions, Pick Fixtures, and current Leaderboard use only the active season.
@@ -80,6 +82,11 @@ In Admin -> Season:
 - Remove the Joker before lock.
 - Use Jokers on three fixtures and confirm the limit is enforced.
 - Confirm a fourth Joker is rejected with a friendly message.
+- Mark the selected gameweek as Double Gameweek in Admin -> Gameweeks.
+- Confirm Predictions shows the Double Gameweek badge, hides/disables Joker
+  selection, and says all points count 2x.
+- Confirm any existing Joker for that gameweek no longer counts against the
+  user's season Joker allowance.
 - Move a fixture into locked state by using a past kickoff or completed status in the test flow.
 - Confirm locked fixtures cannot be edited.
 - Confirm before kickoff users only see their own prediction.
@@ -280,6 +287,7 @@ Ready for real users when:
 - Prediction flow works.
 - Joker flow works.
 - Result/scoring flow works.
+- Double Gameweek scoring doubles gameweek points without stacking Jokers.
 - Leaderboard works.
 - Archived leaderboard visibility works.
 - Maintenance export works.
@@ -287,6 +295,7 @@ Ready for real users when:
 - External fixture import/result sync settings are correct for the active season.
 - Reminder and result-sync scheduler secrets have been tested.
 - `email_notifications` de-dupe table exists.
+- `docs/2026-07-06-double-gameweeks.sql` has been run.
 - Baseline export has been downloaded and stored safely.
 - Mobile pages are usable.
 

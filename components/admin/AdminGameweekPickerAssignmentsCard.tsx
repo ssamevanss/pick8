@@ -1,4 +1,5 @@
 import SubmitButton from "@/components/forms/SubmitButton";
+import ConfirmCheckbox from "@/components/forms/ConfirmCheckbox";
 
 type Profile = {
   id: string;
@@ -11,9 +12,12 @@ export type GameweekPickerAssignmentRow = {
   gameweek_number: number;
   name: string | null;
   fixture_picker_id: string | null;
+  is_double_gameweek: boolean;
   fixtures:
     | {
         id: string;
+        status?: string;
+        predictions?: { id: string }[] | null;
       }[]
     | null;
 };
@@ -92,11 +96,19 @@ export default function AdminGameweekPickerAssignmentsCard({
           <div className="overflow-hidden rounded-xl border border-slate-800">
             {gameweeks.map((gameweek) => {
               const fixtureCount = gameweek.fixtures?.length ?? 0;
+              const hasPredictions = Boolean(
+                gameweek.fixtures?.some(
+                  (fixture) => (fixture.predictions?.length ?? 0) > 0,
+                ),
+              );
+              const hasCompletedFixtures = Boolean(
+                gameweek.fixtures?.some((fixture) => fixture.status === "completed"),
+              );
 
               return (
                 <div
                   key={gameweek.id}
-                  className="grid gap-3 border-t border-slate-800 bg-slate-950 p-3 first:border-t-0 md:grid-cols-[1fr_220px_120px]"
+                  className="grid gap-3 border-t border-slate-800 bg-slate-950 p-3 first:border-t-0 md:grid-cols-[1fr_220px_180px_120px]"
                 >
                   <div>
                     <input
@@ -127,6 +139,35 @@ export default function AdminGameweekPickerAssignmentsCard({
                         </option>
                       ))}
                     </select>
+                  </label>
+
+                  <label className="flex items-start gap-3 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm text-slate-300">
+                    <ConfirmCheckbox
+                      name={`is_double_gameweek_${gameweek.id}`}
+                      defaultChecked={gameweek.is_double_gameweek}
+                      ariaLabel={`Mark ${formatGameweekName(
+                        gameweek,
+                      )} as a Double Gameweek`}
+                      confirmWhenChecking={
+                        hasPredictions
+                          ? "Make this a Double Gameweek? Existing Jokers for this gameweek will be removed and scores may be recalculated."
+                          : "Make this a Double Gameweek? All points will count 2x and Jokers cannot be used."
+                      }
+                      confirmWhenUnchecking={
+                        hasPredictions || hasCompletedFixtures
+                          ? "Disable Double Gameweek? Existing scores may need recalculation."
+                          : undefined
+                      }
+                      className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-300"
+                    />
+                    <span>
+                      <span className="block font-semibold text-white">
+                        Double Gameweek
+                      </span>
+                      <span className="mt-1 block text-xs text-slate-400">
+                        All points are doubled. Jokers cannot be used this gameweek.
+                      </span>
+                    </span>
                   </label>
 
                   <div className="flex items-end">

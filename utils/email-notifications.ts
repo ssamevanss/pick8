@@ -9,6 +9,7 @@ type GameweekRow = {
   season_id: string;
   gameweek_number: number;
   name: string | null;
+  is_double_gameweek: boolean | null;
   fixture_picker_id: string | null;
 };
 
@@ -306,7 +307,7 @@ async function getGameweek({
 }) {
   const { data, error } = await supabase
     .from("gameweeks")
-    .select("id, season_id, gameweek_number, name, fixture_picker_id")
+    .select("id, season_id, gameweek_number, name, is_double_gameweek, fixture_picker_id")
     .eq("id", gameweekId)
     .single();
 
@@ -458,11 +459,13 @@ ${footer}`;
 export async function sendPredictionsOpenEmails({
   supabase,
   gameweekId,
+  excludeUserId,
   dryRun = false,
   siteUrl = getSiteUrl(),
 }: {
   supabase: AdminSupabaseClient;
   gameweekId: string;
+  excludeUserId?: string | null;
   dryRun?: boolean;
   siteUrl?: string;
 }) {
@@ -502,7 +505,9 @@ export async function sendPredictionsOpenEmails({
   const buttonUrl = `${siteUrl}/predictions?gameweek=${gameweek.id}`;
   const fixtureLines = getFixtureLines(fixtures);
   const subject = `Predictions are open for ${gameweekName}`;
-  const intro = `The ${gameweekName} fixtures are in. Make your calls before each kickoff.`;
+  const intro = gameweek.is_double_gameweek
+    ? `The ${gameweekName} fixtures are in, and it is a Double Gameweek. Every point counts 2x, so make your calls before each kickoff.`
+    : `The ${gameweekName} fixtures are in. Make your calls before each kickoff.`;
   const footer =
     "You received this because you are an approved player in this league.";
   const text = `Who You Got?
@@ -527,6 +532,18 @@ ${footer}`;
   const summaries: EmailDeliverySummary[] = [];
 
   for (const profile of profiles) {
+    if (excludeUserId && profile.id === excludeUserId) {
+      summaries.push({
+        event_key: `predictions_open:${gameweek.id}:${profile.id}`,
+        email_type: "predictions_open",
+        user_id: profile.id,
+        email: profile.email,
+        status: "skipped",
+        reason: "actioning user excluded",
+      });
+      continue;
+    }
+
     summaries.push(
       await sendLoggedEmail({
         supabase,
@@ -544,6 +561,7 @@ ${footer}`;
           gameweekName,
           fixtureIds: fixtures.map((fixture) => fixture.id),
           fixtureCount: fixtures.length,
+          isDoubleGameweek: Boolean(gameweek.is_double_gameweek),
         },
       }),
     );
@@ -572,7 +590,7 @@ export async function sendPredictionDeadlineReminderEmails({
   const deadline = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   const { data: gameweeks, error: gameweekError } = await supabase
     .from("gameweeks")
-    .select("id, season_id, gameweek_number, name, fixture_picker_id")
+    .select("id, season_id, gameweek_number, name, is_double_gameweek, fixture_picker_id")
     .eq("season_id", seasonId)
     .order("gameweek_number", { ascending: true });
 
@@ -692,7 +710,9 @@ export async function sendPredictionDeadlineReminderEmails({
     const subject = "Less than 24 hours to enter your predictions";
     const intro = `${gameweekName} has fixture${
       actionableFixtures.length === 1 ? "" : "s"
-    } kicking off in the next 24 hours. Get your predictions in before kickoff.`;
+    } kicking off in the next 24 hours. ${
+      gameweek.is_double_gameweek ? "It is a Double Gameweek, with all points counting 2x. " : ""
+    }Get your predictions in before kickoff.`;
     const footer =
       "You received this because you still have missing predictions for this gameweek.";
     const text = `Who You Got?
@@ -747,6 +767,7 @@ ${footer}`;
             gameweekName,
             fixtureIds: actionableFixtures.map((fixture) => fixture.id),
             fixtureCount: actionableFixtures.length,
+            isDoubleGameweek: Boolean(gameweek.is_double_gameweek),
           },
         }),
       );

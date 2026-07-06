@@ -1,6 +1,7 @@
 import Link from "next/link";
 import BrandMark from "@/components/brand/BrandMark";
 import ForgotPasswordForm from "@/components/auth/ForgotPasswordForm";
+import ToastTrigger from "@/components/toast/ToastTrigger";
 import { requestPasswordReset } from "./actions";
 
 export default async function ForgotPasswordPage({
@@ -26,9 +27,11 @@ export default async function ForgotPasswordPage({
         ) : null}
 
         {params.sent ? (
-          <p className="brand-alert-success mt-4">
-            If that email is registered, a password reset link has been sent.
-          </p>
+          <ToastTrigger
+            title="Password reset email requested"
+            description="If that email is registered, a reset link has been sent."
+            triggerKey={`forgot:${params.sent}`}
+          />
         ) : null}
 
         <ForgotPasswordForm

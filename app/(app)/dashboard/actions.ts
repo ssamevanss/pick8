@@ -11,9 +11,11 @@ type FixtureLookupRow = {
   gameweeks:
     | {
         season_id: string;
+        is_double_gameweek: boolean | null;
       }
     | {
         season_id: string;
+        is_double_gameweek: boolean | null;
       }[]
     | null;
 };
@@ -22,6 +24,75 @@ function getSeasonId(fixture: FixtureLookupRow) {
   return Array.isArray(fixture.gameweeks)
     ? fixture.gameweeks[0]?.season_id
     : fixture.gameweeks?.season_id;
+}
+
+function getIsDoubleGameweek(fixture: FixtureLookupRow) {
+  return Array.isArray(fixture.gameweeks)
+    ? Boolean(fixture.gameweeks[0]?.is_double_gameweek)
+    : Boolean(fixture.gameweeks?.is_double_gameweek);
+}
+
+async function getNonDoubleJokerCount({
+  supabase,
+  seasonId,
+  userId,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  seasonId: string;
+  userId: string;
+}) {
+  const { data, error } = await supabase
+    .from("joker_usage")
+    .select(
+      `
+      id,
+      fixtures!inner (
+        gameweeks!inner (
+          season_id,
+          is_double_gameweek
+        )
+      )
+    `,
+    )
+    .eq("season_id", seasonId)
+    .eq("user_id", userId)
+    .is("refunded_at", null)
+    .eq("fixtures.gameweeks.season_id", seasonId);
+
+  if (error) {
+    return { count: null, error };
+  }
+
+  const rows =
+    (data as
+      | {
+          fixtures:
+            | {
+                gameweeks:
+                  | { is_double_gameweek: boolean | null }
+                  | { is_double_gameweek: boolean | null }[]
+                  | null;
+              }
+            | {
+                gameweeks:
+                  | { is_double_gameweek: boolean | null }
+                  | { is_double_gameweek: boolean | null }[]
+                  | null;
+              }[]
+            | null;
+        }[]
+      | null) ?? [];
+
+  const count = rows.filter((row) => {
+    const fixture = Array.isArray(row.fixtures) ? row.fixtures[0] : row.fixtures;
+    const gameweek = Array.isArray(fixture?.gameweeks)
+      ? fixture.gameweeks[0]
+      : fixture?.gameweeks;
+
+    return !gameweek?.is_double_gameweek;
+  }).length;
+
+  return { count, error: null };
 }
 
 export async function savePredictions(formData: FormData) {
@@ -50,7 +121,8 @@ export async function savePredictions(formData: FormData) {
       kickoff_at,
       status,
       gameweeks (
-        season_id
+        season_id,
+        is_double_gameweek
       )
     `,
     )
@@ -124,18 +196,31 @@ export async function savePredictions(formData: FormData) {
     }
 
     const seasonId = getSeasonId(fixture);
+    const isDoubleGameweek = getIsDoubleGameweek(fixture);
 
     if (!seasonId) {
       redirect("/dashboard?error=Season not found for fixture");
     }
 
-    if (useJoker) {
-      const { count: jokerCount, error: jokerCountError } = await supabase
+    if (isDoubleGameweek) {
+      const { error: removeJokerError } = await supabase
         .from("joker_usage")
-        .select("id", { count: "exact", head: true })
-        .eq("season_id", seasonId)
-        .eq("user_id", user.id)
-        .is("refunded_at", null);
+        .delete()
+        .eq("fixture_id", fixtureId)
+        .eq("user_id", user.id);
+
+      if (removeJokerError) {
+        redirect(
+          `/dashboard?error=${encodeURIComponent(removeJokerError.message)}`,
+        );
+      }
+    } else if (useJoker) {
+      const { count: jokerCount, error: jokerCountError } =
+        await getNonDoubleJokerCount({
+          supabase,
+          seasonId,
+          userId: user.id,
+        });
 
       if (jokerCountError) {
         redirect(

@@ -3,8 +3,10 @@ export const dynamic = "force-dynamic";
 import DashboardSummary from "@/components/dashboard/DashboardSummary";
 import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import FixturePredictionCard from "@/components/predictions/FixturePredictionCard";
+import PredictionFormShell from "@/components/predictions/PredictionFormShell";
 import type {
   Fixture,
+  ExternalFixtureScore,
   FixtureTeamForm,
   Gameweek,
   JokerUsage,
@@ -15,7 +17,6 @@ import type {
 import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
 import { savePredictions } from "./actions";
-import SubmitButton from "@/components/forms/SubmitButton";
 
 type CompletedFixtureForForm = {
   id: string;
@@ -91,7 +92,7 @@ export default async function DashboardPage({
   const { data: gameweeks } = activeSeason
     ? await supabase
         .from("gameweeks")
-        .select("id, gameweek_number, name")
+        .select("id, gameweek_number, name, is_double_gameweek")
         .eq("season_id", activeSeason.id)
         .order("gameweek_number", { ascending: true })
     : { data: null };
@@ -122,12 +123,13 @@ export default async function DashboardPage({
     latestGameweekWithFixtures ??
     gameweekList[gameweekList.length - 1] ??
     null;
+  const isDoubleGameweek = Boolean(selectedGameweek?.is_double_gameweek);
 
   const { data: fixtures, error: fixturesError } = selectedGameweek
     ? await supabase
         .from("fixtures")
         .select(
-          "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score",
+          "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score, external_provider, external_fixture_id, external_status, external_last_synced_at",
         )
         .eq("gameweek_id", selectedGameweek.id)
         .order("kickoff_at", { ascending: true })
@@ -135,6 +137,36 @@ export default async function DashboardPage({
 
   const fixtureIds = ((fixtures as Fixture[] | null) ?? []).map(
     (fixture) => fixture.id,
+  );
+  const fixtureList = (fixtures as Fixture[] | null) ?? [];
+  const externalFixtureIds = fixtureList
+    .map((fixture) => fixture.external_fixture_id)
+    .filter((value): value is string => Boolean(value));
+
+  const { data: externalScoreRows } =
+    externalFixtureIds.length > 0
+      ? await supabase
+          .from("external_fixtures")
+          .select(
+            "external_fixture_id, status, home_score, away_score, last_synced_at",
+          )
+          .eq("provider", "football_data")
+          .in("external_fixture_id", externalFixtureIds)
+      : { data: [] };
+  const externalScoreByFixtureId = new Map(
+    (
+      (externalScoreRows as
+        | (ExternalFixtureScore & { external_fixture_id: string })[]
+        | null) ?? []
+    ).map((row) => [
+      row.external_fixture_id,
+      {
+        status: row.status,
+        home_score: row.home_score,
+        away_score: row.away_score,
+        last_synced_at: row.last_synced_at,
+      },
+    ]),
   );
 
   const { data: predictions, error: predictionsError } =
@@ -167,7 +199,28 @@ export default async function DashboardPage({
           .is("refunded_at", null)
       : { data: null, error: null };
 
-  const fixtureList = (fixtures as Fixture[] | null) ?? [];
+  const { data: seasonJokerUsage } =
+    activeSeason && user
+      ? await supabase
+          .from("joker_usage")
+          .select(
+            `
+            fixture_id,
+            user_id,
+            fixtures!inner (
+              gameweeks!inner (
+                season_id,
+                is_double_gameweek
+              )
+            )
+          `,
+          )
+          .eq("season_id", activeSeason.id)
+          .eq("user_id", user.id)
+          .is("refunded_at", null)
+          .eq("fixtures.gameweeks.season_id", activeSeason.id)
+      : { data: [] };
+
   const latestFixtureKickoff =
     fixtureList
       .map((fixture) => fixture.kickoff_at)
@@ -240,6 +293,21 @@ export default async function DashboardPage({
     predictionsByFixture.set(prediction.fixture_id, existing);
   }
 
+  const openFixtureIds = fixtureList
+    .filter(
+      (fixture) =>
+        fixture.status === "scheduled" &&
+        new Date(fixture.kickoff_at) > new Date(),
+    )
+    .map((fixture) => fixture.id);
+  const userHasSavedOpenPredictions =
+    openFixtureIds.length > 0 &&
+    openFixtureIds.every((fixtureId) =>
+      (predictionsByFixture.get(fixtureId) ?? []).some(
+        (prediction) => prediction.user_id === user?.id,
+      ),
+    );
+
   const jokerRows = (jokerUsage as JokerUsage[] | null) ?? [];
 
   const ownJokerFixtureIds = new Set(
@@ -252,7 +320,33 @@ export default async function DashboardPage({
     jokerRows.map((joker) => `${joker.fixture_id}:${joker.user_id}`),
   );
 
-  const jokersUsed = ownJokerFixtureIds.size;
+  const jokersUsed = (
+    (seasonJokerUsage as
+      | {
+          fixtures:
+            | {
+                gameweeks:
+                  | { is_double_gameweek: boolean | null }
+                  | { is_double_gameweek: boolean | null }[]
+                  | null;
+              }
+            | {
+                gameweeks:
+                  | { is_double_gameweek: boolean | null }
+                  | { is_double_gameweek: boolean | null }[]
+                  | null;
+              }[]
+            | null;
+        }[]
+      | null) ?? []
+  ).filter((row) => {
+    const fixture = Array.isArray(row.fixtures) ? row.fixtures[0] : row.fixtures;
+    const gameweek = Array.isArray(fixture?.gameweeks)
+      ? fixture.gameweeks[0]
+      : fixture?.gameweeks;
+
+    return !gameweek?.is_double_gameweek;
+  }).length;
   const jokersLeft = Math.max(0, 3 - jokersUsed);
 
   return (
@@ -264,12 +358,6 @@ export default async function DashboardPage({
           Enter your score predictions for the selected gameweek.
         </p>
       </header>
-
-      {params.saved ? (
-        <p className="brand-alert-success mb-4">
-          Predictions saved.
-        </p>
-      ) : null}
 
       {params.error ? (
         <p className="brand-alert-danger mb-4">
@@ -290,16 +378,31 @@ export default async function DashboardPage({
         />
 
         <div className="mb-4">
-          <h2 className="text-2xl font-black tracking-tight">
-            {selectedGameweek?.name ||
-              (selectedGameweek
-                ? `Gameweek ${selectedGameweek.gameweek_number}`
-                : "No gameweek")}
-          </h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-2xl font-black tracking-tight">
+              {selectedGameweek?.name ||
+                (selectedGameweek
+                  ? `Gameweek ${selectedGameweek.gameweek_number}`
+                  : "No gameweek")}
+            </h2>
+            {isDoubleGameweek ? (
+              <span className="rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-black uppercase tracking-wide text-emerald-200">
+                Double Gameweek
+              </span>
+            ) : null}
+          </div>
           <p className="text-sm text-slate-400">
-            Predictions lock individually at kickoff.
+            {isDoubleGameweek
+              ? "All points count 2x. Jokers can’t be used during a Double Gameweek."
+              : "Predictions lock individually at kickoff."}
           </p>
         </div>
+
+        {isDoubleGameweek ? (
+          <p className="brand-alert-success mb-4">
+            Double Gameweek — all points count 2x.
+          </p>
+        ) : null}
 
         {!activeSeason ? (
           <p className="brand-alert-warning">
@@ -341,36 +444,37 @@ export default async function DashboardPage({
           </p>
         ) : null}
 
-        <form action={savePredictions} className="space-y-3">
-            <input
-                type="hidden"
-                name="selected_gameweek_id"
-                value={selectedGameweek?.id ?? ""}
+        <PredictionFormShell
+          key={`${selectedGameweek?.id ?? "none"}-${
+            userHasSavedOpenPredictions ? "saved" : "editing"
+          }-${params.saved ? "toast" : "quiet"}`}
+          action={savePredictions}
+          selectedGameweekId={selectedGameweek?.id ?? ""}
+          hasOpenPredictionFixtures={hasOpenPredictionFixtures}
+          initialSaved={userHasSavedOpenPredictions}
+          showSavedToast={Boolean(params.saved)}
+        >
+          {fixtureList.map((fixture) => (
+            <FixturePredictionCard
+              key={fixture.id}
+              fixture={fixture}
+              externalScore={
+                fixture.external_fixture_id
+                  ? externalScoreByFixtureId.get(fixture.external_fixture_id) ?? null
+                  : null
+              }
+              predictions={predictionsByFixture.get(fixture.id) ?? []}
+              currentUserId={user!.id}
+              jokerPredictionKeys={jokerPredictionKeys}
+              ownJokerFixtureIds={ownJokerFixtureIds}
+              jokersLeft={jokersLeft}
+              isDoubleGameweek={isDoubleGameweek}
+              teamForm={
+                formByFixture.get(fixture.id) ?? { home: [], away: [] }
+              }
             />
-
-            {fixtureList.map((fixture) => (
-                <FixturePredictionCard
-                key={fixture.id}
-                fixture={fixture}
-                predictions={predictionsByFixture.get(fixture.id) ?? []}
-                currentUserId={user!.id}
-                jokerPredictionKeys={jokerPredictionKeys}
-                ownJokerFixtureIds={ownJokerFixtureIds}
-                jokersLeft={jokersLeft}
-                teamForm={
-                  formByFixture.get(fixture.id) ?? { home: [], away: [] }
-                }
-                />
-            ))}
-
-          {hasOpenPredictionFixtures ? (
-            <SubmitButton
-              idleLabel="Save open predictions"
-              pendingLabel="Saving predictions..."
-              className="brand-button-primary w-full"
-            />
-          ) : null}
-        </form>
+          ))}
+        </PredictionFormShell>
       </section>
     </>
   );

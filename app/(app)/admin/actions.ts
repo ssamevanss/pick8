@@ -8,7 +8,10 @@ import { getKickoffIso } from "@/utils/fixtures";
 import { getActiveSeason } from "@/utils/seasons";
 import { upsertActivityNotification } from "@/utils/activity";
 import { upsertFixturesPickedActivity } from "@/utils/fixture-activity";
-import { sendPickerUpNextEmail } from "@/utils/email-notifications";
+import {
+  sendPickerUpNextEmail,
+  sendPredictionsOpenEmails,
+} from "@/utils/email-notifications";
 import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
 import { getFootballDataCompetitionOption } from "@/utils/football-competitions";
 import {
@@ -123,9 +126,11 @@ type FixtureToScore = {
   gameweeks:
     | {
         season_id: string;
+        is_double_gameweek: boolean | null;
       }
     | {
         season_id: string;
+        is_double_gameweek: boolean | null;
       }[]
     | null;
 };
@@ -162,6 +167,14 @@ function getSeasonIdFromFixture(fixture: FixtureToScore) {
   return fixture.gameweeks?.season_id ?? null;
 }
 
+function getIsDoubleGameweekFromFixture(fixture: FixtureToScore) {
+  if (Array.isArray(fixture.gameweeks)) {
+    return Boolean(fixture.gameweeks[0]?.is_double_gameweek);
+  }
+
+  return Boolean(fixture.gameweeks?.is_double_gameweek);
+}
+
 function getResult(homeScore: number, awayScore: number) {
   if (homeScore > awayScore) return "home";
   if (awayScore > homeScore) return "away";
@@ -174,12 +187,14 @@ function calculatePoints({
   actualHome,
   actualAway,
   usedJoker,
+  isDoubleGameweek = false,
 }: {
   predictionHome: number;
   predictionAway: number;
   actualHome: number;
   actualAway: number;
   usedJoker: boolean;
+  isDoubleGameweek?: boolean;
 }) {
   const isExactScore =
     predictionHome === actualHome && predictionAway === actualAway;
@@ -195,7 +210,9 @@ function calculatePoints({
     points = 3;
   }
 
-  if (usedJoker) {
+  if (isDoubleGameweek) {
+    points = points * 2;
+  } else if (usedJoker) {
     points = points * 2;
   }
 
@@ -220,7 +237,8 @@ export async function scoreFixture(
       home_score,
       away_score,
       gameweeks (
-        season_id
+        season_id,
+        is_double_gameweek
       )
     `,
     )
@@ -255,9 +273,10 @@ export async function scoreFixture(
   );
 
   for (const prediction of (predictions as PredictionToScore[] | null) ?? []) {
-    const usedJoker = jokerKeys.has(
-      `${prediction.fixture_id}:${prediction.user_id}`,
-    );
+    const isDoubleGameweek = getIsDoubleGameweekFromFixture(typedFixture);
+    const usedJoker =
+      !isDoubleGameweek &&
+      jokerKeys.has(`${prediction.fixture_id}:${prediction.user_id}`);
 
     const scored = calculatePoints({
       predictionHome: prediction.home_score,
@@ -265,6 +284,7 @@ export async function scoreFixture(
       actualHome: typedFixture.home_score,
       actualAway: typedFixture.away_score,
       usedJoker,
+      isDoubleGameweek,
     });
 
     await supabase
@@ -539,6 +559,12 @@ export async function createGameweekWithFixtures(formData: FormData) {
         `/admin?tab=create&error=${encodeURIComponent(fixturesError.message)}`,
       );
     }
+
+    await upsertFixturesPickedActivityIfNoPredictions({
+      supabase,
+      gameweekId: gameweek.id,
+      actioningUserId: user.id,
+    });
   }
 
   revalidatePath("/admin");
@@ -656,6 +682,7 @@ export async function addFixtureToGameweek(formData: FormData) {
   await upsertFixturesPickedActivityIfNoPredictions({
     supabase,
     gameweekId,
+    actioningUserId: user.id,
   });
 
   revalidatePath("/admin");
@@ -667,9 +694,11 @@ export async function addFixtureToGameweek(formData: FormData) {
 async function upsertFixturesPickedActivityIfNoPredictions({
   supabase,
   gameweekId,
+  actioningUserId,
 }: {
   supabase: SupabaseLikeClient;
   gameweekId: string;
+  actioningUserId?: string | null;
 }) {
   const { data: fixtures } = await supabase
     .from("fixtures")
@@ -694,12 +723,36 @@ async function upsertFixturesPickedActivityIfNoPredictions({
     await upsertFixturesPickedActivity({
       supabase,
       gameweekId,
+      actioningUserId,
     });
+    return;
+  }
+
+  const emailResult = await sendPredictionsOpenEmails({
+    supabase: createAdminClient(),
+    gameweekId,
+    excludeUserId: actioningUserId ?? null,
+  });
+
+  if (emailResult.error) {
+    console.warn(`Predictions-open email skipped: ${emailResult.error}`);
+  }
+
+  const errored = emailResult.summaries.filter(
+    (summary) => summary.status === "error",
+  );
+
+  if (errored.length > 0) {
+    console.warn(
+      `Predictions-open email errors for ${gameweekId}: ${errored
+        .map((summary) => `${summary.email ?? summary.user_id}: ${summary.reason}`)
+        .join("; ")}`,
+    );
   }
 }
 
 export async function addExternalFixturesToGameweek(formData: FormData) {
-  const { supabase } = await requireAdmin();
+  const { supabase, user } = await requireAdmin();
 
   const gameweekId = String(formData.get("gameweek_id") ?? "");
   const selectedExternalIds = formData
@@ -879,6 +932,7 @@ export async function addExternalFixturesToGameweek(formData: FormData) {
   await upsertFixturesPickedActivityIfNoPredictions({
     supabase,
     gameweekId,
+    actioningUserId: user.id,
   });
 
   revalidatePath("/admin");
@@ -939,7 +993,7 @@ export async function updateUserProfile(formData: FormData) {
 }
 
 export async function updateFixtureDetails(formData: FormData) {
-  const { supabase } = await requireAdmin();
+  const { supabase, user } = await requireAdmin();
 
   const fixtureId = String(formData.get("fixture_id"));
   const homeTeam = String(formData.get("home_team") ?? "").trim();
@@ -979,6 +1033,7 @@ export async function updateFixtureDetails(formData: FormData) {
     await upsertFixturesPickedActivityIfNoPredictions({
       supabase,
       gameweekId: existingFixture.gameweek_id,
+      actioningUserId: user.id,
     });
   }
 
@@ -993,7 +1048,7 @@ export async function updateFixtureDetails(formData: FormData) {
 }
 
 export async function deleteFixture(formData: FormData) {
-  const { supabase } = await requireAdmin();
+  const { supabase, user } = await requireAdmin();
 
   const fixtureId = String(formData.get("fixture_id"));
 
@@ -1038,6 +1093,7 @@ export async function deleteFixture(formData: FormData) {
     await upsertFixturesPickedActivityIfNoPredictions({
       supabase,
       gameweekId: existingFixture.gameweek_id,
+      actioningUserId: user.id,
     });
   }
 
@@ -1619,6 +1675,7 @@ export async function saveGameweekPickerAssignments(formData: FormData) {
   const { supabase } = await requireAdmin();
 
   const gameweekIds = formData.getAll("gameweek_id").map(String);
+  const seasonsToRecalculate = new Set<string>();
 
   if (gameweekIds.length === 0) {
     redirect(
@@ -1629,6 +1686,30 @@ export async function saveGameweekPickerAssignments(formData: FormData) {
   }
 
   for (const gameweekId of gameweekIds) {
+    const { data: currentGameweek, error: currentGameweekError } = await supabase
+      .from("gameweeks")
+      .select(
+        `
+        id,
+        season_id,
+        is_double_gameweek,
+        fixtures (
+          id,
+          status
+        )
+      `,
+      )
+      .eq("id", gameweekId)
+      .single();
+
+    if (currentGameweekError || !currentGameweek) {
+      redirect(
+        getSeasonRedirectUrl({
+          error: currentGameweekError?.message ?? "Gameweek not found",
+        }),
+      );
+    }
+
     const fixturePickerIdRaw = String(
       formData.get(`fixture_picker_id_${gameweekId}`) ?? "",
     );
@@ -1637,11 +1718,21 @@ export async function saveGameweekPickerAssignments(formData: FormData) {
       fixturePickerIdRaw && fixturePickerIdRaw !== "unassigned"
         ? fixturePickerIdRaw
         : null;
+    const isDoubleGameweek =
+      String(formData.get(`is_double_gameweek_${gameweekId}`) ?? "") === "on";
+    const currentFixtureRows =
+      (currentGameweek.fixtures as { id: string; status: string }[] | null) ?? [];
+    const completedFixtureIds = currentFixtureRows
+      .filter((fixture) => fixture.status === "completed")
+      .map((fixture) => fixture.id);
+    const doubleGameweekChanged =
+      Boolean(currentGameweek.is_double_gameweek) !== isDoubleGameweek;
 
     const { error } = await supabase
       .from("gameweeks")
       .update({
         fixture_picker_id: fixturePickerId,
+        is_double_gameweek: isDoubleGameweek,
       })
       .eq("id", gameweekId);
 
@@ -1652,11 +1743,43 @@ export async function saveGameweekPickerAssignments(formData: FormData) {
         }),
       );
     }
+
+    if (isDoubleGameweek && currentFixtureRows.length > 0) {
+      const { error: jokerDeleteError } = await supabase
+        .from("joker_usage")
+        .delete()
+        .in(
+          "fixture_id",
+          currentFixtureRows.map((fixture) => fixture.id),
+        );
+
+      if (jokerDeleteError) {
+        redirect(
+          getSeasonRedirectUrl({
+            error: jokerDeleteError.message,
+          }),
+        );
+      }
+    }
+
+    if (doubleGameweekChanged && completedFixtureIds.length > 0) {
+      for (const fixtureId of completedFixtureIds) {
+        await scoreFixture(fixtureId, supabase);
+      }
+
+      seasonsToRecalculate.add(currentGameweek.season_id);
+    }
+  }
+
+  for (const seasonId of seasonsToRecalculate) {
+    await recalculateLeaderboard(seasonId, supabase);
   }
 
   revalidatePath("/admin");
   revalidatePath("/dashboard");
   revalidatePath("/pick-fixtures");
+  revalidatePath("/predictions");
+  revalidatePath("/leaderboard");
 
   redirect(
     getSeasonRedirectUrl({
