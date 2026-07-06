@@ -313,9 +313,9 @@ export default function FixturePredictionCard({
                   {hasJoker ? (
                     <span
                       title="Joker used"
-                      className="rounded-full bg-amber-300 px-1.5 py-0.5 text-[10px] font-black text-slate-950"
+                      className="inline-flex items-center gap-1 rounded-full border border-amber-200/60 bg-amber-300 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-950 shadow-sm shadow-amber-950/30"
                     >
-                      J
+                      Joker <span className="text-[9px]">2x</span>
                     </span>
                   ) : null}
 
@@ -372,9 +372,9 @@ export default function FixturePredictionCard({
 
             {jokerDisabled ? (
               <div
-                className={`inline-flex min-h-11 items-center gap-2 rounded-full border px-3 text-sm font-bold ${
+                className={`inline-flex min-h-11 items-center gap-2 rounded-2xl border px-3 text-sm font-bold shadow-sm ${
                   hasJoker
-                    ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
+                    ? "border-amber-300/50 bg-gradient-to-br from-amber-300/25 to-amber-600/10 text-amber-100 shadow-amber-950/30"
                     : "border-slate-700 bg-slate-900 text-slate-400"
                 }`}
                 title={
@@ -386,7 +386,7 @@ export default function FixturePredictionCard({
                 }
               >
                 <span
-                  className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-black ring-1 ring-inset ${
+                  className={`inline-flex h-7 w-7 items-center justify-center rounded-xl text-xs font-black ring-1 ring-inset ${
                     hasJoker
                       ? "bg-amber-300 text-slate-950 ring-amber-500/30"
                       : "bg-slate-950/70 text-slate-500 ring-slate-700"
@@ -395,7 +395,7 @@ export default function FixturePredictionCard({
                   J
                 </span>
 
-                <span>
+                <span className="leading-tight">
                   {hasJoker
                     ? "Joker active"
                     : isLocked
@@ -404,13 +404,13 @@ export default function FixturePredictionCard({
                 </span>
 
                 {hasJoker ? (
-                  <span className="rounded-full bg-slate-950/60 px-1.5 py-0.5 text-[11px] font-semibold text-amber-200">
+                  <span className="rounded-full bg-slate-950/60 px-2 py-0.5 text-[11px] font-black text-amber-200">
                     2x
                   </span>
                 ) : null}
               </div>
             ) : (
-              <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border border-white/10 bg-slate-900 px-3 py-2 text-sm font-bold text-slate-300 transition hover:border-amber-500/40 hover:text-white">
+              <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-2xl border border-amber-300/25 bg-gradient-to-br from-slate-900 to-amber-950/20 px-3 py-2 text-sm font-bold text-slate-200 shadow-sm shadow-black/20 transition hover:border-amber-300/50 hover:text-white has-[:checked]:border-amber-300/70 has-[:checked]:from-amber-300/25 has-[:checked]:to-amber-700/15">
                 <input
                   name={`use_joker_${fixture.id}`}
                   type="checkbox"
@@ -418,7 +418,7 @@ export default function FixturePredictionCard({
                   className="peer sr-only"
                 />
 
-                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-950/70 text-xs font-black ring-1 ring-inset ring-slate-700 transition peer-checked:bg-amber-300 peer-checked:text-slate-950 peer-checked:ring-amber-500/30">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl bg-slate-950/70 text-xs font-black ring-1 ring-inset ring-slate-700 transition peer-checked:bg-amber-300 peer-checked:text-slate-950 peer-checked:ring-amber-500/30">
                   J
                 </span>
 
@@ -426,7 +426,7 @@ export default function FixturePredictionCard({
                   Joker
                 </span>
 
-                <span className="rounded-full bg-slate-950/60 px-1.5 py-0.5 text-[11px] font-semibold text-slate-400 transition peer-checked:text-amber-200">
+                <span className="rounded-full bg-slate-950/60 px-2 py-0.5 text-[11px] font-black text-amber-200 transition">
                   2x
                 </span>
               </label>
@@ -439,15 +439,17 @@ export default function FixturePredictionCard({
         <PredictionSplit fixture={fixture} predictions={sortedPredictions} />
       ) : null}
 
-      <details className="mt-4 rounded-xl border border-white/10 bg-slate-900/70 p-3 text-sm">
-        <summary className="cursor-pointer select-none font-medium text-slate-300">
-          View form
-        </summary>
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <TeamFormList title={fixture.home_team} results={teamForm.home} />
-          <TeamFormList title={fixture.away_team} results={teamForm.away} />
-        </div>
-      </details>
+      {!isLocked ? (
+        <details className="mt-4 rounded-xl border border-white/10 bg-slate-900/70 p-3 text-sm">
+          <summary className="cursor-pointer select-none font-medium text-slate-300">
+            View form
+          </summary>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <TeamFormList title={fixture.home_team} results={teamForm.home} />
+            <TeamFormList title={fixture.away_team} results={teamForm.away} />
+          </div>
+        </details>
+      ) : null}
 
       {isLocked && sortedPredictions.length > 0 ? (
         <details className="mt-4 rounded-xl border border-white/10 bg-slate-900/70 p-3 text-sm">
@@ -490,9 +492,9 @@ export default function FixturePredictionCard({
                           {usedJoker ? (
                             <span
                               title="Joker used"
-                              className="rounded-full bg-amber-300 px-1.5 py-0.5 text-[10px] font-black text-slate-950"
+                              className="inline-flex items-center gap-1 rounded-full border border-amber-200/60 bg-amber-300 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-950"
                             >
-                              J
+                              Joker <span className="text-[9px]">2x</span>
                             </span>
                           ) : null}
                           <span>

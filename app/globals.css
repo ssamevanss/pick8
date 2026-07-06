@@ -1,15 +1,15 @@
 @import "tailwindcss";
 
 :root {
-  --background: #06110d;
+  --background: #050b18;
   --foreground: #f8fafc;
-  --brand-ink: #07110d;
-  --brand-panel: #0d1b16;
-  --brand-panel-soft: #10231c;
+  --brand-ink: #07101f;
+  --brand-panel: #0b1627;
+  --brand-panel-soft: #101d31;
   --brand-line: rgba(148, 163, 184, 0.16);
-  --brand-mint: #34d399;
-  --brand-lime: #a3e635;
-  --brand-gold: #fbbf24;
+  --brand-mint: #5eead4;
+  --brand-lime: #86efac;
+  --brand-gold: #f5c451;
 }
 
 @theme inline {
@@ -51,17 +51,17 @@ input[type="number"] {
 @layer components {
   .app-surface {
     background:
-      radial-gradient(circle at 20% 0%, rgba(52, 211, 153, 0.18), transparent 34rem),
-      radial-gradient(circle at 90% 10%, rgba(251, 191, 36, 0.12), transparent 28rem),
-      linear-gradient(180deg, #06110d 0%, #07120f 38%, #0f172a 100%);
+      radial-gradient(circle at 20% 0%, rgba(94, 234, 212, 0.13), transparent 34rem),
+      radial-gradient(circle at 90% 8%, rgba(245, 196, 81, 0.1), transparent 28rem),
+      linear-gradient(180deg, #050b18 0%, #07111f 42%, #0b1627 100%);
   }
 
   .brand-card {
-    @apply rounded-2xl border border-white/10 bg-slate-900/80 shadow-xl shadow-black/20 backdrop-blur;
+    @apply rounded-2xl border border-white/10 bg-[#0b1627]/85 shadow-xl shadow-black/25 backdrop-blur;
   }
 
   .brand-card-soft {
-    @apply rounded-xl border border-white/10 bg-slate-950/70;
+    @apply rounded-xl border border-white/10 bg-[#07111f]/75;
   }
 
   .brand-section-header {
@@ -81,7 +81,7 @@ input[type="number"] {
   }
 
   .brand-button-primary {
-    @apply inline-flex min-h-11 items-center justify-center rounded-xl bg-emerald-400 px-4 py-2 text-sm font-bold text-slate-950 shadow-lg shadow-emerald-950/30 transition hover:bg-emerald-300 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70;
+    @apply inline-flex min-h-11 items-center justify-center rounded-xl bg-emerald-300 px-4 py-2 text-sm font-bold text-slate-950 shadow-lg shadow-emerald-950/30 transition hover:bg-emerald-200 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70;
   }
 
   .brand-button-gold {
@@ -89,7 +89,7 @@ input[type="number"] {
   }
 
   .brand-button-secondary {
-    @apply inline-flex min-h-11 items-center justify-center rounded-xl border border-white/10 bg-slate-950/70 px-4 py-2 text-sm font-bold text-slate-200 transition hover:border-emerald-400/40 hover:text-white active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70;
+    @apply inline-flex min-h-11 items-center justify-center rounded-xl border border-white/10 bg-[#07111f]/75 px-4 py-2 text-sm font-bold text-slate-200 transition hover:border-emerald-300/40 hover:text-white active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70;
   }
 
   .brand-alert-success {
@@ -109,7 +109,7 @@ input[type="number"] {
   }
 
   .brand-input {
-    @apply mt-1 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2.5 text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-400/60 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply mt-1 w-full rounded-xl border border-white/10 bg-[#07111f]/75 px-3 py-2.5 text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-300/60 disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .brand-muted {
@@ -117,6 +117,6 @@ input[type="number"] {
   }
 
   .brand-table {
-    @apply overflow-hidden rounded-2xl border border-white/10 bg-slate-950/70;
+    @apply overflow-hidden rounded-2xl border border-white/10 bg-[#07111f]/75;
   }
 }

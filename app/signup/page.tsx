@@ -1,4 +1,5 @@
 import Link from "next/link";
+import BrandMark from "@/components/brand/BrandMark";
 import SignupForm from "@/components/auth/SignupForm";
 import { signup } from "./actions";
 
@@ -17,15 +18,7 @@ export default async function SignupPage({
   return (
     <main className="app-surface flex min-h-screen items-center justify-center px-4 py-8 text-white">
       <div className="brand-card w-full max-w-md p-6 sm:p-8">
-        <div className="flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-400 text-xl font-black text-slate-950">
-            W
-          </div>
-          <div>
-            <p className="text-lg font-black tracking-tight">Who You Got?</p>
-            <p className="brand-eyebrow">Private league</p>
-          </div>
-        </div>
+        <BrandMark />
 
         <h1 className="mt-4 text-3xl font-bold">Create account</h1>
 

@@ -148,29 +148,30 @@ export default async function LeaderboardPage({
   return (
     <>
       <header className="brand-card mb-6 p-5 sm:p-6">
-        <p className="brand-eyebrow">Table talk</p>
-        <h1 className="brand-title mt-2">Leaderboard</h1>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <p className="brand-eyebrow">Table talk</p>
+            <h1 className="brand-title mt-2">Leaderboard</h1>
 
-        <p className="brand-subtitle mt-2">
-          {selectedSeason?.name ?? "No active season"}
-          {isArchivedSeason ? " · Final standings" : " · Current season"}
-        </p>
-
-        <details className="mt-5 max-w-sm rounded-2xl border border-white/10 bg-slate-950/70 p-2">
-          <summary className="list-none cursor-pointer px-3 py-2 text-center [&::-webkit-details-marker]:hidden">
-            <p className="text-xs uppercase tracking-wide text-slate-500">
-              Selected season
+            <p className="brand-subtitle mt-2">
+              {selectedSeason?.name ?? "No active season"}
+              {isArchivedSeason ? " · Final standings" : " · Current season"}
             </p>
-            <p className="mt-1 truncate text-sm font-semibold text-white sm:text-base">
-              {selectedSeason?.name ?? "No season selected"}
-            </p>
-          </summary>
+          </div>
 
-          <div className="mt-2 space-y-2 border-t border-slate-800 pt-2">
+          <details className="relative w-full sm:w-auto">
+            <summary className="inline-flex min-h-10 w-full cursor-pointer list-none items-center justify-between gap-2 rounded-full border border-white/10 bg-[#07111f]/75 px-3 py-2 text-sm font-semibold text-slate-200 transition hover:border-emerald-300/40 hover:text-white sm:w-56 [&::-webkit-details-marker]:hidden">
+              <span className="min-w-0 truncate">
+                {selectedArchivedSeason ? "Previous season" : "Current season"}
+              </span>
+              <span className="text-emerald-300">▾</span>
+            </summary>
+
+            <div className="z-20 mt-2 w-full space-y-2 rounded-2xl border border-white/10 bg-[#07111f] p-2 shadow-2xl shadow-black/40 sm:absolute sm:right-0 sm:w-72">
             <Link
               href="/leaderboard"
               prefetch={false}
-              className={`block rounded-lg px-3 py-2 text-center text-sm font-semibold ${
+              className={`block rounded-xl px-3 py-2 text-sm font-semibold ${
                 !selectedArchivedSeason
                   ? "bg-emerald-400 text-slate-950"
                   : "bg-slate-900/80 text-slate-300 hover:text-white"
@@ -184,7 +185,7 @@ export default async function LeaderboardPage({
                 key={season.id}
                 href={`/leaderboard?season=${season.id}`}
                 prefetch={false}
-                className={`block rounded-lg px-3 py-2 text-center text-sm ${
+                className={`block rounded-xl px-3 py-2 text-sm ${
                   selectedArchivedSeason?.id === season.id
                     ? "bg-emerald-400 text-slate-950"
                     : "bg-slate-900/80 text-slate-300 hover:text-white"
@@ -198,8 +199,9 @@ export default async function LeaderboardPage({
                 </span>
               </Link>
             ))}
-          </div>
-        </details>
+            </div>
+          </details>
+        </div>
       </header>
 
       {selectedArchivedSeasonId && !selectedArchivedSeason ? (

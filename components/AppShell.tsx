@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type MouseEvent } from "react";
 import type { ReactNode } from "react";
+import BrandMark from "@/components/brand/BrandMark";
 
 type AppShellProps = {
   children: ReactNode;
@@ -84,20 +85,8 @@ export default function AppShell({
         }`}
       />
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 pb-24 pt-4 sm:pt-6">
-        <header className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-slate-950/55 px-3 py-3 shadow-xl shadow-black/10 backdrop-blur sm:px-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-400 text-lg font-black text-slate-950 shadow-lg shadow-emerald-950/40">
-              W
-            </div>
-            <div className="min-w-0">
-              <p className="truncate text-lg font-black tracking-tight text-white">
-                Who You Got?
-              </p>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300/90">
-                Private league
-              </p>
-            </div>
-          </div>
+        <header className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-[#0b1627]/80 px-3 py-3 shadow-xl shadow-black/20 backdrop-blur sm:px-4">
+          <BrandMark />
 
           <Link
             href="/logout"

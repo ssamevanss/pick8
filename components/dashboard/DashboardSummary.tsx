@@ -5,35 +5,59 @@ type DashboardSummaryProps = {
   jokersLeft: number;
 };
 
+function getRankMedal(rank: number | null | undefined) {
+  if (rank === 1) return { label: "Gold", className: "bg-amber-300 text-slate-950" };
+  if (rank === 2) return { label: "Silver", className: "bg-slate-200 text-slate-950" };
+  if (rank === 3) return { label: "Bronze", className: "bg-amber-700 text-amber-50" };
+  return null;
+}
+
 export default function DashboardSummary({
   leaderboardEntry,
   jokersLeft,
 }: DashboardSummaryProps) {
+  const medal = getRankMedal(leaderboardEntry?.rank);
+
   return (
     <section className="grid grid-cols-3 gap-2 sm:gap-4">
       <div className="brand-card min-w-0 p-3 sm:p-4">
         <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">
           Your rank
         </p>
-        <p className="mt-1 text-xl font-black text-white sm:mt-2 sm:text-3xl">
-          {leaderboardEntry?.rank ? `${leaderboardEntry.rank}` : "-"}
-        </p>
+        <div className="mt-1 flex items-center gap-2 sm:mt-2">
+          <p className="text-xl font-black text-white sm:text-3xl">
+            {leaderboardEntry?.rank ? `${leaderboardEntry.rank}` : "-"}
+          </p>
+          {medal ? (
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wide ${medal.className}`}
+              aria-label={`${medal.label} rank`}
+              title={`${medal.label} rank`}
+            >
+              {leaderboardEntry?.rank === 1
+                ? "Gold"
+                : leaderboardEntry?.rank === 2
+                  ? "Silver"
+                  : "Bronze"}
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <div className="brand-card min-w-0 p-3 sm:p-4">
         <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">
           Total points
         </p>
-        <p className="mt-1 text-xl font-black text-emerald-300 sm:mt-2 sm:text-3xl">
+        <p className="mt-1 text-xl font-black text-white sm:mt-2 sm:text-3xl">
           {leaderboardEntry?.total_points ?? 0}
         </p>
       </div>
 
       <div className="brand-card min-w-0 p-3 sm:p-4">
         <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">
-          Jokers left
+          Jokers remaining
         </p>
-        <p className="mt-1 text-xl font-black text-amber-300 sm:mt-2 sm:text-3xl">
+        <p className="mt-1 text-xl font-black text-white sm:mt-2 sm:text-3xl">
           {jokersLeft}
         </p>
       </div>

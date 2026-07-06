@@ -32,6 +32,11 @@ type FixtureRow = {
   status: string;
 };
 
+type GameweekRemainingRow = {
+  id: string;
+  fixtures: { id: string; status: string }[] | null;
+};
+
 type PredictionRow = {
   fixture_id: string;
 };
@@ -219,6 +224,24 @@ export default async function HomePage() {
         .eq("season_id", activeSeason.id)
     : { count: 0 };
 
+  const { data: activeSeasonGameweeks } = activeSeason
+    ? await supabase
+        .from("gameweeks")
+        .select("id, fixtures ( id, status )")
+        .eq("season_id", activeSeason.id)
+    : { data: null };
+
+  const gameweeksRemaining = (
+    (activeSeasonGameweeks as GameweekRemainingRow[] | null) ?? []
+  ).filter((gameweek) => {
+    const fixtures = gameweek.fixtures ?? [];
+
+    return (
+      fixtures.length === 0 ||
+      fixtures.some((fixture) => !isTerminalFixtureStatus(fixture.status))
+    );
+  }).length;
+
   const { data: latestGameweekWithFixtures } = activeSeason
     ? await supabase
         .from("gameweeks")
@@ -321,15 +344,15 @@ export default async function HomePage() {
           <div className="grid grid-cols-2 gap-2 sm:min-w-64">
             <div className="brand-card-soft p-3">
               <p className="text-xs font-semibold uppercase text-slate-500">
-                Gameweeks
+                Gameweeks remaining
               </p>
               <p className="mt-1 text-2xl font-black text-white">
-                {activeGameweekCount ?? 0}
+                {activeSeason ? gameweeksRemaining : (activeGameweekCount ?? 0)}
               </p>
             </div>
             <div className="brand-card-soft p-3">
               <p className="text-xs font-semibold uppercase text-slate-500">
-                Latest picks
+                Current fixtures
               </p>
               <p className="mt-1 text-2xl font-black text-white">
                 {fixtureCount}
