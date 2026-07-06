@@ -7,6 +7,18 @@ import { createAdminClient } from "@/utils/supabase/admin";
 import { getKickoffIso } from "@/utils/fixtures";
 import { getActiveSeason } from "@/utils/seasons";
 import { upsertActivityNotification } from "@/utils/activity";
+import { upsertFixturesPickedActivity } from "@/utils/fixture-activity";
+import { sendPickerUpNextEmail } from "@/utils/email-notifications";
+import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
+import {
+  buildLocalFixtureFromExternal,
+  mapExternalStatusToFixtureStatus,
+  type ExternalFixtureRow,
+} from "@/utils/external-fixtures";
+
+type SupabaseLikeClient =
+  | Awaited<ReturnType<typeof createClient>>
+  | ReturnType<typeof createAdminClient>;
 
 type LeaderboardPredictionRow = {
   user_id: string;
@@ -17,6 +29,18 @@ type LeaderboardPredictionRow = {
 
 type FixtureGameweekLookupRow = {
   gameweek_id: string;
+};
+
+type AdminGameweekSeasonRow = {
+  id: string;
+  season_id: string;
+};
+
+type ActiveSeasonExternalConfig = {
+  id: string;
+  base_provider: string | null;
+  base_competition_code: string | null;
+  base_competition_name: string | null;
 };
 
 type ActivityGameweekRow = {
@@ -181,8 +205,11 @@ function calculatePoints({
   };
 }
 
-async function scoreFixture(fixtureId: string) {
-  const supabase = await createClient();
+export async function scoreFixture(
+  fixtureId: string,
+  supabaseOverride?: SupabaseLikeClient,
+) {
+  const supabase = supabaseOverride ?? (await createClient());
 
   const { data: fixture } = await supabase
     .from("fixtures")
@@ -252,8 +279,11 @@ async function scoreFixture(fixtureId: string) {
   return getSeasonIdFromFixture(typedFixture);
 }
 
-async function recalculateLeaderboard(seasonId: string) {
-  const supabase = await createClient();
+export async function recalculateLeaderboard(
+  seasonId: string,
+  supabaseOverride?: SupabaseLikeClient,
+) {
+  const supabase = supabaseOverride ?? (await createClient());
 
   const { data: predictions } = await supabase
     .from("predictions")
@@ -622,8 +652,237 @@ export async function addFixtureToGameweek(formData: FormData) {
     );
   }
 
+  await upsertFixturesPickedActivityIfNoPredictions({
+    supabase,
+    gameweekId,
+  });
+
   revalidatePath("/admin");
   revalidatePath("/dashboard");
+
+  redirect(`/admin?tab=fixtures&gameweek=${gameweekId}&saved=1`);
+}
+
+async function upsertFixturesPickedActivityIfNoPredictions({
+  supabase,
+  gameweekId,
+}: {
+  supabase: SupabaseLikeClient;
+  gameweekId: string;
+}) {
+  const { data: fixtures } = await supabase
+    .from("fixtures")
+    .select("id")
+    .eq("gameweek_id", gameweekId);
+
+  const fixtureIds =
+    ((fixtures as { id: string }[] | null) ?? []).map((fixture) => fixture.id);
+
+  if (fixtureIds.length === 0) {
+    return;
+  }
+
+  const { data: existingPrediction } = await supabase
+    .from("predictions")
+    .select("fixture_id")
+    .in("fixture_id", fixtureIds)
+    .limit(1)
+    .maybeSingle();
+
+  if (!existingPrediction) {
+    await upsertFixturesPickedActivity({
+      supabase,
+      gameweekId,
+    });
+  }
+}
+
+export async function addExternalFixturesToGameweek(formData: FormData) {
+  const { supabase } = await requireAdmin();
+
+  const gameweekId = String(formData.get("gameweek_id") ?? "");
+  const selectedExternalIds = formData
+    .getAll("external_fixture_id")
+    .map((value) => String(value))
+    .filter(Boolean);
+  const uniqueExternalIds = [...new Set(selectedExternalIds)];
+
+  if (!gameweekId) {
+    redirect("/admin?tab=fixtures&error=Missing gameweek");
+  }
+
+  if (uniqueExternalIds.length === 0) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        "Select at least one cached fixture",
+      )}`,
+    );
+  }
+
+  if (uniqueExternalIds.length !== selectedExternalIds.length) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        "Each external fixture can only be selected once",
+      )}`,
+    );
+  }
+
+  const { data: gameweek } = await supabase
+    .from("gameweeks")
+    .select("id, season_id")
+    .eq("id", gameweekId)
+    .single();
+
+  const typedGameweek = gameweek as AdminGameweekSeasonRow | null;
+
+  if (!typedGameweek) {
+    redirect("/admin?tab=fixtures&error=Gameweek not found");
+  }
+
+  const { data: activeSeason } = await getActiveSeason(
+    supabase,
+    "id, base_provider, base_competition_code, base_competition_name",
+  );
+  const activeSeasonConfig = activeSeason as ActiveSeasonExternalConfig | null;
+
+  if (!activeSeasonConfig || typedGameweek.season_id !== activeSeasonConfig.id) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        "This gameweek is not part of the active season",
+      )}`,
+    );
+  }
+
+  if (
+    activeSeasonConfig.base_provider !== "football_data" ||
+    !activeSeasonConfig.base_competition_code
+  ) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        "External fixtures are not configured for the active season",
+      )}`,
+    );
+  }
+
+  const { data: externalFixtures, error: externalFixturesError } = await supabase
+    .from("external_fixtures")
+    .select(
+      "provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, home_team, away_team, kickoff_at, status, raw_payload, last_synced_at",
+    )
+    .eq("provider", "football_data")
+    .eq("external_competition_code", activeSeasonConfig.base_competition_code)
+    .in("external_fixture_id", uniqueExternalIds);
+
+  if (externalFixturesError) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        externalFixturesError.message,
+      )}`,
+    );
+  }
+
+  const externalFixtureList =
+    (externalFixtures as ExternalFixtureRow[] | null) ?? [];
+
+  if (externalFixtureList.length !== uniqueExternalIds.length) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        "One or more selected cached fixtures could not be found",
+      )}`,
+    );
+  }
+
+  const invalidFixture = externalFixtureList.find(
+    (fixture) => !mapExternalStatusToFixtureStatus(fixture.status),
+  );
+
+  if (invalidFixture) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        `${invalidFixture.home_team} vs ${invalidFixture.away_team} is not selectable`,
+      )}`,
+    );
+  }
+
+  const { data: seasonGameweeks } = await supabase
+    .from("gameweeks")
+    .select("id")
+    .eq("season_id", typedGameweek.season_id);
+
+  const seasonGameweekIds =
+    (seasonGameweeks as { id: string }[] | null)?.map((row) => row.id) ?? [];
+
+  const { data: duplicateFixtures } =
+    seasonGameweekIds.length > 0
+      ? await supabase
+          .from("fixtures")
+          .select("external_fixture_id, gameweek_id")
+          .in("gameweek_id", seasonGameweekIds)
+          .eq("external_provider", "football_data")
+          .in("external_fixture_id", uniqueExternalIds)
+      : { data: [] };
+
+  const existingExternalFixtures =
+    (duplicateFixtures as
+      | { external_fixture_id: string | null; gameweek_id: string }[]
+      | null) ?? [];
+  const duplicateInAnotherGameweek = existingExternalFixtures.find(
+    (fixture) => fixture.gameweek_id !== gameweekId,
+  );
+  const duplicateInCurrentGameweek = new Set(
+    existingExternalFixtures
+      .filter((fixture) => fixture.gameweek_id === gameweekId)
+      .map((fixture) => fixture.external_fixture_id)
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  if (duplicateInAnotherGameweek?.external_fixture_id) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        "One of those fixtures has already been selected for another gameweek",
+      )}`,
+    );
+  }
+
+  const externalFixtureById = new Map(
+    externalFixtureList.map((fixture) => [fixture.external_fixture_id, fixture]),
+  );
+  const rows = uniqueExternalIds
+    .filter((externalFixtureId) => !duplicateInCurrentGameweek.has(externalFixtureId))
+    .map((externalFixtureId) =>
+      buildLocalFixtureFromExternal({
+        fixture: externalFixtureById.get(externalFixtureId)!,
+        gameweekId,
+        competitionName: activeSeasonConfig.base_competition_name,
+      }),
+    );
+
+  if (rows.length === 0) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        "Selected cached fixtures are already in this gameweek",
+      )}`,
+    );
+  }
+
+  const { error: insertError } = await supabase.from("fixtures").insert(rows);
+
+  if (insertError) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        insertError.message,
+      )}`,
+    );
+  }
+
+  await upsertFixturesPickedActivityIfNoPredictions({
+    supabase,
+    gameweekId,
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/predictions");
 
   redirect(`/admin?tab=fixtures&gameweek=${gameweekId}&saved=1`);
 }
@@ -715,6 +974,13 @@ export async function updateFixtureDetails(formData: FormData) {
     );
   }
 
+  if (existingFixture?.gameweek_id) {
+    await upsertFixturesPickedActivityIfNoPredictions({
+      supabase,
+      gameweekId: existingFixture.gameweek_id,
+    });
+  }
+
   revalidatePath("/admin");
   revalidatePath("/dashboard");
 
@@ -765,6 +1031,13 @@ export async function deleteFixture(formData: FormData) {
         error.message,
       )}`,
     );
+  }
+
+  if (existingFixture?.gameweek_id) {
+    await upsertFixturesPickedActivityIfNoPredictions({
+      supabase,
+      gameweekId: existingFixture.gameweek_id,
+    });
   }
 
   revalidatePath("/admin");
@@ -1761,7 +2034,7 @@ async function getGameweekFixtureIds({
   supabase,
   gameweekId,
 }: {
-  supabase: Awaited<ReturnType<typeof createClient>>;
+  supabase: SupabaseLikeClient;
   gameweekId: string;
 }) {
   const { data: fixtures } = await supabase
@@ -1786,7 +2059,7 @@ async function upsertGameweekCompleteActivity({
   supabase,
   gameweekId,
 }: {
-  supabase: Awaited<ReturnType<typeof createClient>>;
+  supabase: SupabaseLikeClient;
   gameweekId: string;
 }) {
   const { data: gameweek } = await supabase
@@ -1798,7 +2071,7 @@ async function upsertGameweekCompleteActivity({
   const typedGameweek = gameweek as ActivityGameweekRow | null;
 
   if (!typedGameweek) {
-    return;
+    return false;
   }
 
   const fixtures = await getGameweekFixtureIds({
@@ -1807,7 +2080,7 @@ async function upsertGameweekCompleteActivity({
   });
 
   if (!isGameweekComplete(fixtures)) {
-    return;
+    return false;
   }
 
   const fixtureIds = fixtures.map((fixture) => fixture.id);
@@ -2016,13 +2289,15 @@ async function upsertGameweekCompleteActivity({
       biggestFallers,
     },
   });
+
+  return true;
 }
 
 async function upsertNextPickerActivity({
   supabase,
   completedGameweekId,
 }: {
-  supabase: Awaited<ReturnType<typeof createClient>>;
+  supabase: SupabaseLikeClient;
   completedGameweekId: string;
 }) {
   const { data: completedGameweek } = await supabase
@@ -2058,6 +2333,45 @@ async function upsertNextPickerActivity({
     return;
   }
 
+  const { data: nextFixtures } = await supabase
+    .from("fixtures")
+    .select("id, status, external_provider, external_fixture_id")
+    .eq("gameweek_id", typedNextGameweek.id);
+  const nextFixtureList =
+    (nextFixtures as
+      | {
+          id: string;
+          status: string;
+          external_provider: string | null;
+          external_fixture_id: string | null;
+        }[]
+      | null) ?? [];
+  const nextSelectionStatus = getFixtureSelectionStatus(nextFixtureList);
+  const nextGameweekTerminal =
+    nextFixtureList.length > 0 &&
+    nextFixtureList.every((fixture) =>
+      ["completed", "postponed", "void"].includes(fixture.status),
+    );
+
+  if (nextGameweekTerminal || nextSelectionStatus.isComplete) {
+    return;
+  }
+
+  const nextFixtureIds = nextFixtureList.map((fixture) => fixture.id);
+  const { data: existingPrediction } =
+    nextFixtureIds.length > 0
+      ? await supabase
+          .from("predictions")
+          .select("fixture_id")
+          .in("fixture_id", nextFixtureIds)
+          .limit(1)
+          .maybeSingle()
+      : { data: null };
+
+  if (existingPrediction) {
+    return;
+  }
+
   const pickerName = getProfileDisplayName(typedNextGameweek.profiles);
   const gameweekName = formatGameweekName(typedNextGameweek);
 
@@ -2074,6 +2388,47 @@ async function upsertNextPickerActivity({
       pickerName,
     },
   });
+
+  try {
+    const emailResult = await sendPickerUpNextEmail({
+      supabase: createAdminClient(),
+      gameweekId: typedNextGameweek.id,
+    });
+
+    if (emailResult.error) {
+      console.warn(`Picker-up-next email skipped: ${emailResult.error}`);
+    }
+  } catch (error) {
+    console.warn(
+      `Picker-up-next email skipped: ${
+        error instanceof Error ? error.message : "unknown email error"
+      }`,
+    );
+  }
+}
+
+export async function upsertPostResultActivityForGameweeks({
+  supabase,
+  gameweekIds,
+}: {
+  supabase: SupabaseLikeClient;
+  gameweekIds: Iterable<string>;
+}) {
+  for (const gameweekId of new Set(gameweekIds)) {
+    const gameweekComplete = await upsertGameweekCompleteActivity({
+      supabase,
+      gameweekId,
+    });
+
+    if (!gameweekComplete) {
+      continue;
+    }
+
+    await upsertNextPickerActivity({
+      supabase,
+      completedGameweekId: gameweekId,
+    });
+  }
 }
 
 export async function updateFixtureResults(formData: FormData) {
@@ -2164,17 +2519,10 @@ export async function updateFixtureResults(formData: FormData) {
     await recalculateLeaderboard(seasonId);
   }
 
-  for (const gameweekId of updatedGameweekIds) {
-    await upsertGameweekCompleteActivity({
-      supabase,
-      gameweekId,
-    });
-
-    await upsertNextPickerActivity({
-      supabase,
-      completedGameweekId: gameweekId,
-    });
-  }
+  await upsertPostResultActivityForGameweeks({
+    supabase,
+    gameweekIds: updatedGameweekIds,
+  });
 
   revalidatePath("/admin");
   revalidatePath("/dashboard");

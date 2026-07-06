@@ -5,34 +5,21 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import { getKickoffIso } from "@/utils/fixtures";
 import { getActiveSeason } from "@/utils/seasons";
-import { upsertActivityNotification } from "@/utils/activity";
+import { getEditablePickerGameweeks } from "@/utils/picker-eligibility";
+import { upsertFixturesPickedActivity } from "@/utils/fixture-activity";
+import {
+  buildLocalFixtureFromExternal,
+  getExpectedExternalPickCount,
+  getExternalFixtureGroupKey,
+  mapExternalStatusToFixtureStatus,
+  type ExternalFixtureRow,
+} from "@/utils/external-fixtures";
 
 const slotNumbers = [1, 2, 3, 4];
 
 type FixtureStatusRow = {
+  id?: string;
   status: string;
-};
-
-type SavedFixtureRow = {
-  id: string;
-  home_team: string;
-  away_team: string;
-  kickoff_at: string;
-};
-
-type ExternalFixtureRow = {
-  provider: string;
-  external_fixture_id: string;
-  external_competition_code: string;
-  external_round: string | null;
-  external_matchday: number | null;
-  external_stage: string | null;
-  home_team: string;
-  away_team: string;
-  kickoff_at: string;
-  status: string;
-  raw_payload: Record<string, unknown> | null;
-  last_synced_at: string | null;
 };
 
 type ActiveSeasonExternalConfig = {
@@ -41,48 +28,6 @@ type ActiveSeasonExternalConfig = {
   base_competition_code: string | null;
   base_competition_name: string | null;
 };
-
-type GameweekWithPickerRow = {
-  id: string;
-  season_id: string;
-  gameweek_number: number;
-  name: string | null;
-  fixture_picker_id: string | null;
-  profiles:
-    | {
-        display_name: string;
-      }
-    | {
-        display_name: string;
-      }[]
-    | null;
-};
-
-function getPickerDisplayName(gameweek: GameweekWithPickerRow) {
-  if (Array.isArray(gameweek.profiles)) {
-    return gameweek.profiles[0]?.display_name ?? "Someone";
-  }
-
-  return gameweek.profiles?.display_name ?? "Someone";
-}
-
-function formatGameweekName(gameweek: {
-  gameweek_number: number;
-  name: string | null;
-}) {
-  return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
-}
-
-function formatKickoffForActivity(kickoffAt: string) {
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "long",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(kickoffAt));
-}
 
 async function requireFixtureManagerForGameweek(gameweekId: string) {
   const supabase = await createClient();
@@ -160,6 +105,23 @@ async function requireFixtureManagerForGameweek(gameweekId: string) {
     }
   }
 
+  const editableGameweeks = await getEditablePickerGameweeks({
+    supabase,
+    userId: user.id,
+    activeSeasonId: gameweek.season_id,
+  });
+  const isEditableGameweek = editableGameweeks.some(
+    (editableGameweek) => editableGameweek.id === gameweekId,
+  );
+
+  if (!isEditableGameweek) {
+    redirect(
+      `/pick-fixtures?error=${encodeURIComponent(
+        "This gameweek is no longer available for fixture picking",
+      )}`,
+    );
+  }
+
   const { data: currentFixtures } = await supabase
     .from("fixtures")
     .select("id")
@@ -187,80 +149,6 @@ async function requireFixtureManagerForGameweek(gameweekId: string) {
   }
 
   return { supabase, gameweek };
-}
-
-async function upsertFixturesPickedActivity({
-  supabase,
-  gameweekId,
-}: {
-  supabase: Awaited<ReturnType<typeof createClient>>;
-  gameweekId: string;
-}) {
-  const { data: gameweek } = await supabase
-    .from("gameweeks")
-    .select(
-      `
-      id,
-      season_id,
-      gameweek_number,
-      name,
-      fixture_picker_id,
-      profiles (
-        display_name
-      )
-    `,
-    )
-    .eq("id", gameweekId)
-    .single();
-
-  if (!gameweek) {
-    return;
-  }
-
-  const typedGameweek = gameweek as GameweekWithPickerRow;
-
-  const { data: fixtures } = await supabase
-    .from("fixtures")
-    .select("id, home_team, away_team, kickoff_at")
-    .eq("gameweek_id", gameweekId)
-    .order("kickoff_at", { ascending: true });
-
-  const fixtureList = (fixtures as SavedFixtureRow[] | null) ?? [];
-
-  if (fixtureList.length < 4) {
-    return;
-  }
-
-  const firstKickoff = fixtureList[0]?.kickoff_at;
-
-  if (!firstKickoff) {
-    return;
-  }
-
-  const pickerName = getPickerDisplayName(typedGameweek);
-  const gameweekName = formatGameweekName(typedGameweek);
-  const kickoffText = formatKickoffForActivity(firstKickoff);
-
-  await upsertActivityNotification({
-    eventKey: `fixtures_picked:${gameweekId}`,
-    type: "fixtures_selected",
-    title: `${pickerName} picked fixtures for ${gameweekName}`,
-    body: `${pickerName} picked the fixtures for ${gameweekName}. ${gameweekName} starts at ${kickoffText}.`,
-    seasonId: typedGameweek.season_id,
-    gameweekId,
-    metadata: {
-        pickerName,
-        gameweekId,
-        gameweekName,
-        firstKickoff: firstKickoff,
-        kickoffText,
-        fixtures: fixtureList.slice(0, 4).map((fixture) => ({
-        homeTeam: fixture.home_team,
-        awayTeam: fixture.away_team,
-        kickoffAt: fixture.kickoff_at,
-        })),
-    },
-    });
 }
 
 export async function savePickerFixtures(formData: FormData) {
@@ -381,34 +269,6 @@ export async function savePickerFixtures(formData: FormData) {
   revalidatePath("/dashboard");
 
   redirect(`/pick-fixtures?gameweek=${gameweekId}&saved=1`);
-}
-
-function mapExternalStatusToFixtureStatus(status: string) {
-  if (status === "TIMED" || status === "SCHEDULED") {
-    return "scheduled";
-  }
-
-  return null;
-}
-
-function getExternalFixtureGroupKey(fixture: {
-  external_matchday: number | null;
-  external_stage?: string | null;
-  kickoff_at: string;
-}) {
-  if (fixture.external_matchday !== null) {
-    return `matchday:${fixture.external_matchday}`;
-  }
-
-  if (fixture.external_stage) {
-    return `stage:${fixture.external_stage}`;
-  }
-
-  return `date:${fixture.kickoff_at.slice(0, 10)}`;
-}
-
-function getExpectedExternalPickCount(groupSize: number) {
-  return Math.min(4, groupSize);
 }
 
 export async function saveExternalPickerFixtures(formData: FormData) {
@@ -647,28 +507,13 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   const externalFixtureById = new Map(
     externalFixtureList.map((fixture) => [fixture.external_fixture_id, fixture]),
   );
-  const rows = uniqueExternalIds.map((externalFixtureId) => {
-    const fixture = externalFixtureById.get(externalFixtureId)!;
-
-    return {
-      gameweek_id: gameweekId,
-      home_team: fixture.home_team,
-      away_team: fixture.away_team,
-      kickoff_at: fixture.kickoff_at,
-      competition:
-        activeSeasonConfig.base_competition_name ??
-        fixture.external_competition_code,
-      status: mapExternalStatusToFixtureStatus(fixture.status),
-      external_provider: fixture.provider,
-      external_fixture_id: fixture.external_fixture_id,
-      external_competition_code: fixture.external_competition_code,
-      external_round: fixture.external_round,
-      external_matchday: fixture.external_matchday,
-      external_status: fixture.status,
-      external_last_synced_at: fixture.last_synced_at,
-      external_raw_payload: fixture.raw_payload,
-    };
-  });
+  const rows = uniqueExternalIds.map((externalFixtureId) =>
+    buildLocalFixtureFromExternal({
+      fixture: externalFixtureById.get(externalFixtureId)!,
+      gameweekId,
+      competitionName: activeSeasonConfig.base_competition_name,
+    }),
+  );
 
   const { error: insertError } = await supabase.from("fixtures").insert(rows);
 

@@ -97,9 +97,11 @@ Rules:
 - Only visible to the assigned picker when they have an eligible gameweek.
 - Gameweek 1 is eligible immediately.
 - Later gameweeks unlock after the previous gameweek is complete.
-- Picker chooses exactly four fixtures.
+- Picker chooses the expected fixture count for the current gameweek. Standard
+  league gameweeks normally use four fixtures; cup/test gameweeks can use fewer
+  when the selected external matchday has fewer available fixtures.
 - If the active season has a configured base provider/competition, the picker can select cached fixtures from `external_fixtures`.
-- Cached external fixtures are grouped by provider stage, matchday, or kickoff date. Provider matchday is not treated as app gameweek number.
+- Cached external fixtures are grouped by provider matchday first, then stage or kickoff date. Provider matchday is not treated as app gameweek number.
 - Selected cached fixtures are copied into the existing `fixtures` table with external provenance fields.
 - The picker never calls football-data.org directly.
 - Picker can edit until predictions exist for that gameweek.
@@ -150,7 +152,27 @@ Future Maintenance tab should include:
 The route supports dry-run output and, when explicitly enabled on the season,
 imports provider fixtures into the local `external_fixtures` cache. 2.0C picker
 selection reads that local cache and copies selected rows into gameplay
-`fixtures`. Result sync and scoring from provider data remain future work.
+`fixtures`.
+
+2.0D adds an admin-only manual result sync endpoint:
+
+```text
+/api/admin/external-fixtures/sync-results
+```
+
+GET requests are dry-run only. POST can update selected linked fixtures from
+football-data.org batch ID results, update the matching external cache rows, and
+reuse the existing scoring, leaderboard recalculation, and post-result activity
+notification flow when final scores arrive. Cron-based result sync remains
+future work.
+
+The Admin fixtures tab can also add selected cached external fixtures from the
+local `external_fixtures` table. It uses the same external-to-local provenance
+mapping as `/pick-fixtures`, keeps manual fixture entry available, and prevents
+duplicate external fixture selection across the active season. Fixture-picked
+activity is upserted from the current gameweek fixture count, so admin edits
+before predictions do not leave stale four-fixture notifications in cup/test
+seasons.
 
 ## User roles and statuses
 
@@ -254,6 +276,9 @@ Admin enters/changes result
 -> activity feed updates if gameweek is complete
 ```
 
+External result sync follows the same scoring, leaderboard, and post-result
+activity path after provider results are applied.
+
 If scores are edited directly in SQL, prediction points and leaderboard are not automatically recalculated unless a scoring script/action is also run.
 
 ## League activity feed
@@ -311,6 +336,10 @@ football-data.org is limited to 10 requests/minute on the free tier. Provider
 data is cached locally in `external_fixtures`. Player-facing picker UI reads
 the local cache, not football-data.org directly.
 
+Selected external fixture results are synced only through the admin-only
+`/api/admin/external-fixtures/sync-results` route. Player-facing pages do not
+call football-data.org.
+
 ### Middleware/proxy
 
 `proxy.ts` calls `updateSession()` from `utils/supabase/middleware.ts`.
@@ -341,13 +370,23 @@ REMINDER_EMAIL_FROM=...
 CRON_SECRET=...
 ```
 
-Prediction reminders are sent by Vercel Cron through
-`/api/cron/send-prediction-reminders`. Vercel Hobby runs this once daily.
-Successful matchday prediction reminders and fixture picker reminders are logged
-in `prediction_reminders` with `reminder_date` so the same
-user/gameweek/reminder type is not emailed twice on the same day.
-Reminder emails link to `${NEXT_PUBLIC_SITE_URL}/predictions` or
-`${NEXT_PUBLIC_SITE_URL}/pick-fixtures`.
+Activity-mirroring emails are sent through Resend and logged in
+`email_notifications` with stable `event_key` values:
+
+- `picker_up_next:<gameweek_id>:<user_id>`
+- `predictions_open:<gameweek_id>:<user_id>`
+- `predictions_24h:<gameweek_id>:<user_id>`
+
+Fixture-picked activity sends a one-time predictions-open email to approved
+users once the current fixture set is complete. If fixtures are edited before
+predictions exist, the in-app notification is updated, but the predictions-open
+email is not resent automatically.
+
+`/api/cron/send-prediction-reminders` remains separate from result sync. It
+sends missed picker-up-next emails and less-than-24-hours prediction reminders.
+Reminder completeness is based on the selected/actionable fixtures in that
+gameweek, so cup/test gameweeks with one or two fixtures do not require four
+predictions.
 
 ## Development commands
 
@@ -361,7 +400,7 @@ Run lint/build after meaningful changes.
 
 ## Current known next work
 
-- 2.0D selected-fixture final result sync
+- Cron scheduling for selected-fixture result sync
 - Admin controls for base provider/competition setup
 - Error handling polish
 - Mobile polish

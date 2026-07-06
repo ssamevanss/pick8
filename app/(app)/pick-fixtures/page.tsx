@@ -5,23 +5,19 @@ import SubmitButton from "@/components/forms/SubmitButton";
 import type { Fixture, Gameweek } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
+import {
+  getEditablePickerGameweeks,
+  type PickerEligibleGameweek,
+} from "@/utils/picker-eligibility";
+import {
+  getExpectedExternalPickCount,
+  getExternalFixtureGroupKey,
+} from "@/utils/external-fixtures";
 import { saveExternalPickerFixtures, savePickerFixtures } from "./actions";
 import { redirect } from "next/navigation";
 import { formatInTimeZone } from "date-fns-tz";
 
-type PickerGameweek = Gameweek & {
-  fixture_picker_id: string | null;
-  season_id: string;
-};
-
-type FixtureStatusRow = {
-  status: string;
-};
-
-type FixtureActionRow = {
-  id: string;
-  status: string;
-};
+type PickerGameweek = PickerEligibleGameweek & Gameweek;
 
 type ActiveSeasonPickerConfig = {
   id: string;
@@ -65,10 +61,6 @@ type UsedExternalFixtureRow = {
 const slotNumbers = [1, 2, 3, 4];
 const selectableExternalStatuses = ["TIMED", "SCHEDULED"];
 
-function isTerminalFixtureStatus(status: string) {
-  return ["completed", "postponed", "void"].includes(status);
-}
-
 function formatDateTimeLocal(value: string) {
   return formatInTimeZone(value, "Europe/London", "yyyy-MM-dd'T'HH:mm");
 }
@@ -85,18 +77,6 @@ function formatLastImported(value: string | null) {
   return value
     ? formatInTimeZone(value, "Europe/London", "EEE d MMM yyyy, HH:mm")
     : "Unknown";
-}
-
-function getExternalGroupKey(fixture: ExternalFixtureCacheRow) {
-  if (fixture.external_matchday !== null) {
-    return `matchday:${fixture.external_matchday}`;
-  }
-
-  if (fixture.external_stage) {
-    return `stage:${fixture.external_stage}`;
-  }
-
-  return `date:${formatKickoffDate(fixture.kickoff_at)}`;
 }
 
 function getExternalGroupLabel(fixture: ExternalFixtureCacheRow) {
@@ -118,7 +98,7 @@ function groupExternalFixtures(fixtures: ExternalFixtureCacheRow[]) {
   >();
 
   for (const fixture of fixtures) {
-    const key = getExternalGroupKey(fixture);
+    const key = getExternalFixtureGroupKey(fixture);
     const existingGroup = groups.get(key);
 
     groups.set(key, {
@@ -135,98 +115,6 @@ function groupExternalFixtures(fixtures: ExternalFixtureCacheRow[]) {
         new Date(a.kickoff_at).getTime() - new Date(b.kickoff_at).getTime(),
     ),
   }));
-}
-
-function getExpectedExternalPickCount(groupSize: number) {
-  return Math.min(4, groupSize);
-}
-
-async function getEligiblePickerGameweeks({
-  supabase,
-  userId,
-  activeSeasonId,
-}: {
-  supabase: Awaited<ReturnType<typeof createClient>>;
-  userId: string;
-  activeSeasonId: string;
-}) {
-  const { data: gameweeks } = await supabase
-    .from("gameweeks")
-    .select("id, season_id, gameweek_number, name, fixture_picker_id")
-    .eq("season_id", activeSeasonId)
-    .eq("fixture_picker_id", userId)
-    .order("gameweek_number", { ascending: true });
-
-  const assignedGameweeks = (gameweeks as PickerGameweek[] | null) ?? [];
-  const eligibleGameweeks: PickerGameweek[] = [];
-
-  for (const gameweek of assignedGameweeks) {
-    let previousGameweekComplete = gameweek.gameweek_number === 1;
-
-    if (gameweek.gameweek_number === 1) {
-      previousGameweekComplete = true;
-    } else {
-      const { data: previousGameweek } = await supabase
-        .from("gameweeks")
-        .select("id")
-        .eq("season_id", gameweek.season_id)
-        .eq("gameweek_number", gameweek.gameweek_number - 1)
-        .maybeSingle();
-
-      if (!previousGameweek) {
-        continue;
-      }
-
-      const { data: previousFixtures } = await supabase
-        .from("fixtures")
-        .select("status")
-        .eq("gameweek_id", previousGameweek.id);
-
-      const previousFixtureList =
-        (previousFixtures as FixtureStatusRow[] | null) ?? [];
-
-      previousGameweekComplete =
-        previousFixtureList.length > 0 &&
-        previousFixtureList.every((fixture) =>
-          isTerminalFixtureStatus(fixture.status),
-        );
-    }
-
-    if (!previousGameweekComplete) {
-      continue;
-    }
-
-    const { data: fixtures } = await supabase
-      .from("fixtures")
-      .select("id, status")
-      .eq("gameweek_id", gameweek.id);
-
-    const fixtureList = (fixtures as FixtureActionRow[] | null) ?? [];
-    const allFixturesClosed =
-      fixtureList.length > 0 &&
-      fixtureList.every((fixture) => isTerminalFixtureStatus(fixture.status));
-
-    if (allFixturesClosed) {
-      continue;
-    }
-
-    const fixtureIds = fixtureList.map((fixture) => fixture.id);
-    const { data: existingPrediction } =
-      fixtureIds.length > 0
-        ? await supabase
-            .from("predictions")
-            .select("fixture_id")
-            .in("fixture_id", fixtureIds)
-            .limit(1)
-            .maybeSingle()
-        : { data: null };
-
-    if (!existingPrediction) {
-      eligibleGameweeks.push(gameweek);
-    }
-  }
-
-  return eligibleGameweeks;
 }
 
 export default async function PickFixturesPage({
@@ -252,11 +140,11 @@ export default async function PickFixturesPage({
   const activeSeasonConfig = activeSeason as ActiveSeasonPickerConfig | null;
 
   const eligibleGameweeks = activeSeason
-    ? await getEligiblePickerGameweeks({
+    ? ((await getEditablePickerGameweeks({
         supabase,
         userId: user.id,
         activeSeasonId: activeSeasonConfig!.id,
-      })
+      })) as PickerGameweek[])
     : [];
 
   if (!activeSeason) {
@@ -337,7 +225,6 @@ export default async function PickFixturesPage({
   const pickerFixtures = fixtureList.slice(0, 4);
   const extraFixtureCount = Math.max(0, fixtureList.length - 4);
   const completedFixtureSlots = pickerFixtures.length;
-  const isComplete = completedFixtureSlots === 4;
   const currentExternalFixtureIds = new Set(
     fixtureList
       .map((fixture) => fixture.external_fixture_id)
@@ -422,6 +309,24 @@ export default async function PickFixturesPage({
         currentExternalFixtureIds.has(fixture.external_fixture_id),
       ).length
     : 0;
+  const externalModeAvailable = Boolean(
+    externalFixturesConfigured && selectedExternalGroup,
+  );
+  const activeExpectedFixtureCount = externalModeAvailable
+    ? expectedExternalPickCount
+    : 4;
+  const activeSelectedFixtureCount = externalModeAvailable
+    ? currentSelectedExternalCount
+    : completedFixtureSlots;
+  const activePickerIsComplete =
+    activeExpectedFixtureCount > 0 &&
+    activeSelectedFixtureCount === activeExpectedFixtureCount;
+  const gameweekHelperText =
+    externalModeAvailable && expectedExternalPickCount > 0
+      ? `Select the ${expectedExternalPickCount} fixture${
+          expectedExternalPickCount === 1 ? "" : "s"
+        } for this matchday, then save once.`
+      : "Fill in up to four fixtures, then save once.";
   const latestExternalImport =
     allExternalFixtureRows
       .map((fixture) => fixture.last_synced_at)
@@ -437,7 +342,7 @@ export default async function PickFixturesPage({
       <header className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Pick Fixtures</h1>
         <p className="mt-2 text-sm text-slate-400">
-          Choose the four fixtures for your assigned gameweek.
+          Choose fixtures for your assigned gameweek.
         </p>
       </header>
 
@@ -467,20 +372,19 @@ export default async function PickFixturesPage({
                 `Gameweek ${selectedGameweek.gameweek_number}`}
             </h2>
             <p className="text-sm text-slate-400">
-              Fill in up to four fixtures, then save once.
+              {gameweekHelperText}
             </p>
           </div>
 
           <span
             className={`inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold ${
-              isComplete
+              activePickerIsComplete
                 ? "bg-emerald-500/15 text-emerald-300"
                 : "bg-amber-500/15 text-amber-300"
             }`}
           >
-            {isComplete
-              ? "Ready"
-              : `${completedFixtureSlots}/4 fixtures selected`}
+            {activeSelectedFixtureCount}/{activeExpectedFixtureCount} fixtures
+            selected
           </span>
         </div>
 
@@ -570,7 +474,9 @@ export default async function PickFixturesPage({
                         {selectedExternalGroup.label}
                       </h4>
                       <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300">
-                        Next group
+                        {currentSelectedExternalCount > 0
+                          ? "Selected group"
+                          : "Next group"}
                       </span>
                     </div>
 
@@ -618,9 +524,9 @@ export default async function PickFixturesPage({
 
                 <p className="mt-3 rounded-lg bg-slate-900 p-3 text-xs text-slate-400">
                   Select {expectedExternalPickCount} cached fixture
-                  {expectedExternalPickCount === 1 ? "" : "s"}. Saving external fixtures
-                  replaces the current editable picker fixtures for this
-                  gameweek. Manual entry remains available below.
+                  {expectedExternalPickCount === 1 ? "" : "s"}. Saving
+                  external fixtures replaces the current editable picker
+                  fixtures for this gameweek.
                 </p>
 
                 <SubmitButton
@@ -649,14 +555,39 @@ export default async function PickFixturesPage({
           </section>
         )}
 
-        <div className="mb-3">
-          <h3 className="text-lg font-semibold">Manual fallback</h3>
-          <p className="text-sm text-slate-400">
-            Enter fixtures manually or edit the current editable picks.
-          </p>
-        </div>
+        <details
+          className={
+            externalModeAvailable
+              ? "rounded-xl border border-slate-800 bg-slate-950 p-4"
+              : ""
+          }
+          open={!externalModeAvailable}
+        >
+          <summary
+            className={
+              externalModeAvailable
+                ? "cursor-pointer select-none text-sm font-semibold text-slate-300"
+                : "list-none"
+            }
+          >
+            {externalModeAvailable ? "Manual override" : null}
+          </summary>
 
-        <form action={savePickerFixtures} className="space-y-4">
+          <div className={externalModeAvailable ? "mt-4" : ""}>
+            <div className="mb-3">
+              <h3 className="text-lg font-semibold">
+                {externalModeAvailable
+                  ? "Enter fixtures manually instead"
+                  : "Manual fallback"}
+              </h3>
+              <p className="text-sm text-slate-400">
+                {externalModeAvailable
+                  ? "Use this only if cached fixtures are missing or need an admin-style override."
+                  : "Enter fixtures manually or edit the current editable picks."}
+              </p>
+            </div>
+
+            <form action={savePickerFixtures} className="space-y-4">
           <input type="hidden" name="gameweek_id" value={selectedGameweek.id} />
 
           {slotNumbers.map((slotNumber) => {
@@ -757,7 +688,9 @@ export default async function PickFixturesPage({
               className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
             />
           )}
-        </form>
+            </form>
+          </div>
+        </details>
       </section>
     </>
   );

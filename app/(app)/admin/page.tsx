@@ -1,6 +1,9 @@
 export const dynamic = "force-dynamic";
 
 import AdminAddFixtureForm from "@/components/admin/AdminAddFixtureForm";
+import AdminExternalFixturePickerCard, {
+  type AdminExternalFixtureOption,
+} from "@/components/admin/AdminExternalFixturePickerCard";
 import AdminCreateGameweekForm from "@/components/admin/AdminCreateGameweekForm";
 import AdminManageFixtureCard from "@/components/admin/AdminManageFixtureCard";
 import AdminResultFixtureCard from "@/components/admin/AdminResultFixtureCard";
@@ -57,13 +60,19 @@ type AdminTab = "create" | "fixtures" | "results" | "users" | "maintenance";
 type HealthFixtureRow = {
   id: string;
   gameweek_id: string;
+  home_team: string;
+  away_team: string;
   kickoff_at: string | null;
   status: string;
   home_score: number | null;
   away_score: number | null;
+  external_provider: string | null;
+  external_fixture_id: string | null;
+  external_last_synced_at: string | null;
 };
 
 type HealthPredictionRow = {
+  fixture_id: string;
   points: number | null;
 };
 
@@ -113,7 +122,7 @@ export default async function AdminPage({
 
   const { data: activeSeason } = await getActiveSeason(
     supabase,
-    "id, name, status, is_active, base_provider, base_competition_code, fixture_import_enabled, result_sync_enabled",
+    "id, name, status, is_active, base_provider, base_competition_code, base_competition_name, fixture_import_enabled, result_sync_enabled",
   );
 
   const { data: seasons } = await supabase
@@ -141,7 +150,9 @@ export default async function AdminPage({
     gameweekIds.length > 0
       ? await supabase
           .from("fixtures")
-          .select("id, gameweek_id, kickoff_at, status, home_score, away_score")
+          .select(
+            "id, gameweek_id, home_team, away_team, kickoff_at, status, home_score, away_score, external_provider, external_fixture_id, external_last_synced_at",
+          )
           .in("gameweek_id", gameweekIds)
       : { data: [] };
 
@@ -248,13 +259,37 @@ export default async function AdminPage({
     completedFixtureIds.length > 0
       ? await supabase
           .from("predictions")
-          .select("points")
+          .select("fixture_id, points")
           .in("fixture_id", completedFixtureIds)
       : { data: [] };
 
-  const unscoredPredictionCount = (
+  const unscoredCompletedPredictions = (
     (completedFixturePredictions as HealthPredictionRow[] | null) ?? []
-  ).filter((prediction) => prediction.points === null).length;
+  ).filter((prediction) => prediction.points === null);
+  const unscoredPredictionCount = unscoredCompletedPredictions.length;
+  const activeSeasonFixtureById = new Map(
+    activeSeasonFixtures.map((fixture) => [fixture.id, fixture]),
+  );
+  const activeSeasonGameweekById = new Map(
+    gameweekList.map((gameweek) => [gameweek.id, gameweek]),
+  );
+  const unscoredPredictionFixtureDetails = [
+    ...new Map(
+      unscoredCompletedPredictions.map((prediction) => {
+        const fixture = activeSeasonFixtureById.get(prediction.fixture_id);
+        const gameweek = fixture
+          ? activeSeasonGameweekById.get(fixture.gameweek_id)
+          : null;
+        const label = fixture
+          ? `${gameweek?.name ?? `Gameweek ${gameweek?.gameweek_number ?? "?"}`}: ${
+              fixture.home_team
+            } vs ${fixture.away_team}`
+          : prediction.fixture_id;
+
+        return [label, label];
+      }),
+    ).values(),
+  ].slice(0, 3);
 
   const { count: leaderboardEntryCount } = activeSeason?.id
     ? await supabase
@@ -264,11 +299,11 @@ export default async function AdminPage({
     : { count: 0 };
 
   const { count: reminderCount, error: reminderCountError } = await supabase
-    .from("prediction_reminders")
+    .from("email_notifications")
     .select("id", { count: "exact", head: true });
 
   const { data: latestReminder, error: latestReminderError } = await supabase
-    .from("prediction_reminders")
+    .from("email_notifications")
     .select("sent_at")
     .order("sent_at", { ascending: false })
     .limit(1)
@@ -317,18 +352,17 @@ export default async function AdminPage({
       label: envVar.name,
       value: envVar.present ? "Present" : "Missing",
       severity: envVar.present ? ("ok" as const) : ("warning" as const),
-      detail:
-        envVar.name === "CRON_SECRET"
-          ? "Used to protect the Vercel Cron route."
-          : "Required before real reminder emails can be sent.",
+      detail: envVar.present
+        ? "Present in this runtime."
+        : "Missing in this runtime. This does not check Vercel Production.",
     })),
     {
       label: "Reminder log",
       value: reminderCountError ? "Not ready" : "Ready",
       severity: reminderCountError ? "warning" : "ok",
       detail: reminderCountError
-        ? "Run the prediction_reminders SQL before enabling reminders."
-        : `${reminderCount ?? 0} sent reminder log rows.`,
+        ? "Run the email_notifications SQL before enabling email notifications."
+        : `${reminderCount ?? 0} sent email notification log rows.`,
     },
     {
       label: "Last reminder sent",
@@ -343,8 +377,8 @@ export default async function AdminPage({
             }).format(new Date(typedLatestReminder.sent_at)),
       severity: latestReminderError ? "warning" : "ok",
       detail: latestReminderError
-        ? "Run the prediction_reminders SQL before enabling reminders."
-        : "Most recent prediction reminder log row.",
+        ? "Run the email_notifications SQL before enabling email notifications."
+        : "Most recent email notification log row.",
     },
   ];
 
@@ -352,6 +386,7 @@ export default async function AdminPage({
     | {
         base_provider: string | null;
         base_competition_code: string | null;
+        base_competition_name: string | null;
         fixture_import_enabled: boolean | null;
         result_sync_enabled: boolean | null;
       }
@@ -399,9 +434,84 @@ export default async function AdminPage({
       severity: activeSeasonExternalConfig?.result_sync_enabled
         ? "warning"
         : "ok",
-      detail: "Result sync is deferred until 2.0D.",
+      detail: "Manual admin sync is available. Keep scheduled sync disabled until cron is added.",
     },
   ];
+
+  const selectedExternalLinkedFixtures = activeSeasonFixtures.filter(
+    (fixture) =>
+      fixture.external_provider === "football_data" &&
+      Boolean(fixture.external_fixture_id),
+  );
+  const lastExternalSyncAt =
+    selectedExternalLinkedFixtures
+      .map((fixture) => fixture.external_last_synced_at)
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1) ?? null;
+  const externalResultSyncSummary = {
+    activeSeasonId: activeSeason?.id ?? null,
+    activeSeasonName: activeSeason?.name ?? null,
+    baseProvider: activeSeasonExternalConfig?.base_provider ?? null,
+    baseCompetitionCode:
+      activeSeasonExternalConfig?.base_competition_code ?? null,
+    baseCompetitionName:
+      activeSeasonExternalConfig?.base_competition_name ?? null,
+    selectedExternalFixtureCount: selectedExternalLinkedFixtures.length,
+    lastExternalSyncAt,
+  };
+  const adminExternalFixturesConfigured =
+    activeSeasonExternalConfig?.base_provider === "football_data" &&
+    Boolean(activeSeasonExternalConfig.base_competition_code);
+  const nowIso = new Date().toISOString();
+  const { data: adminExternalFixtureRows } =
+    adminExternalFixturesConfigured
+      ? await supabase
+          .from("external_fixtures")
+          .select(
+            "id, provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, home_team, away_team, kickoff_at, status",
+          )
+          .eq("provider", "football_data")
+          .eq(
+            "external_competition_code",
+            activeSeasonExternalConfig!.base_competition_code!,
+          )
+          .in("status", ["TIMED", "SCHEDULED"])
+          .gt("kickoff_at", nowIso)
+          .order("kickoff_at", { ascending: true })
+      : { data: [] };
+  const externalFixtureUsage = new Map<string, string>();
+
+  for (const fixture of activeSeasonFixtures) {
+    if (fixture.external_provider && fixture.external_fixture_id) {
+      externalFixtureUsage.set(
+        `${fixture.external_provider}:${fixture.external_fixture_id}`,
+        fixture.gameweek_id,
+      );
+    }
+  }
+
+  const adminExternalFixtureOptions = (
+    (adminExternalFixtureRows as
+      | Omit<AdminExternalFixtureOption, "disabledReason">[]
+      | null) ?? []
+  ).map((fixture) => {
+    const usedGameweekId = externalFixtureUsage.get(
+      `${fixture.provider}:${fixture.external_fixture_id}`,
+    );
+    const usedInCurrentGameweek =
+      selectedGameweek && usedGameweekId === selectedGameweek.id;
+    const disabledReason = usedInCurrentGameweek
+      ? "Already selected for this gameweek"
+      : usedGameweekId
+        ? "Already selected in another gameweek"
+        : null;
+
+    return {
+      ...fixture,
+      disabledReason,
+    };
+  });
 
   const healthChecks: HealthCheckRow[] = [
     {
@@ -465,9 +575,19 @@ export default async function AdminPage({
     },
     {
       label: "Unscored completed predictions",
-      value: String(unscoredPredictionCount),
-      severity: unscoredPredictionCount === 0 ? "ok" : "warning",
-      detail: "Predictions on completed fixtures with null points.",
+      value: activeSeason ? String(unscoredPredictionCount) : "No active season",
+      severity: !activeSeason
+        ? "warning"
+        : unscoredPredictionCount === 0
+          ? "ok"
+          : "warning",
+      detail: activeSeason
+        ? unscoredPredictionCount === 0
+          ? `Active season only: ${activeSeason.name}.`
+          : `Active season only: ${activeSeason.name}. ${unscoredPredictionFixtureDetails.join(
+              "; ",
+            )}${unscoredPredictionCount > unscoredPredictionFixtureDetails.length ? "; ..." : ""}`
+        : "No active season to inspect.",
     },
     {
       label: "Leaderboard entries",
@@ -580,6 +700,19 @@ export default async function AdminPage({
             {fixtureList.map((fixture) => (
               <AdminManageFixtureCard key={fixture.id} fixture={fixture} />
             ))}
+
+            <AdminExternalFixturePickerCard
+              gameweekId={selectedGameweek?.id ?? null}
+              configured={adminExternalFixturesConfigured}
+              provider={activeSeasonExternalConfig?.base_provider ?? null}
+              competitionCode={
+                activeSeasonExternalConfig?.base_competition_code ?? null
+              }
+              competitionName={
+                activeSeasonExternalConfig?.base_competition_name ?? null
+              }
+              fixtures={adminExternalFixtureOptions}
+            />
 
             <AdminAddFixtureForm gameweekId={selectedGameweek?.id ?? null} />
           </div>
@@ -774,6 +907,7 @@ export default async function AdminPage({
           healthChecks={healthChecks}
           reminderReadiness={reminderReadiness}
           externalFixtureReadiness={externalFixtureReadiness}
+          externalResultSyncSummary={externalResultSyncSummary}
           recalculateAction={recalculateActiveSeasonLeaderboard}
           rescoreAction={rescoreActiveSeasonAndRecalculateLeaderboard}
         />

@@ -103,7 +103,7 @@ Rules:
 - Archived real seasons can be shown in previous season leaderboards if `show_in_archive = true`.
 - Test/cup trial seasons usually have `show_in_archive = false`.
 - External fixture imports are disabled by default and should only run for explicitly configured seasons.
-- Result sync is reserved for a later phase and should remain disabled until 2.0D.
+- Result sync is triggered manually through the admin-only 2.0D endpoint until cron automation is added.
 
 Recommended SQL additions already used:
 
@@ -216,6 +216,7 @@ Rules:
 - Completed fixtures should have scores.
 - External fields record provenance only. Gameplay continues to use the core fixture columns.
 - Picker UI reads local cached provider fixtures, never football-data.org directly.
+- Admin result sync updates linked fixtures from provider final scores and then reuses the normal scoring/leaderboard recalculation flow.
 
 Picker safety trigger:
 
@@ -327,7 +328,7 @@ Rules:
 - The picker UI reads this local cache, not the provider API.
 - Selected cached fixtures are copied/linked into gameplay `fixtures`.
 - Importing external fixtures must not create gameplay fixtures automatically.
-- Result sync is future 2.0D work.
+- Result sync updates the cache row for linked selected fixtures but does not overwrite manually assigned `external_matchday` values.
 
 ## `predictions`
 
@@ -442,7 +443,7 @@ on public.notifications (gameweek_id);
 
 ## `prediction_reminders`
 
-Logs sent prediction reminder emails.
+Legacy log for the original daily prediction reminder cron.
 
 Important columns:
 
@@ -488,6 +489,62 @@ on public.prediction_reminders (user_id, sent_at desc);
 
 create index if not exists prediction_reminders_type_date_idx
 on public.prediction_reminders (reminder_type, reminder_date);
+```
+
+## `email_notifications`
+
+General event-keyed email delivery log for activity-mirroring emails.
+
+Important columns:
+
+- `season_id`
+- `gameweek_id`
+- `user_id`
+- `email_type`
+- `event_key`
+- `sent_at`
+- `metadata`
+
+Rules:
+
+- One row means one email was successfully sent.
+- `event_key` is globally unique and prevents duplicate sends when actions or
+  cron jobs are repeated.
+- Current `email_type` values:
+  - `picker_up_next`
+  - `predictions_open`
+  - `predictions_24h`
+- Rows are season/gameweek/user scoped.
+- Rows are inserted only after a successful Resend response.
+- Dry-runs report would-send rows without inserting.
+
+Important SQL:
+
+```sql
+create table if not exists public.email_notifications (
+  id uuid primary key default gen_random_uuid(),
+  season_id uuid references public.seasons(id) on delete cascade,
+  gameweek_id uuid references public.gameweeks(id) on delete cascade,
+  user_id uuid references public.profiles(id) on delete cascade,
+  email_type text not null,
+  event_key text not null,
+  sent_at timestamptz not null default now(),
+  metadata jsonb not null default '{}'::jsonb,
+  unique (event_key),
+  unique (season_id, gameweek_id, user_id, email_type)
+);
+
+create index if not exists email_notifications_season_sent_idx
+on public.email_notifications (season_id, sent_at desc);
+
+create index if not exists email_notifications_gameweek_idx
+on public.email_notifications (gameweek_id);
+
+create index if not exists email_notifications_user_sent_idx
+on public.email_notifications (user_id, sent_at desc);
+
+create index if not exists email_notifications_type_sent_idx
+on public.email_notifications (email_type, sent_at desc);
 ```
 
 ## `fixture_picker_order`

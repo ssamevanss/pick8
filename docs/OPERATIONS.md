@@ -38,7 +38,7 @@ FOOTBALL_DATA_API_KEY=...
 Never expose `FOOTBALL_DATA_API_KEY` client-side. The provider is only called
 from server-only admin import code.
 
-Required for scheduled prediction reminder emails:
+Required for scheduled email notifications:
 
 ```env
 RESEND_API_KEY=...
@@ -47,6 +47,10 @@ CRON_SECRET=...
 ```
 
 Never expose `RESEND_API_KEY` client-side.
+
+Admin -> Maintenance environment checks report only the runtime currently
+serving the page. A local development server can show reminder env vars as
+missing even when Vercel Production is correctly configured.
 
 ## External fixture imports
 
@@ -76,7 +80,8 @@ where id = '<season_id>';
 ```
 
 Keep `fixture_import_enabled = false` until dry-run output is reviewed. Keep
-`result_sync_enabled = false`; result sync is deferred until 2.0D.
+`result_sync_enabled = false` until scheduled result sync is added and tested.
+The manual 2.0D admin sync endpoint can still be used for explicit checks.
 
 football-data.org free tier is limited to 10 requests/minute. Import routes
 make one provider request per import and return a clear 429 error with
@@ -136,9 +141,10 @@ With the current World Cup test setup:
 2. Confirm `external_fixtures` has upcoming `TIMED` or `SCHEDULED` WC rows.
 3. Log in as the assigned picker for an unlocked active-season gameweek.
 4. Open `/pick-fixtures`.
-5. Use the External fixtures section to select exactly four cached fixtures.
+5. Use the External fixtures section to select the available cached fixtures
+   for the selected external matchday group.
 6. Save selected cached fixtures.
-7. Confirm four rows were inserted into `fixtures` with:
+7. Confirm the expected number of rows were inserted into `fixtures` with:
    - `status = scheduled`
    - `external_provider = football_data`
    - `external_fixture_id` populated
@@ -149,6 +155,143 @@ With the current World Cup test setup:
 If a cached fixture is missing, run the admin import dry-run/real import flow
 again. If a fixture was already selected in another active-season gameweek, the
 picker excludes it from selectable cached fixtures.
+
+Admins can also add cached external fixtures from Admin -> Fixtures. The admin
+card reads the same local `external_fixtures` cache, does not call
+football-data.org from the browser, copies the same provenance fields into
+`fixtures`, and rejects duplicates that are already selected in another active
+season gameweek. Manual fixture entry remains available underneath for
+overrides.
+
+## External result sync
+
+2.0D adds an admin-only manual result sync endpoint for fixtures that were
+selected from cached football-data.org rows:
+
+```text
+/api/admin/external-fixtures/sync-results
+```
+
+The route only checks local gameplay `fixtures` that are linked with
+`external_provider = 'football_data'` and belong to the requested season. It
+uses football-data.org's batch `ids` endpoint server-side, updates the selected
+local fixtures and matching `external_fixtures` cache rows, then runs the
+existing scoring, leaderboard recalculation, and post-result activity
+notification flow when a fixture becomes completed or a completed score changes.
+
+Dry-run in a browser while signed in as an approved admin:
+
+```text
+http://localhost:3000/api/admin/external-fixtures/sync-results?season_id=<season_id>
+```
+
+Dry-run one local fixture:
+
+```text
+http://localhost:3000/api/admin/external-fixtures/sync-results?season_id=<season_id>&fixture_id=<fixture_id>
+```
+
+Run a real sync locally with an admin session cookie:
+
+```bash
+curl -X POST \
+  -b cookies.txt \
+  "http://localhost:3000/api/admin/external-fixtures/sync-results?season_id=<season_id>&dry_run=0"
+```
+
+Use `dry_run=1` with POST if you want the POST response shape without writing.
+Do not call this route from player-facing pages and do not expose
+`FOOTBALL_DATA_API_KEY` client-side.
+
+Inspect selected external fixtures before or after a sync:
+
+```sql
+select
+  f.id,
+  gw.gameweek_number,
+  f.home_team,
+  f.away_team,
+  f.kickoff_at,
+  f.status,
+  f.home_score,
+  f.away_score,
+  f.external_fixture_id,
+  f.external_competition_code,
+  f.external_matchday,
+  f.external_status,
+  f.external_last_synced_at
+from public.fixtures f
+join public.gameweeks gw on gw.id = f.gameweek_id
+where gw.season_id = '<season_id>'
+  and f.external_provider = 'football_data'
+order by f.kickoff_at;
+```
+
+football-data.org World Cup knockout rows may still have provider
+`matchday = null`. Result sync does not update `external_matchday`, so manually
+assigned World Cup grouping values are preserved.
+
+Cup/test gameweeks can contain fewer than four fixtures. Fixture-picked activity
+uses the current fixture count for the gameweek, so edited two-fixture or
+one-fixture matchdays should not leave future notifications saying four
+fixtures were picked.
+
+### Scheduled external result sync
+
+2.0E adds a protected cron-compatible route:
+
+```text
+/api/cron/sync-external-results
+```
+
+It requires `CRON_SECRET` and accepts either:
+
+```text
+Authorization: Bearer <CRON_SECRET>
+```
+
+or, for simple external schedulers:
+
+```text
+?token=<CRON_SECRET>
+```
+
+Local test:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "http://localhost:3000/api/cron/sync-external-results"
+```
+
+Token query test:
+
+```bash
+curl "http://localhost:3000/api/cron/sync-external-results?token=$CRON_SECRET"
+```
+
+The route performs a real sync, not a dry-run. It only runs when an active
+season has:
+
+```text
+base_provider = football_data
+result_sync_enabled = true
+```
+
+It self-throttles by querying selected local fixtures first and only calls
+football-data.org when linked fixtures are within the sync window:
+
+- from 30 minutes before kickoff
+- until 24 hours after kickoff
+- completed fixtures are checked only occasionally during that 24-hour window
+  for score confirmation
+
+If no selected fixtures need checking, the route returns `api_call_count = 0`
+and does not call the provider.
+
+During testing, an external scheduler such as cron-job.org can call the route
+every 5 minutes. Vercel Hobby cron is daily only, so it is not suitable for
+frequent result polling. Keep the scheduler disabled outside active match
+windows unless you specifically want the endpoint's DB-window skip response.
 
 ## Deployment
 
@@ -189,36 +332,54 @@ On Vercel Hobby, cron runs once daily. The configured schedule is:
 Vercel cron schedules use UTC, so this runs at 08:00 UTC. During UK/Ireland
 summer time that is 09:00 local time.
 
-The route sends `matchday_predictions` reminders when:
+The route is now the scheduled email-notification route. It remains separate
+from `/api/cron/sync-external-results` and never syncs scores.
 
-- the season has `status = active`
-- at least one selected fixture in the gameweek kicks off today
-- today is calculated using the `Europe/London` date
-- at least one fixture in the gameweek has not kicked off yet
-- the user has not predicted every fixture in the gameweek
-- no matching reminder exists for that user, gameweek, reminder type, and date
-- the email links to `NEXT_PUBLIC_SITE_URL/predictions`
+Before enabling it, run:
 
-Prediction reminders are matchday-only. They do not send every day for a
-gameweek unless fixtures are spread across multiple days and the user still has
-missing predictions on a later fixture day.
+```bash
+docs/2026-07-06-email-notifications.sql
+```
 
-The route also sends `daily_fixture_picker` reminders when:
+The email layer sends/logs:
 
-- the season has `status = active`
-- the next actionable gameweek has an assigned fixture picker
-- fewer than four fixtures have been picked
-- fixture picking is unlocked and not stale
-- no matching picker reminder exists for that picker, gameweek, reminder type,
-  and date
-- the email links to `NEXT_PUBLIC_SITE_URL/pick-fixtures`
+- `picker_up_next`: one email to the assigned picker when a gameweek becomes
+  actionable. It is triggered by post-result activity and also checked by cron
+  as a fallback.
+- `predictions_open`: one email per approved user when the current fixture set
+  is saved and complete.
+- `predictions_24h`: one email per incomplete approved user when at least one
+  selected fixture is within 24 hours of kickoff.
 
-Fixture picker reminders can repeat daily while the picker still needs to act.
+Each send is logged in `email_notifications` only after Resend succeeds. Stable
+event keys prevent duplicates:
+
+```text
+picker_up_next:<gameweek_id>:<user_id>
+predictions_open:<gameweek_id>:<user_id>
+predictions_24h:<gameweek_id>:<user_id>
+```
+
+If fixtures are edited before predictions exist, the in-app fixture-picked
+notification is updated. The predictions-open email is not resent
+automatically, which avoids repeated fixture-edit spam. Send an explicit manual
+note outside the app if a fixture change is important after the first email.
+
+The 24-hour reminder checks actual selected/actionable fixtures. A two-fixture
+World Cup gameweek is complete once a user has predictions for those two
+fixtures; normal PL gameweeks still normally have four selected fixtures.
+
+Expected full PL season volume for 30 players and 38 gameweeks:
+
+- 38 picker-up-next emails
+- 1,140 predictions-open emails
+- up to 1,140 prediction deadline emails, only for incomplete users
+- worst case around 2,318 emails
 
 ### Safe testing
 
 Use dry-run mode first. It checks due gameweeks and users but does not send
-email or insert reminder logs:
+email or insert `email_notifications` rows:
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" \

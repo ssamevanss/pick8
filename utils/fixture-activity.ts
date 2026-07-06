@@ -1,0 +1,175 @@
+import { createAdminClient } from "@/utils/supabase/admin";
+import { createClient } from "@/utils/supabase/server";
+import { upsertActivityNotification } from "@/utils/activity";
+import { sendPredictionsOpenEmails } from "@/utils/email-notifications";
+import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
+
+type SupabaseLikeClient =
+  | Awaited<ReturnType<typeof createClient>>
+  | ReturnType<typeof createAdminClient>;
+
+type SavedFixtureRow = {
+  id: string;
+  home_team: string;
+  away_team: string;
+  kickoff_at: string;
+  external_provider: string | null;
+  external_fixture_id: string | null;
+};
+
+type GameweekWithPickerRow = {
+  id: string;
+  season_id: string;
+  gameweek_number: number;
+  name: string | null;
+  fixture_picker_id: string | null;
+  profiles:
+    | {
+        display_name: string;
+      }
+    | {
+        display_name: string;
+      }[]
+    | null;
+};
+
+function getPickerDisplayName(gameweek: GameweekWithPickerRow) {
+  if (Array.isArray(gameweek.profiles)) {
+    return gameweek.profiles[0]?.display_name ?? "Someone";
+  }
+
+  return gameweek.profiles?.display_name ?? "Someone";
+}
+
+function formatGameweekName(gameweek: {
+  gameweek_number: number;
+  name: string | null;
+}) {
+  return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
+}
+
+function formatKickoffForActivity(kickoffAt: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "long",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(kickoffAt));
+}
+
+export async function upsertFixturesPickedActivity({
+  supabase,
+  gameweekId,
+}: {
+  supabase: SupabaseLikeClient;
+  gameweekId: string;
+}) {
+  const { data: gameweek } = await supabase
+    .from("gameweeks")
+    .select(
+      `
+      id,
+      season_id,
+      gameweek_number,
+      name,
+      fixture_picker_id,
+      profiles (
+        display_name
+      )
+    `,
+    )
+    .eq("id", gameweekId)
+    .single();
+
+  if (!gameweek) {
+    return;
+  }
+
+  const typedGameweek = gameweek as GameweekWithPickerRow;
+
+  const { data: fixtures } = await supabase
+    .from("fixtures")
+    .select(
+      "id, home_team, away_team, kickoff_at, external_provider, external_fixture_id",
+    )
+    .eq("gameweek_id", gameweekId)
+    .order("kickoff_at", { ascending: true });
+
+  const fixtureList = (fixtures as SavedFixtureRow[] | null) ?? [];
+
+  if (fixtureList.length === 0) {
+    return;
+  }
+
+  const eventKey = `fixtures_picked:${gameweekId}`;
+  const selectionStatus = getFixtureSelectionStatus(fixtureList);
+
+  if (!selectionStatus.isComplete) {
+    const { data: existingNotification } = await supabase
+      .from("notifications")
+      .select("id")
+      .eq("event_key", eventKey)
+      .maybeSingle();
+
+    if (!existingNotification) {
+      return;
+    }
+  }
+
+  const firstKickoff = fixtureList[0]?.kickoff_at;
+
+  if (!firstKickoff) {
+    return;
+  }
+
+  const pickerName = getPickerDisplayName(typedGameweek);
+  const gameweekName = formatGameweekName(typedGameweek);
+  const kickoffText = formatKickoffForActivity(firstKickoff);
+  const fixtureCount = fixtureList.length;
+  const fixtureCountText = `${fixtureCount} fixture${
+    fixtureCount === 1 ? "" : "s"
+  }`;
+
+  await upsertActivityNotification({
+    eventKey,
+    type: "fixtures_selected",
+    title: `${pickerName} picked fixtures for ${gameweekName}`,
+    body: `${pickerName} picked ${fixtureCountText} for ${gameweekName}. ${gameweekName} starts at ${kickoffText}.`,
+    seasonId: typedGameweek.season_id,
+    gameweekId,
+    metadata: {
+      pickerName,
+      gameweekId,
+      gameweekName,
+      fixtureCount,
+      firstKickoff,
+      kickoffText,
+      fixtures: fixtureList.map((fixture) => ({
+        homeTeam: fixture.home_team,
+        awayTeam: fixture.away_team,
+        kickoffAt: fixture.kickoff_at,
+      })),
+    },
+  });
+
+  if (selectionStatus.isComplete) {
+    try {
+      const emailResult = await sendPredictionsOpenEmails({
+        supabase: createAdminClient(),
+        gameweekId,
+      });
+
+      if (emailResult.error) {
+        console.warn(`Predictions-open email skipped: ${emailResult.error}`);
+      }
+    } catch (error) {
+      console.warn(
+        `Predictions-open email skipped: ${
+          error instanceof Error ? error.message : "unknown email error"
+        }`,
+      );
+    }
+  }
+}

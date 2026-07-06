@@ -188,7 +188,48 @@ export async function fetchCompetitionMatches({
   requireFootballDataSuccess(result);
 
   const matches = Array.isArray(result.data?.matches)
-    ? result.data.matches.flatMap((match) => asRecord(match) ?? [])
+    ? result.data.matches
+        .map(asRecord)
+        .filter((match): match is FootballDataMatch => Boolean(match))
+    : [];
+
+  return {
+    matches,
+    request: {
+      status: result.status,
+      resetSeconds: result.resetSeconds,
+    },
+  };
+}
+
+export async function fetchMatchesByIds(matchIds: string[]): Promise<{
+  matches: FootballDataMatch[];
+  request: {
+    status: number;
+    resetSeconds: number | null;
+  };
+}> {
+  if (matchIds.length === 0) {
+    return {
+      matches: [] as JsonRecord[],
+      request: {
+        status: 200,
+        resetSeconds: null,
+      },
+    };
+  }
+
+  const params = new URLSearchParams({
+    ids: matchIds.join(","),
+  });
+  const result = await footballDataFetch(`/matches?${params.toString()}`);
+
+  requireFootballDataSuccess(result);
+
+  const matches = Array.isArray(result.data?.matches)
+    ? result.data.matches
+        .map(asRecord)
+        .filter((match): match is FootballDataMatch => Boolean(match))
     : [];
 
   return {

@@ -1,4 +1,7 @@
 import SubmitButton from "@/components/forms/SubmitButton";
+import ExternalResultSyncCard, {
+  type ExternalResultSyncSummary,
+} from "@/components/admin/ExternalResultSyncCard";
 
 export type MaintenanceSeasonOption = {
   id: string;
@@ -36,6 +39,7 @@ type AdminMaintenanceCardsProps = {
   healthChecks: HealthCheckRow[];
   reminderReadiness: ReminderReadinessRow[];
   externalFixtureReadiness: ExternalFixtureReadinessRow[];
+  externalResultSyncSummary: ExternalResultSyncSummary;
   recalculateAction: () => void;
   rescoreAction?: () => void;
 };
@@ -71,6 +75,7 @@ export default function AdminMaintenanceCards({
   healthChecks,
   reminderReadiness,
   externalFixtureReadiness,
+  externalResultSyncSummary,
   recalculateAction,
   rescoreAction,
 }: AdminMaintenanceCardsProps) {
@@ -197,11 +202,15 @@ export default function AdminMaintenanceCards({
         </div>
       </div>
 
+      <ExternalResultSyncCard summary={externalResultSyncSummary} />
+
       <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
         <h2 className="text-xl font-semibold">Email reminders</h2>
         <p className="mt-2 text-sm text-slate-400">
           Vercel Cron runs daily to send matchday prediction reminders and
-          fixture picker nudges when action is still needed.
+          fixture picker nudges when action is still needed. Environment
+          checks show this current runtime only, so local development can differ
+          from Vercel Production.
         </p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2">

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
 import LeagueActivityFeed from "@/components/activity/LeagueActivityFeed";
+import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
 
 type NotificationRow = {
   id: string;
@@ -45,8 +46,10 @@ type LatestGameweekRow = {
 type PickerGameweekStatus = PickerGameweekRow & {
   isUnlocked: boolean;
   fixtureCount: number;
+  expectedFixtureCount: number;
   hasPredictions: boolean;
   isClosed: boolean;
+  isSelectionComplete: boolean;
 };
 
 function isTerminalFixtureStatus(status: string) {
@@ -105,12 +108,20 @@ async function getPickerGameweekStatus({
 
   const { data: fixtures } = await supabase
     .from("fixtures")
-    .select("id, status")
+    .select("id, status, external_provider, external_fixture_id")
     .eq("gameweek_id", gameweek.id);
 
   const fixtureRows =
-    (fixtures as { id: string; status: string }[] | null) ?? [];
+    (fixtures as
+      | {
+          id: string;
+          status: string;
+          external_provider: string | null;
+          external_fixture_id: string | null;
+        }[]
+      | null) ?? [];
   const fixtureIds = fixtureRows.map((fixture) => fixture.id);
+  const selectionStatus = getFixtureSelectionStatus(fixtureRows);
 
   const { data: existingPrediction } =
     fixtureIds.length > 0
@@ -126,7 +137,9 @@ async function getPickerGameweekStatus({
     ...gameweek,
     isUnlocked,
     fixtureCount: fixtureRows.length,
+    expectedFixtureCount: selectionStatus.expectedCount,
     hasPredictions: Boolean(existingPrediction),
+    isSelectionComplete: selectionStatus.isComplete,
     isClosed:
       fixtureRows.length > 0 &&
       fixtureRows.every((fixture) => isTerminalFixtureStatus(fixture.status)),
@@ -179,7 +192,7 @@ export default async function HomePage() {
         gameweek.isUnlocked &&
         !gameweek.hasPredictions &&
         !gameweek.isClosed &&
-        gameweek.fixtureCount < 4,
+        !gameweek.isSelectionComplete,
     ) ?? null;
 
   const submittedPickerGameweek =
@@ -188,7 +201,7 @@ export default async function HomePage() {
         gameweek.isUnlocked &&
         !gameweek.hasPredictions &&
         !gameweek.isClosed &&
-        gameweek.fixtureCount >= 4,
+        gameweek.isSelectionComplete,
     ) ?? null;
 
   const lockedPickerGameweek =
@@ -310,8 +323,9 @@ export default async function HomePage() {
               Pick fixtures for {formatGameweekName(activePickerGameweek)}
             </h2>
             <p className="mt-2 text-sm text-slate-300">
-              You’ve selected {activePickerGameweek.fixtureCount}/4 fixtures.
-              Choose four fixtures for your assigned gameweek.
+              You’ve selected {activePickerGameweek.fixtureCount}/
+              {activePickerGameweek.expectedFixtureCount} fixtures. Choose the
+              remaining fixtures for your assigned gameweek.
             </p>
 
             <Link
@@ -333,8 +347,9 @@ export default async function HomePage() {
               You picked fixtures for {formatGameweekName(submittedPickerGameweek)}
             </h2>
             <p className="mt-2 text-sm text-slate-300">
-              Your four fixtures are in. You can still make changes until
-              someone enters predictions.
+              Your {submittedPickerGameweek.fixtureCount} fixture
+              {submittedPickerGameweek.fixtureCount === 1 ? " is" : "s are"} in.
+              You can still make changes until someone enters predictions.
             </p>
 
             <Link
