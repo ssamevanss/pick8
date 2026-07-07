@@ -6,6 +6,8 @@ type DashboardSummaryProps = {
   jokersLeft: number;
   currentGameweekLabel?: string;
   showWeeklyPoints?: boolean;
+  liveWeeklyPoints?: number | null;
+  liveFixtureCount?: number;
 };
 
 export default function DashboardSummary({
@@ -13,7 +15,10 @@ export default function DashboardSummary({
   jokersLeft,
   currentGameweekLabel,
   showWeeklyPoints = false,
+  liveWeeklyPoints = null,
+  liveFixtureCount = 0,
 }: DashboardSummaryProps) {
+  const hasLiveWeeklyPoints = liveWeeklyPoints !== null;
   const gridColumns = currentGameweekLabel
     ? "lg:grid-cols-4"
     : showWeeklyPoints
@@ -47,12 +52,28 @@ export default function DashboardSummary({
 
       {showWeeklyPoints ? (
         <div className="brand-card min-w-0 p-3">
-          <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">
-            GW points
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">
+              GW points
+            </p>
+            {hasLiveWeeklyPoints ? (
+              <span className="rounded-full border border-emerald-300/25 bg-emerald-300/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-emerald-200">
+                Live
+              </span>
+            ) : null}
+          </div>
           <p className="mt-1 text-xl font-black text-white sm:mt-2 sm:text-2xl">
-            {leaderboardEntry?.weekly_points ?? 0}
+            {hasLiveWeeklyPoints
+              ? liveWeeklyPoints
+              : leaderboardEntry?.weekly_points ?? 0}
           </p>
+          {hasLiveWeeklyPoints ? (
+            <p className="mt-1 truncate text-[10px] font-semibold text-slate-500">
+              {liveFixtureCount > 0
+                ? `${liveFixtureCount} live · official after FT`
+                : "Provisional · official after FT"}
+            </p>
+          ) : null}
         </div>
       ) : null}
 

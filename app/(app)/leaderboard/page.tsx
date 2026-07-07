@@ -7,6 +7,7 @@ import RankMedal from "@/components/leaderboard/RankMedal";
 import LeaderboardChart, {
   type LeaderboardChartPlayer,
 } from "@/components/leaderboard/LeaderboardChart";
+import LeaderboardViewToggle from "@/components/leaderboard/LeaderboardViewToggle";
 
 type SearchParams = Promise<{
   players?: string;
@@ -393,36 +394,17 @@ export default async function LeaderboardPage({
 
       <section className="brand-card p-4 sm:p-5">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="inline-flex w-fit self-start rounded-full border border-white/10 bg-slate-950/70 p-1">
-            <Link
-              href={buildLeaderboardHref({
-                seasonId: selectedArchivedSeason?.id ?? null,
-                view: "table",
-              })}
-              prefetch={false}
-              className={`rounded-full px-4 py-2 text-sm font-black transition ${
-                view === "table"
-                  ? "bg-emerald-400 text-slate-950"
-                  : "text-slate-300 hover:text-white"
-              }`}
-            >
-              Table
-            </Link>
-            <Link
-              href={buildLeaderboardHref({
-                seasonId: selectedArchivedSeason?.id ?? null,
-                view: "chart",
-              })}
-              prefetch={false}
-              className={`rounded-full px-4 py-2 text-sm font-black transition ${
-                view === "chart"
-                  ? "bg-emerald-400 text-slate-950"
-                  : "text-slate-300 hover:text-white"
-              }`}
-            >
-              Chart
-            </Link>
-          </div>
+          <LeaderboardViewToggle
+            activeView={view}
+            tableHref={buildLeaderboardHref({
+              seasonId: selectedArchivedSeason?.id ?? null,
+              view: "table",
+            })}
+            chartHref={buildLeaderboardHref({
+              seasonId: selectedArchivedSeason?.id ?? null,
+              view: "chart",
+            })}
+          />
         </div>
 
         {error ? (

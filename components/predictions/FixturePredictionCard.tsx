@@ -20,13 +20,13 @@ type FixturePredictionCardProps = {
   fixture: Fixture;
   predictions: Prediction[];
   currentUserId: string;
-  jokerPredictionKeys: Set<string>;
-  ownJokerFixtureIds: Set<string>;
+  jokerPredictionKeys: string[];
+  ownJokerFixtureIds: string[];
   jokersLeft: number;
   teamForm: FixtureTeamForm;
   isDoubleGameweek?: boolean;
   externalScore?: ExternalFixtureScore | null;
-  predictionReactionsByKey?: Map<string, ReactionSummary[]>;
+  predictionReactionsByKey?: Record<string, ReactionSummary[]>;
 };
 
 function formatKickoff(kickoffAt: string) {
@@ -498,8 +498,10 @@ export default function FixturePredictionCard({
   teamForm,
   isDoubleGameweek = false,
   externalScore,
-  predictionReactionsByKey = new Map(),
+  predictionReactionsByKey = {},
 }: FixturePredictionCardProps) {
+  const jokerPredictionKeySet = new Set(jokerPredictionKeys);
+  const ownJokerFixtureIdSet = new Set(ownJokerFixtureIds);
   const ownPrediction = predictions.find(
     (prediction) => prediction.user_id === currentUserId,
   );
@@ -543,7 +545,7 @@ export default function FixturePredictionCard({
       ? getScoreResult(displayedHomeScore, displayedAwayScore)
       : null;
 
-  const hasJoker = !isDoubleGameweek && ownJokerFixtureIds.has(fixture.id);
+  const hasJoker = !isDoubleGameweek && ownJokerFixtureIdSet.has(fixture.id);
   const jokerDisabled =
     isLocked || isDoubleGameweek || (!hasJoker && jokersLeft <= 0);
 
@@ -763,7 +765,7 @@ export default function FixturePredictionCard({
                   {group.predictions.map((prediction) => {
                     const usedJoker =
                       !isDoubleGameweek &&
-                      jokerPredictionKeys.has(
+                      jokerPredictionKeySet.has(
                         `${prediction.fixture_id}:${prediction.user_id}`,
                       );
                     const exactAsDisplayed =
@@ -781,9 +783,9 @@ export default function FixturePredictionCard({
                         exactAsDisplayed={exactAsDisplayed}
                         exactIsLive={hasExternalDisplayScore}
                         reactions={
-                          predictionReactionsByKey.get(
-                            `${prediction.fixture_id}:${prediction.user_id}`,
-                          ) ?? []
+                          predictionReactionsByKey[
+                            `${prediction.fixture_id}:${prediction.user_id}`
+                          ] ?? []
                         }
                       />
                     );

@@ -653,10 +653,63 @@ and environment variables in Admin -> Maintenance.
 1. Ensure all results are entered.
 2. Recalculate leaderboard.
 3. Confirm final leaderboard.
-4. Archive season.
-5. Leave `show_in_archive = true` for real seasons.
-6. Export final season backup.
-7. Create next season.
+4. Export final season backup.
+5. Go to Admin -> Season.
+6. Use "Archive and start next season" for normal rollover.
+7. Confirm the old season is archived and retained read-only.
+8. Confirm the new season is active, clean, and has generated gameweeks.
+9. Review gameweek picker assignments.
+10. Update the new season provider season if needed.
+11. Import/refresh upcoming external fixtures when ready.
+
+Rollover preserves:
+
+- old fixtures, predictions, joker usage, leaderboard entries, activity,
+  comments, reactions, and facts
+- archived season visibility when `show_in_archive = true`
+
+Rollover resets for the new season:
+
+- selected fixtures
+- predictions
+- joker usage
+- activity/comments/reactions
+- scored leaderboard data
+
+Archived seasons are skipped by normal active-season flows: dashboard current
+summary, predictions, pick fixtures, reminder emails, predictions-open emails,
+picker-up-next emails, result sync cron, and fixture refresh cron.
+
+Suggested verification SQL:
+
+```sql
+select id, name, status, show_in_archive, created_at
+from public.seasons
+order by created_at desc;
+
+select status, count(*)
+from public.seasons
+group by status
+order by status;
+
+select season_id, count(*) as gameweeks
+from public.gameweeks
+group by season_id
+order by season_id;
+
+select season_id, count(*) as leaderboard_rows
+from public.leaderboard_entries
+group by season_id
+order by season_id;
+```
+
+Expected after rollover:
+
+- exactly one `active` season
+- old season `archived`
+- new season has the expected gameweek count
+- new season has no copied predictions, fixtures, joker usage, comments, or
+  reactions
 
 ## Weekly admin flow
 

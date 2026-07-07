@@ -2,6 +2,7 @@
 
 import {
   useRef,
+  useEffect,
   useState,
   type FormEvent,
   type KeyboardEvent,
@@ -16,6 +17,7 @@ type PredictionFormShellProps = {
   hasOpenPredictionFixtures: boolean;
   initialSaved: boolean;
   showSavedToast: boolean;
+  onEditingChange?: (isEditing: boolean) => void;
   children: ReactNode;
 };
 
@@ -31,10 +33,17 @@ export default function PredictionFormShell({
   hasOpenPredictionFixtures,
   initialSaved,
   showSavedToast,
+  onEditingChange,
   children,
 }: PredictionFormShellProps) {
-  const [isEditing, setIsEditing] = useState(!initialSaved);
+  const [isEditing, setIsEditing] = useState(
+    hasOpenPredictionFixtures && !initialSaved,
+  );
   const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    onEditingChange?.(isEditing);
+  }, [isEditing, onEditingChange]);
 
   function focusRelativeScoreInput(
     input: HTMLInputElement,

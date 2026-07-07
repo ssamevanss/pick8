@@ -1,9 +1,7 @@
 export const dynamic = "force-dynamic";
 
-import DashboardSummary from "@/components/dashboard/DashboardSummary";
 import GameweekSelector from "@/components/gameweeks/GameweekSelector";
-import FixturePredictionCard from "@/components/predictions/FixturePredictionCard";
-import PredictionFormShell from "@/components/predictions/PredictionFormShell";
+import PredictionsLivePanel from "@/components/predictions/PredictionsLivePanel";
 import type {
   Fixture,
   ExternalFixtureScore,
@@ -302,10 +300,30 @@ export default async function DashboardPage({
   const predictionReactionsByKey = new Map<string, ReactionSummary[]>();
 
   for (const prediction of (predictions as Prediction[] | null) ?? []) {
+    const fixture = fixtureList.find((item) => item.id === prediction.fixture_id);
+
+    if (!fixture) {
+      continue;
+    }
+
+    const canShowOtherPredictions =
+      fixture.status !== "scheduled" ||
+      new Date(fixture.kickoff_at) <= new Date();
+
+    if (!canShowOtherPredictions && prediction.user_id !== user?.id) {
+      continue;
+    }
+
     const existing = predictionsByFixture.get(prediction.fixture_id) ?? [];
     existing.push(prediction);
     predictionsByFixture.set(prediction.fixture_id, existing);
   }
+
+  const visiblePredictionKeys = new Set(
+    [...predictionsByFixture.values()]
+      .flat()
+      .map((prediction) => `${prediction.fixture_id}:${prediction.user_id}`),
+  );
 
   for (const reaction of
     (predictionReactions as
@@ -317,6 +335,11 @@ export default async function DashboardPage({
         }[]
       | null) ?? []) {
     const key = `${reaction.fixture_id}:${reaction.prediction_user_id}`;
+
+    if (!visiblePredictionKeys.has(key)) {
+      continue;
+    }
+
     const existing = predictionReactionsByKey.get(key) ?? [];
     const summary = existing.find((item) => item.emoji === reaction.emoji);
 
@@ -450,13 +473,32 @@ export default async function DashboardPage({
         </p>
       ) : null}
 
-      <DashboardSummary
+      <PredictionsLivePanel
+        key={`${selectedGameweek?.id ?? "none"}-${
+          userHasSavedOpenPredictions ? "saved" : "editing"
+        }-${params.saved ? "toast" : "quiet"}`}
+        action={savePredictions}
+        selectedGameweekId={selectedGameweek?.id ?? ""}
+        currentUserId={user!.id}
         leaderboardEntry={leaderboardEntry as LeaderboardSummary}
         jokersLeft={jokersLeft}
         showWeeklyPoints
-      />
-
-      <section className="brand-card mt-8 p-4 sm:p-5">
+        initialLiveWeeklyPoints={
+          hasLiveGameweekPoints ? liveGameweekPoints : null
+        }
+        initialLiveFixtureCount={liveFixtureCount}
+        hasOpenPredictionFixtures={hasOpenPredictionFixtures}
+        initialSaved={userHasSavedOpenPredictions}
+        showSavedToast={Boolean(params.saved)}
+        fixtures={fixtureList}
+        externalScores={Object.fromEntries(externalScoreByFixtureId)}
+        predictionsByFixture={Object.fromEntries(predictionsByFixture)}
+        jokerPredictionKeys={[...jokerPredictionKeys]}
+        ownJokerFixtureIds={[...ownJokerFixtureIds]}
+        isDoubleGameweek={isDoubleGameweek}
+        predictionReactionsByKey={Object.fromEntries(predictionReactionsByKey)}
+        teamFormByFixture={Object.fromEntries(formByFixture)}
+      >
         <GameweekSelector
           gameweeks={gameweekList}
           selectedGameweekId={selectedGameweek?.id ?? null}
@@ -483,30 +525,6 @@ export default async function DashboardPage({
               : "Predictions lock individually at kickoff."}
           </p>
         </div>
-
-        {isDoubleGameweek ? (
-          <p className="brand-alert-success mb-4">
-            Double Gameweek — all points count 2x.
-          </p>
-        ) : null}
-
-        {hasLiveGameweekPoints ? (
-          <div className="mb-4 rounded-2xl border border-emerald-300/25 bg-emerald-300/10 p-3 sm:flex sm:items-center sm:justify-between sm:gap-4">
-            <div>
-              <p className="text-xs font-black uppercase tracking-wide text-emerald-200">
-                Live GW points
-              </p>
-              <p className="mt-1 text-sm text-slate-300">
-                As it stands from {liveFixtureCount} live fixture
-                {liveFixtureCount === 1 ? "" : "s"}. Official points update
-                after full time.
-              </p>
-            </div>
-            <p className="mt-2 text-3xl font-black tabular-nums text-white sm:mt-0">
-              {liveGameweekPoints}
-            </p>
-          </div>
-        ) : null}
 
         {!activeSeason ? (
           <p className="brand-alert-warning">
@@ -547,40 +565,7 @@ export default async function DashboardPage({
             No fixtures have been selected for this gameweek yet.
           </p>
         ) : null}
-
-        <PredictionFormShell
-          key={`${selectedGameweek?.id ?? "none"}-${
-            userHasSavedOpenPredictions ? "saved" : "editing"
-          }-${params.saved ? "toast" : "quiet"}`}
-          action={savePredictions}
-          selectedGameweekId={selectedGameweek?.id ?? ""}
-          hasOpenPredictionFixtures={hasOpenPredictionFixtures}
-          initialSaved={userHasSavedOpenPredictions}
-          showSavedToast={Boolean(params.saved)}
-        >
-          {fixtureList.map((fixture) => (
-            <FixturePredictionCard
-              key={fixture.id}
-              fixture={fixture}
-              externalScore={
-                fixture.external_fixture_id
-                  ? externalScoreByFixtureId.get(fixture.external_fixture_id) ?? null
-                  : null
-              }
-              predictions={predictionsByFixture.get(fixture.id) ?? []}
-              currentUserId={user!.id}
-              jokerPredictionKeys={jokerPredictionKeys}
-              ownJokerFixtureIds={ownJokerFixtureIds}
-              jokersLeft={jokersLeft}
-              isDoubleGameweek={isDoubleGameweek}
-              predictionReactionsByKey={predictionReactionsByKey}
-              teamForm={
-                formByFixture.get(fixture.id) ?? { home: [], away: [] }
-              }
-            />
-          ))}
-        </PredictionFormShell>
-      </section>
+      </PredictionsLivePanel>
     </>
   );
 }

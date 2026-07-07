@@ -1673,6 +1673,182 @@ export async function createSeason(formData: FormData) {
   );
 }
 
+export async function rolloverActiveSeason(formData: FormData) {
+  const { supabase, user } = await requireAdmin();
+
+  const sourceSeasonId = String(formData.get("source_season_id") ?? "");
+  const name = String(formData.get("name") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim();
+  const providerSeason =
+    String(formData.get("provider_season") ?? "").trim() || null;
+  const gameweekCount = Number(formData.get("gameweek_count") ?? 0);
+  const showOldInArchive =
+    String(formData.get("show_old_in_archive") ?? "") === "on";
+
+  if (!sourceSeasonId) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No active season selected for rollover",
+      }),
+    );
+  }
+
+  if (!name) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "Next season name is required",
+      }),
+    );
+  }
+
+  if (
+    !Number.isInteger(gameweekCount) ||
+    gameweekCount < 1 ||
+    gameweekCount > 60
+  ) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "Gameweek count must be between 1 and 60",
+      }),
+    );
+  }
+
+  const { data: sourceSeason, error: sourceSeasonError } = await supabase
+    .from("seasons")
+    .select(
+      "id, name, status, season_type, base_provider, base_competition_code, base_competition_name, base_competition_external_id, fixture_import_enabled, result_sync_enabled",
+    )
+    .eq("id", sourceSeasonId)
+    .eq("status", "active")
+    .single();
+
+  if (sourceSeasonError || !sourceSeason) {
+    redirect(
+      getSeasonRedirectUrl({
+        error:
+          sourceSeasonError?.message ??
+          "Rollover can only start from the current active season",
+      }),
+    );
+  }
+
+  const approvedPlayers = await getApprovedPlayerIds({ supabase });
+
+  if (approvedPlayers.length === 0) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "No approved users found to assign as fixture pickers",
+      }),
+    );
+  }
+
+  const { data: nextSeason, error: nextSeasonError } = await supabase
+    .from("seasons")
+    .insert({
+      name,
+      description: description || null,
+      season_type: sourceSeason.season_type ?? "standard",
+      status: "draft",
+      base_provider: sourceSeason.base_provider,
+      base_competition_code: sourceSeason.base_competition_code,
+      base_competition_name: sourceSeason.base_competition_name,
+      base_competition_external_id: sourceSeason.base_competition_external_id,
+      provider_season: providerSeason,
+      fixture_import_enabled: Boolean(sourceSeason.fixture_import_enabled),
+      result_sync_enabled: Boolean(sourceSeason.result_sync_enabled),
+      created_by: user.id,
+    })
+    .select("id")
+    .single();
+
+  if (nextSeasonError || !nextSeason) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: nextSeasonError?.message ?? "Could not create next season",
+      }),
+    );
+  }
+
+  try {
+    await createGameweeksForSeason({
+      supabase,
+      seasonId: nextSeason.id,
+      targetCount: gameweekCount,
+    });
+
+    await autoAssignPickersForSeason({
+      supabase,
+      seasonId: nextSeason.id,
+    });
+  } catch (rolloverSetupError) {
+    redirect(
+      getSeasonRedirectUrl({
+        error:
+          rolloverSetupError instanceof Error
+            ? `Next season was created as draft, but setup failed: ${rolloverSetupError.message}`
+            : "Next season was created as draft, but setup failed",
+      }),
+    );
+  }
+
+  const archivedAt = new Date().toISOString();
+  const { error: archiveActiveError } = await supabase
+    .from("seasons")
+    .update({
+      status: "archived",
+      archived_at: archivedAt,
+      archived_by: user.id,
+      show_in_archive: showOldInArchive,
+    })
+    .eq("status", "active");
+
+  if (archiveActiveError) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: `Next season was created as draft, but current season could not be archived: ${archiveActiveError.message}`,
+      }),
+    );
+  }
+
+  const { error: activateNextError } = await supabase
+    .from("seasons")
+    .update({
+      status: "active",
+      archived_at: null,
+      archived_by: null,
+    })
+    .eq("id", nextSeason.id);
+
+  if (activateNextError) {
+    await supabase
+      .from("seasons")
+      .update({
+        status: "active",
+        archived_at: null,
+        archived_by: null,
+      })
+      .eq("id", sourceSeasonId);
+
+    redirect(
+      getSeasonRedirectUrl({
+        error: `Current season was restored if possible, but next season could not be activated: ${activateNextError.message}`,
+      }),
+    );
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/predictions");
+  revalidatePath("/pick-fixtures");
+  revalidatePath("/leaderboard");
+
+  redirect(
+    getSeasonRedirectUrl({
+      saved: "1",
+    }),
+  );
+}
+
 export async function activateSeason(formData: FormData) {
   const { supabase, user } = await requireAdmin();
 

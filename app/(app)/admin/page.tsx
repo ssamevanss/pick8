@@ -22,6 +22,7 @@ import {
   archiveSeason,
   createGameweekWithFixtures,
   createSeason,
+  rolloverActiveSeason,
   updateFixtureResults,
   generateMissingGameweeks,
   restoreSeasonToDraft,
@@ -183,7 +184,7 @@ export default async function AdminPage({
   const { data: seasons } = await supabase
     .from("seasons")
     .select(
-      "id, name, status, is_active, season_type, description, show_in_archive, created_at, archived_at",
+      "id, name, status, is_active, season_type, description, show_in_archive, provider_season, base_provider, base_competition_code, base_competition_name, fixture_import_enabled, result_sync_enabled, created_at, archived_at",
     )
     .order("created_at", { ascending: false });
 
@@ -922,11 +923,13 @@ export default async function AdminPage({
           <AdminSeasonControlsCard
             seasons={seasonList}
             createSeasonAction={createSeason}
+            rolloverSeasonAction={rolloverActiveSeason}
             activateSeasonAction={activateSeason}
             archiveSeasonAction={archiveSeason}
             restoreSeasonAction={restoreSeasonToDraft}
             updateArchiveVisibilityAction={updateSeasonArchiveVisibility}
             deleteSeasonAction={deleteSeason}
+            activeGameweekCount={gameweekList.length}
           />
 
           <AdminSeasonSettingsCard

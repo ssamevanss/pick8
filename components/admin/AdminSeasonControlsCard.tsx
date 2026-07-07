@@ -8,6 +8,12 @@ export type AdminSeasonRow = {
   season_type: string;
   description: string | null;
   show_in_archive: boolean;
+  provider_season: string | null;
+  base_provider: string | null;
+  base_competition_code: string | null;
+  base_competition_name: string | null;
+  fixture_import_enabled: boolean;
+  result_sync_enabled: boolean;
   created_at: string;
   archived_at: string | null;
 };
@@ -15,11 +21,13 @@ export type AdminSeasonRow = {
 type AdminSeasonControlsCardProps = {
   seasons: AdminSeasonRow[];
   createSeasonAction: (formData: FormData) => Promise<void>;
+  rolloverSeasonAction: (formData: FormData) => Promise<void>;
   activateSeasonAction: (formData: FormData) => Promise<void>;
   archiveSeasonAction: (formData: FormData) => Promise<void>;
   restoreSeasonAction: (formData: FormData) => Promise<void>;
   updateArchiveVisibilityAction: (formData: FormData) => Promise<void>;
   deleteSeasonAction: (formData: FormData) => Promise<void>;
+  activeGameweekCount: number;
 };
 
 function formatDate(value: string | null) {
@@ -61,13 +69,19 @@ function getSeasonTypeLabel(value: string) {
 export default function AdminSeasonControlsCard({
   seasons,
   createSeasonAction,
+  rolloverSeasonAction,
   activateSeasonAction,
   archiveSeasonAction,
   restoreSeasonAction,
   updateArchiveVisibilityAction,
   deleteSeasonAction,
+  activeGameweekCount,
 }: AdminSeasonControlsCardProps) {
   const activeSeason = seasons.find((season) => season.status === "active");
+  const currentYear = new Date().getFullYear();
+  const nextSeasonName = activeSeason?.name
+    ? activeSeason.name.replace(/\b\d{4}\b/, String(currentYear + 1))
+    : `${currentYear}/${String(currentYear + 1).slice(-2)} Season`;
 
   return (
     <section className="mt-6 rounded-2xl bg-slate-900 p-4 shadow-lg">
@@ -193,6 +207,122 @@ export default function AdminSeasonControlsCard({
           className="mt-4 w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
         />
       </form>
+
+      {activeSeason ? (
+        <form
+          action={rolloverSeasonAction}
+          className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 p-4"
+        >
+          <input
+            type="hidden"
+            name="source_season_id"
+            value={activeSeason.id}
+          />
+
+          <div>
+            <h3 className="text-lg font-semibold text-white">
+              Archive and start next season
+            </h3>
+            <p className="mt-2 text-sm text-slate-300">
+              Platform/admin rollover only. This preserves{" "}
+              <span className="font-semibold text-white">{activeSeason.name}</span>{" "}
+              as read-only history, creates a clean active season, generates
+              gameweeks, and assigns fixture pickers.
+            </p>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <label className="block text-sm font-medium text-slate-300 md:col-span-2">
+              Next season name
+              <input
+                name="name"
+                required
+                defaultValue={nextSeasonName}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+              />
+            </label>
+
+            <label className="block text-sm font-medium text-slate-300">
+              Gameweeks
+              <input
+                name="gameweek_count"
+                type="number"
+                min={1}
+                max={60}
+                defaultValue={activeGameweekCount || 38}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+              />
+            </label>
+          </div>
+
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <label className="block text-sm font-medium text-slate-300">
+              Provider season
+              <input
+                name="provider_season"
+                placeholder="Optional provider season/year"
+                defaultValue={activeSeason.provider_season ?? ""}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+              />
+            </label>
+
+            <label className="block text-sm font-medium text-slate-300">
+              Admin notes
+              <input
+                name="description"
+                placeholder="Optional notes for admins"
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"
+              />
+            </label>
+          </div>
+
+          <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
+            <p>
+              Copied settings:{" "}
+              <span className="font-semibold text-slate-200">
+                {activeSeason.base_competition_name ??
+                  activeSeason.base_competition_code ??
+                  "No provider competition"}
+              </span>
+              {activeSeason.base_provider ? ` · ${activeSeason.base_provider}` : ""}
+              {activeSeason.fixture_import_enabled ? " · fixture import on" : ""}
+              {activeSeason.result_sync_enabled ? " · result sync on" : ""}
+            </p>
+            <p className="mt-1">
+              New season starts with no fixtures, predictions, joker usage,
+              activity, comments, reactions, or scored leaderboard rows.
+            </p>
+          </div>
+
+          <label className="mt-3 flex items-start gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-sm text-slate-300">
+            <input
+              name="show_old_in_archive"
+              type="checkbox"
+              defaultChecked={activeSeason.show_in_archive}
+              className="mt-1"
+            />
+            <span>
+              <span className="block font-semibold text-white">
+                Show old season in previous leaderboards
+              </span>
+              <span className="mt-1 block text-slate-400">
+                Turn this off for trial/test seasons.
+              </span>
+            </span>
+          </label>
+
+          <p className="mt-3 rounded-lg bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+            Confirm before running: the current season becomes read-only history
+            and users will see the new active season immediately.
+          </p>
+
+          <SubmitButton
+            idleLabel="Archive current and start next"
+            pendingLabel="Rolling over..."
+            className="mt-4 w-full rounded-lg bg-amber-300 px-4 py-3 text-sm font-semibold text-slate-950"
+          />
+        </form>
+      ) : null}
 
       <div className="mt-4 space-y-3">
         <h3 className="text-lg font-semibold">All seasons</h3>
