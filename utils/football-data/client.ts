@@ -1,3 +1,5 @@
+import { getPredictionScoringScoreFromProviderScore } from "@/utils/provider-score";
+
 const FOOTBALL_DATA_API_BASE = "https://api.football-data.org/v4";
 
 type JsonRecord = Record<string, unknown>;
@@ -250,7 +252,7 @@ export function normalizeFootballDataMatch(
   const homeTeam = asRecord(match.homeTeam);
   const awayTeam = asRecord(match.awayTeam);
   const score = asRecord(match.score);
-  const fullTime = asRecord(score?.fullTime);
+  const predictionScore = getPredictionScoringScoreFromProviderScore(score);
   const externalFixtureId = match.id === undefined || match.id === null ? "" : String(match.id);
   const competitionCode =
     asString(competition?.code) ?? fallbackCompetitionCode ?? "UNKNOWN";
@@ -271,8 +273,8 @@ export function normalizeFootballDataMatch(
     away_team: asString(awayTeam?.name) ?? asString(awayTeam?.shortName) ?? "Unknown away team",
     kickoff_at: asString(match.utcDate) ?? "",
     status: asString(match.status) ?? "UNKNOWN",
-    home_score: asNumber(fullTime?.home),
-    away_score: asNumber(fullTime?.away),
+    home_score: predictionScore.home,
+    away_score: predictionScore.away,
     raw_payload: match,
   };
 }

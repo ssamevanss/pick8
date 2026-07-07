@@ -384,6 +384,14 @@ Admin enters/changes result
 External result sync follows the same scoring, leaderboard, and post-result
 activity path after provider results are applied.
 
+For knockout/cup fixtures, normal score predictions are scored on the
+90-minute result where football-data.org provides it. The provider payload is
+stored raw in `external_fixtures.raw_payload` and linked
+`fixtures.external_raw_payload`; `score.regularTime` is used for prediction
+scoring when available. `score.fullTime` is used for regular-duration matches.
+Extra-time and penalty-shootout context can be displayed/admin-reviewed later,
+but it does not change normal score-prediction points.
+
 Live/provisional scoring:
 
 - Cached `external_fixtures` live scores can be displayed while a fixture is in
@@ -397,6 +405,9 @@ Live/provisional scoring:
   `predictions.points`, and `leaderboard_entries` remains official/final.
 - Provisional display uses the same 0/3/5, Joker, and Double Gameweek rules as
   final scoring, with no Joker plus Double Gameweek stacking.
+- If a knockout match enters extra time, provisional display should use/freeze
+  on the 90-minute `regularTime` score once available instead of extra-time or
+  penalty goals.
 
 If scores are edited directly in SQL, prediction points and leaderboard are not automatically recalculated unless a scoring script/action is also run.
 
@@ -507,6 +518,11 @@ Uses service role / secret key and must only be called server-side.
 Server-only provider helper. Reads `FOOTBALL_DATA_API_KEY`, sends
 `X-Auth-Token`, normalizes football-data.org match payloads, and returns
 clear rate-limit errors without exposing the key.
+
+Normalized `home_score` / `away_score` are the app's prediction-scoring score:
+`score.regularTime` when available, otherwise `score.fullTime` for regular-time
+matches. Raw football-data.org score objects remain available in `raw_payload`
+for knockout context such as extra time, penalties, and team advancement.
 
 football-data.org is limited to 10 requests/minute on the free tier. Provider
 data is cached locally in `external_fixtures`. Player-facing picker UI reads

@@ -289,6 +289,11 @@ Fixture refresh and result sync are separate jobs:
   and round/stage metadata before kickoff.
 - Result sync updates final scores after kickoff and triggers scoring,
   leaderboard recalculation, and post-result activity.
+- For knockout/cup matches, result sync scores predictions from the
+  football-data.org 90-minute `score.regularTime` when available. If the match
+  duration is extra time or penalties and `regularTime` is missing, the fixture
+  is skipped/admin-reported rather than scoring predictions from the wrong
+  extra-time or penalty score.
 
 ### Scheduled external fixture refresh
 

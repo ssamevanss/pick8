@@ -9,6 +9,7 @@ import {
   FootballDataError,
   normalizeFootballDataMatch,
 } from "@/utils/football-data/client";
+import { getPredictionScoringScoreFromProviderPayload } from "@/utils/provider-score";
 import { createAdminClient } from "@/utils/supabase/admin";
 
 type AdminSupabaseClient = ReturnType<typeof createAdminClient>;
@@ -373,6 +374,8 @@ export async function syncExternalFixtureResults({
     }
 
     const notes: string[] = [];
+    const providerScoringScore =
+      getPredictionScoringScoreFromProviderPayload(providerMatch);
     const plannedStatus =
       mappedStatus === "scheduled" && fixture.status === "locked"
         ? "locked"
@@ -382,6 +385,23 @@ export async function syncExternalFixtureResults({
     let plannedAwayScore =
       mappedStatus === "completed" ? normalized.away_score : fixture.away_score;
 
+    if (providerScoringScore.source === "regularTime") {
+      notes.push("Using football-data.org regularTime score for prediction scoring.");
+    }
+
+    if (providerScoringScore.warning) {
+      notes.push(providerScoringScore.warning);
+    }
+
+    if (mappedStatus === "completed" && providerScoringScore.warning) {
+      skipped.push({
+        fixture_id: fixture.id,
+        external_fixture_id: externalFixtureId,
+        reason: providerScoringScore.warning,
+      });
+      continue;
+    }
+
     if (
       mappedStatus === "completed" &&
       (plannedHomeScore === null || plannedAwayScore === null)
@@ -389,7 +409,7 @@ export async function syncExternalFixtureResults({
       skipped.push({
         fixture_id: fixture.id,
         external_fixture_id: externalFixtureId,
-        reason: "Provider says FINISHED but full-time score is missing",
+        reason: "Provider says FINISHED but prediction scoring score is missing",
       });
       continue;
     }
