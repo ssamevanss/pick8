@@ -27,9 +27,6 @@ export default function BrandMark({
           <p className="truncate text-lg font-black tracking-tight text-white">
             Who You Got?
           </p>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300/90">
-            Private league
-          </p>
         </div>
       ) : null}
     </div>

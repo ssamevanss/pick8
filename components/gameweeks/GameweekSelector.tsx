@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Gameweek } from "@/components/predictions/types";
@@ -27,6 +28,10 @@ export default function GameweekSelector({
   basePath,
 }: GameweekSelectorProps) {
   const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+  const [pendingGameweekId, setPendingGameweekId] = useState<string | null>(
+    null,
+  );
 
   const selectedIndex = gameweeks.findIndex(
     (gameweek) => gameweek.id === selectedGameweekId,
@@ -48,23 +53,79 @@ export default function GameweekSelector({
 
     if (!gameweekId) return;
 
-    router.push(getGameweekHref(basePath, gameweekId));
+    const href = getGameweekHref(basePath, gameweekId);
+    setPendingGameweekId(gameweekId);
+    startTransition(() => {
+      router.push(href);
+    });
   }
 
+  function handleArrowClick(
+    event: React.MouseEvent<HTMLAnchorElement>,
+    href: string,
+  ) {
+    if (
+      event.defaultPrevented ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey ||
+      event.button !== 0
+    ) {
+      return;
+    }
+
+    const gameweekId = new URL(href, window.location.href).searchParams.get(
+      "gameweek",
+    );
+
+    setPendingGameweekId(gameweekId);
+  }
+
+  const activePendingGameweekId =
+    pendingGameweekId && pendingGameweekId !== selectedGameweekId
+      ? pendingGameweekId
+      : null;
+  const isBusy = isPending || Boolean(activePendingGameweekId);
+  const arrowClassName =
+    "flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-slate-200 transition hover:text-white active:scale-95 aria-busy:animate-pulse aria-busy:text-emerald-200 sm:h-10 sm:w-10";
+  const disabledArrowClassName =
+    "flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900/70 text-lg font-bold text-slate-700 sm:h-10 sm:w-10";
+  const previousHref = previousGameweek
+    ? getGameweekHref(basePath, previousGameweek.id)
+    : null;
+  const nextHref = nextGameweek
+    ? getGameweekHref(basePath, nextGameweek.id)
+    : null;
+
   return (
-    <div className="mb-4 grid grid-cols-[40px_minmax(0,1fr)_40px] items-center rounded-2xl border border-white/10 bg-slate-950/70 p-2 sm:grid-cols-[48px_minmax(0,1fr)_48px]">
-      {previousGameweek ? (
+    <div
+      className="mb-4 grid grid-cols-[40px_minmax(0,1fr)_40px] items-center rounded-2xl border border-white/10 bg-slate-950/70 p-2 sm:grid-cols-[48px_minmax(0,1fr)_48px]"
+      aria-busy={isBusy}
+    >
+      {previousGameweek && previousHref ? (
         <Link
-          href={getGameweekHref(basePath, previousGameweek.id)}
-          className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-slate-200 transition hover:text-white active:scale-95 sm:h-10 sm:w-10"
+          href={previousHref}
+          onClick={(event) => {
+            handleArrowClick(event, previousHref);
+          }}
+          className={arrowClassName}
           aria-label="Previous gameweek"
+          aria-busy={activePendingGameweekId === previousGameweek.id}
         >
-          ←
+          <span aria-hidden="true">
+            {activePendingGameweekId === previousGameweek.id ? "…" : "←"}
+          </span>
         </Link>
       ) : (
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900/70 text-lg font-bold text-slate-700 sm:h-10 sm:w-10">
+        <button
+          type="button"
+          disabled
+          className={disabledArrowClassName}
+          aria-label="No previous gameweek"
+        >
           ←
-        </span>
+        </button>
       )}
 
       <div className="min-w-0 px-2 text-center">
@@ -76,7 +137,8 @@ export default function GameweekSelector({
           <select
             value={selectedGameweek?.id ?? ""}
             onChange={handleGameweekChange}
-            className="mt-1 max-w-full cursor-pointer appearance-none rounded-lg bg-slate-900/70 px-2 py-1 text-center text-sm font-bold text-white outline-none ring-1 ring-transparent hover:bg-slate-900 focus:ring-emerald-400 sm:px-3 sm:text-base"
+            disabled={isBusy}
+            className="mt-1 max-w-full cursor-pointer appearance-none rounded-lg bg-slate-900/70 px-2 py-1 text-center text-sm font-bold text-white outline-none ring-1 ring-transparent hover:bg-slate-900 focus:ring-emerald-400 disabled:cursor-wait disabled:opacity-70 sm:px-3 sm:text-base"
             aria-label="Select gameweek"
           >
             {gameweeks.map((gameweek) => (
@@ -90,18 +152,29 @@ export default function GameweekSelector({
         )}
       </div>
 
-      {nextGameweek ? (
+      {nextGameweek && nextHref ? (
         <Link
-          href={getGameweekHref(basePath, nextGameweek.id)}
-          className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-lg font-bold text-slate-200 transition hover:text-white active:scale-95 sm:h-10 sm:w-10"
+          href={nextHref}
+          onClick={(event) => {
+            handleArrowClick(event, nextHref);
+          }}
+          className={arrowClassName}
           aria-label="Next gameweek"
+          aria-busy={activePendingGameweekId === nextGameweek.id}
         >
-          →
+          <span aria-hidden="true">
+            {activePendingGameweekId === nextGameweek.id ? "…" : "→"}
+          </span>
         </Link>
       ) : (
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900/70 text-lg font-bold text-slate-700 sm:h-10 sm:w-10">
+        <button
+          type="button"
+          disabled
+          className={disabledArrowClassName}
+          aria-label="No next gameweek"
+        >
           →
-        </span>
+        </button>
       )}
     </div>
   );

@@ -46,7 +46,15 @@ export default function TeamIdentity({
           </span>
         )}
       </span>
-      <span className="min-w-0 truncate font-semibold">{teamName}</span>
+      <span
+        className={`min-w-0 font-semibold leading-tight ${
+          compact
+            ? "whitespace-normal break-words text-xs min-[380px]:text-sm"
+            : "truncate"
+        }`}
+      >
+        {teamName}
+      </span>
     </span>
   );
 }

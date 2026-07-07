@@ -36,6 +36,12 @@ export type FixtureTeamForm = {
   away: TeamFormResult[];
 };
 
+export type ReactionSummary = {
+  emoji: string;
+  count: number;
+  reactedByCurrentUser: boolean;
+};
+
 export type Gameweek = {
   id: string;
   gameweek_number: number;

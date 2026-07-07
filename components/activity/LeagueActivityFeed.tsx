@@ -1,3 +1,13 @@
+import ActivityCommentForm from "@/components/activity/ActivityCommentForm";
+import EmojiReactionControls from "@/components/social/EmojiReactionControls";
+import type { ReactionSummary } from "@/components/predictions/types";
+import TeamIdentity from "@/components/predictions/TeamIdentity";
+import {
+  deleteNotificationComment,
+  toggleNotificationCommentReaction,
+  toggleNotificationReaction,
+} from "@/utils/social-actions";
+
 type NotificationRow = {
   id: string;
   type: string;
@@ -5,6 +15,24 @@ type NotificationRow = {
   body: string | null;
   created_at: string;
   metadata: ActivityMetadata | null;
+  reactions?: ReactionSummary[];
+  comments?: NotificationComment[];
+};
+
+type NotificationComment = {
+  id: string;
+  user_id: string;
+  body: string;
+  created_at: string;
+  reactions?: ReactionSummary[];
+  profiles:
+    | {
+        display_name: string;
+      }
+    | {
+        display_name: string;
+      }[]
+    | null;
 };
 
 type ActivityMetadata = {
@@ -45,6 +73,8 @@ type MovementRow = {
 
 type LeagueActivityFeedProps = {
   notifications: NotificationRow[];
+  currentUserId: string;
+  canModerate?: boolean;
 };
 
 function formatCreatedAt(value: string) {
@@ -68,9 +98,13 @@ function formatMovement(movement: number) {
 function ActivityShell({
   notification,
   children,
+  currentUserId,
+  canModerate = false,
 }: {
   notification: NotificationRow;
   children: React.ReactNode;
+  currentUserId: string;
+  canModerate?: boolean;
 }) {
   return (
     <div className="brand-card-soft p-4 transition hover:border-emerald-400/25">
@@ -83,33 +117,150 @@ function ActivityShell({
         </span>
       </div>
       {children}
+      <ActivitySocial
+        notification={notification}
+        currentUserId={currentUserId}
+        canModerate={canModerate}
+      />
+    </div>
+  );
+}
+
+function getCommentDisplayName(comment: NotificationComment) {
+  if (Array.isArray(comment.profiles)) {
+    return comment.profiles[0]?.display_name ?? "Someone";
+  }
+
+  return comment.profiles?.display_name ?? "Someone";
+}
+
+function ActivitySocial({
+  notification,
+  currentUserId,
+  canModerate,
+}: {
+  notification: NotificationRow;
+  currentUserId: string;
+  canModerate: boolean;
+}) {
+  const comments = notification.comments ?? [];
+
+  return (
+    <div className="mt-3 border-t border-white/10 pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <EmojiReactionControls
+          action={toggleNotificationReaction}
+          hiddenFields={{ notification_id: notification.id }}
+          reactions={notification.reactions ?? []}
+          compact
+          ariaLabel="React to league activity"
+        />
+
+        <details className="group min-w-0 flex-1 text-right">
+          <summary className="cursor-pointer select-none text-xs font-bold text-slate-400 transition hover:text-white">
+            Comments ({comments.length})
+          </summary>
+
+          <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/50 p-3 text-left">
+            {comments.length === 0 ? (
+              <p className="text-sm text-slate-500">No comments yet.</p>
+            ) : (
+              <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
+                {comments.map((comment) => {
+                  const canDelete =
+                    canModerate || comment.user_id === currentUserId;
+
+                  return (
+                    <div
+                      key={comment.id}
+                      className="rounded-lg border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                    >
+                      <div className="min-w-0">
+                        <div>
+                          <p className="truncate text-xs font-black uppercase tracking-wide text-slate-500">
+                            {getCommentDisplayName(comment)}
+                          </p>
+                          <p className="mt-1 text-slate-200">{comment.body}</p>
+                        </div>
+                      </div>
+                      <div className="mt-1.5 flex items-center justify-between gap-2">
+                        <EmojiReactionControls
+                          action={toggleNotificationCommentReaction}
+                          hiddenFields={{ comment_id: comment.id }}
+                          reactions={comment.reactions ?? []}
+                          compact
+                          placement="top"
+                          ariaLabel={`React to ${getCommentDisplayName(
+                            comment,
+                          )}'s comment`}
+                        />
+                        {canDelete ? (
+                          <form action={deleteNotificationComment}>
+                            <input
+                              type="hidden"
+                              name="comment_id"
+                              value={comment.id}
+                            />
+                            <button
+                              type="submit"
+                              className="rounded-full px-2 py-1 text-[11px] font-bold text-slate-500 transition hover:bg-red-500/10 hover:text-red-300"
+                            >
+                              Delete
+                            </button>
+                          </form>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <ActivityCommentForm notificationId={notification.id} />
+          </div>
+        </details>
+      </div>
     </div>
   );
 }
 
 function FixturesSelectedActivity({
   notification,
+  currentUserId,
+  canModerate,
 }: {
   notification: NotificationRow;
+  currentUserId: string;
+  canModerate: boolean;
 }) {
   const fixtures = notification.metadata?.fixtures ?? [];
 
   return (
-    <ActivityShell notification={notification}>
+    <ActivityShell
+      notification={notification}
+      currentUserId={currentUserId}
+      canModerate={canModerate}
+    >
       {notification.body ? (
         <p className="mt-2 text-sm text-slate-400">{notification.body}</p>
       ) : null}
 
       {fixtures.length > 0 ? (
-        <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <div className="mt-3 space-y-1.5">
           {fixtures.map((fixture, index) => (
             <div
               key={`${fixture.homeTeam}-${fixture.awayTeam}-${index}`}
-              className="rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+              className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
             >
-              <span className="font-semibold">{fixture.homeTeam}</span>
-              <span className="px-2 text-slate-500">v</span>
-              <span className="font-semibold">{fixture.awayTeam}</span>
+              <TeamIdentity teamName={fixture.homeTeam ?? "TBD"} compact />
+              <span className="rounded-full bg-slate-950 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-500">
+                v
+              </span>
+              <TeamIdentity
+                teamName={fixture.awayTeam ?? "TBD"}
+                align="right"
+                compact
+              />
             </div>
           ))}
         </div>
@@ -120,8 +271,12 @@ function FixturesSelectedActivity({
 
 function ResultsAvailableActivity({
   notification,
+  currentUserId,
+  canModerate,
 }: {
   notification: NotificationRow;
+  currentUserId: string;
+  canModerate: boolean;
 }) {
   const metadata = notification.metadata ?? {};
   const fixtures = metadata.fixtures ?? [];
@@ -130,7 +285,11 @@ function ResultsAvailableActivity({
   const biggestFallers = metadata.biggestFallers ?? [];
 
   return (
-    <ActivityShell notification={notification}>
+    <ActivityShell
+      notification={notification}
+      currentUserId={currentUserId}
+      canModerate={canModerate}
+    >
       {notification.body ? (
         <p className="mt-2 text-sm text-slate-400">{notification.body}</p>
       ) : null}
@@ -229,9 +388,21 @@ function ResultsAvailableActivity({
   );
 }
 
-function SimpleActivity({ notification }: { notification: NotificationRow }) {
+function SimpleActivity({
+  notification,
+  currentUserId,
+  canModerate,
+}: {
+  notification: NotificationRow;
+  currentUserId: string;
+  canModerate: boolean;
+}) {
   return (
-    <ActivityShell notification={notification}>
+    <ActivityShell
+      notification={notification}
+      currentUserId={currentUserId}
+      canModerate={canModerate}
+    >
       {notification.body ? (
         <p className="mt-2 text-sm text-slate-400">{notification.body}</p>
       ) : null}
@@ -241,6 +412,8 @@ function SimpleActivity({ notification }: { notification: NotificationRow }) {
 
 export default function LeagueActivityFeed({
   notifications,
+  currentUserId,
+  canModerate = false,
 }: LeagueActivityFeedProps) {
   return (
     <section className="brand-card mt-8 p-4 sm:p-5">
@@ -265,6 +438,8 @@ export default function LeagueActivityFeed({
                 <FixturesSelectedActivity
                   key={notification.id}
                   notification={notification}
+                  currentUserId={currentUserId}
+                  canModerate={canModerate}
                 />
               );
             }
@@ -274,6 +449,8 @@ export default function LeagueActivityFeed({
                 <ResultsAvailableActivity
                   key={notification.id}
                   notification={notification}
+                  currentUserId={currentUserId}
+                  canModerate={canModerate}
                 />
               );
             }
@@ -282,6 +459,8 @@ export default function LeagueActivityFeed({
               <SimpleActivity
                 key={notification.id}
                 notification={notification}
+                currentUserId={currentUserId}
+                canModerate={canModerate}
               />
             );
           })}

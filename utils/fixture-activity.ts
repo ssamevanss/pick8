@@ -131,10 +131,6 @@ export async function upsertFixturesPickedActivity({
   const pickerName = getPickerDisplayName(typedGameweek);
   const gameweekName = formatGameweekName(typedGameweek);
   const kickoffText = formatKickoffForActivity(firstKickoff);
-  const fixtureCount = fixtureList.length;
-  const fixtureCountText = `${fixtureCount} fixture${
-    fixtureCount === 1 ? "" : "s"
-  }`;
   const doubleGameweekText = typedGameweek.is_double_gameweek
     ? " It is a Double Gameweek, so all points count 2x."
     : "";
@@ -143,14 +139,14 @@ export async function upsertFixturesPickedActivity({
     eventKey,
     type: "fixtures_selected",
     title: `${pickerName} picked fixtures for ${gameweekName}`,
-    body: `${pickerName} picked ${fixtureCountText} for ${gameweekName}. ${gameweekName} starts at ${kickoffText}.${doubleGameweekText}`,
+    body: `${pickerName} picked the ${gameweekName} fixtures. ${gameweekName} starts at ${kickoffText}.${doubleGameweekText}`,
     seasonId: typedGameweek.season_id,
     gameweekId,
     metadata: {
       pickerName,
       gameweekId,
       gameweekName,
-      fixtureCount,
+      fixtureCount: fixtureList.length,
       isDoubleGameweek: Boolean(typedGameweek.is_double_gameweek),
       firstKickoff,
       kickoffText,

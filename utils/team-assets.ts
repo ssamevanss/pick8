@@ -6,6 +6,12 @@ export type TeamAsset = {
 };
 
 const teamAssets: Record<string, TeamAsset> = {
+  argentina: {
+    label: "Argentina",
+    assetPath: "/team-assets/flags/argentina.svg",
+    initials: "ARG",
+    tone: "country",
+  },
   belgium: {
     label: "Belgium",
     assetPath: "/team-assets/flags/belgium.svg",
@@ -22,6 +28,18 @@ const teamAssets: Record<string, TeamAsset> = {
     label: "England",
     assetPath: "/team-assets/flags/england.svg",
     initials: "ENG",
+    tone: "country",
+  },
+  colombia: {
+    label: "Colombia",
+    assetPath: "/team-assets/flags/colombia.svg",
+    initials: "COL",
+    tone: "country",
+  },
+  egypt: {
+    label: "Egypt",
+    assetPath: "/team-assets/flags/egypt.svg",
+    initials: "EGY",
     tone: "country",
   },
   mexico: {
@@ -46,6 +64,12 @@ const teamAssets: Record<string, TeamAsset> = {
     label: "Spain",
     assetPath: "/team-assets/flags/spain.svg",
     initials: "ESP",
+    tone: "country",
+  },
+  switzerland: {
+    label: "Switzerland",
+    assetPath: "/team-assets/flags/switzerland.svg",
+    initials: "SUI",
     tone: "country",
   },
   "united states": {
@@ -135,6 +159,8 @@ const teamAssets: Record<string, TeamAsset> = {
   },
 };
 
+// To add a future team asset, place the SVG in public/team-assets/flags or
+// public/team-assets/crests, then add a normalized provider team-name key here.
 function normalizeTeamName(teamName: string) {
   return teamName
     .toLowerCase()

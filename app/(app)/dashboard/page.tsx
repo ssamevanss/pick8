@@ -5,7 +5,12 @@ import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
 import LeagueActivityFeed from "@/components/activity/LeagueActivityFeed";
 import DashboardSummary from "@/components/dashboard/DashboardSummary";
+import type { ReactionSummary } from "@/components/predictions/types";
 import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
+import {
+  calculateProvisionalPredictionScore,
+  isLiveExternalStatus,
+} from "@/utils/provisional-scoring";
 
 type NotificationRow = {
   id: string;
@@ -14,6 +19,25 @@ type NotificationRow = {
   body: string | null;
   created_at: string;
   metadata: Record<string, unknown> | null;
+  reactions?: ReactionSummary[];
+  comments?: NotificationCommentRow[];
+};
+
+type NotificationCommentRow = {
+  id: string;
+  notification_id: string;
+  user_id: string;
+  body: string;
+  created_at: string;
+  reactions?: ReactionSummary[];
+  profiles:
+    | {
+        display_name: string;
+      }
+    | {
+        display_name: string;
+      }[]
+    | null;
 };
 
 type PickerGameweekRow = {
@@ -31,10 +55,16 @@ type FixtureRow = {
   id: string;
   kickoff_at: string;
   status: string;
+  home_score: number | null;
+  away_score: number | null;
+  external_fixture_id: string | null;
 };
 
 type PredictionRow = {
   fixture_id: string;
+  home_score: number;
+  away_score: number;
+  points: number | null;
 };
 
 type LatestGameweekRow = {
@@ -162,6 +192,14 @@ export default async function HomePage() {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const { data: profile } = user
+    ? await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle()
+    : { data: null };
+
   const { data: activeSeason } = await getActiveSeason(supabase, "id, name");
 
   const { data: pickerGameweeks } =
@@ -247,13 +285,38 @@ export default async function HomePage() {
   const { data: latestFixtures } = latestGameweek
     ? await supabase
         .from("fixtures")
-        .select("id, kickoff_at, status")
+        .select(
+          "id, kickoff_at, status, home_score, away_score, external_fixture_id",
+        )
         .eq("gameweek_id", latestGameweek.id)
         .order("kickoff_at", { ascending: true })
     : { data: null };
 
   const fixtureList = (latestFixtures as FixtureRow[] | null) ?? [];
   const fixtureIds = fixtureList.map((fixture) => fixture.id);
+  const externalFixtureIds = fixtureList
+    .map((fixture) => fixture.external_fixture_id)
+    .filter((value): value is string => Boolean(value));
+  const { data: externalScoreRows } =
+    externalFixtureIds.length > 0
+      ? await supabase
+          .from("external_fixtures")
+          .select("external_fixture_id, status, home_score, away_score")
+          .eq("provider", "football_data")
+          .in("external_fixture_id", externalFixtureIds)
+      : { data: [] };
+  const externalScoreByFixtureId = new Map(
+    (
+      (externalScoreRows as
+        | {
+            external_fixture_id: string;
+            status: string | null;
+            home_score: number | null;
+            away_score: number | null;
+          }[]
+        | null) ?? []
+    ).map((row) => [row.external_fixture_id, row]),
+  );
   const currentGameweekLabel = latestGameweek
     ? formatGameweekName(latestGameweek)
     : activeSeason
@@ -269,7 +332,7 @@ export default async function HomePage() {
     user && fixtureIds.length > 0
       ? await supabase
           .from("predictions")
-          .select("fixture_id")
+          .select("fixture_id, home_score, away_score, points")
           .eq("user_id", user.id)
           .in("fixture_id", fixtureIds)
       : { data: null };
@@ -335,6 +398,59 @@ export default async function HomePage() {
     return !gameweek?.is_double_gameweek;
   }).length;
   const jokersLeft = Math.max(0, 3 - jokersUsed);
+  const ownJokerFixtureIds = new Set(
+    (
+      (seasonJokerUsage as
+        | {
+            fixture_id: string;
+          }[]
+        | null) ?? []
+    ).map((joker) => joker.fixture_id),
+  );
+  const predictionsByFixtureId = new Map(
+    predictionList.map((prediction) => [prediction.fixture_id, prediction]),
+  );
+  let liveGameweekPoints = 0;
+  let hasLiveGameweekPoints = false;
+  let liveFixtureCount = 0;
+
+  for (const fixture of fixtureList) {
+    const prediction = predictionsByFixtureId.get(fixture.id);
+
+    if (!prediction) {
+      continue;
+    }
+
+    if (fixture.status === "completed" && prediction.points !== null) {
+      liveGameweekPoints += prediction.points;
+      continue;
+    }
+
+    const externalScore = fixture.external_fixture_id
+      ? externalScoreByFixtureId.get(fixture.external_fixture_id)
+      : null;
+
+    if (
+      !externalScore ||
+      !isLiveExternalStatus(externalScore.status) ||
+      externalScore.home_score === null ||
+      externalScore.away_score === null
+    ) {
+      continue;
+    }
+
+    liveGameweekPoints += calculateProvisionalPredictionScore({
+      predictionHome: prediction.home_score,
+      predictionAway: prediction.away_score,
+      actualHome: externalScore.home_score,
+      actualAway: externalScore.away_score,
+      usedJoker:
+        !isLatestDoubleGameweek && ownJokerFixtureIds.has(fixture.id),
+      isDoubleGameweek: isLatestDoubleGameweek,
+    }).points;
+    hasLiveGameweekPoints = true;
+    liveFixtureCount += 1;
+  }
 
   const now = new Date();
   const actionablePredictionFixtures = fixtureList.filter(
@@ -372,6 +488,118 @@ export default async function HomePage() {
     : { data: [] };
 
   const notificationList = (notifications as NotificationRow[] | null) ?? [];
+  const notificationIds = notificationList.map((notification) => notification.id);
+
+  const { data: notificationReactions } =
+    notificationIds.length > 0
+      ? await supabase
+          .from("notification_reactions")
+          .select("notification_id, user_id, emoji")
+          .in("notification_id", notificationIds)
+      : { data: [] };
+
+  const { data: notificationComments } =
+    notificationIds.length > 0
+      ? await supabase
+          .from("notification_comments")
+          .select(
+            `
+            id,
+            notification_id,
+            user_id,
+            body,
+            created_at,
+            profiles (
+              display_name
+            )
+          `,
+          )
+          .in("notification_id", notificationIds)
+          .order("created_at", { ascending: true })
+      : { data: [] };
+  const commentIds = (
+    (notificationComments as NotificationCommentRow[] | null) ?? []
+  ).map((comment) => comment.id);
+  const { data: notificationCommentReactions } =
+    commentIds.length > 0
+      ? await supabase
+          .from("notification_comment_reactions")
+          .select("comment_id, user_id, emoji")
+          .in("comment_id", commentIds)
+      : { data: [] };
+
+  const reactionsByNotification = new Map<string, ReactionSummary[]>();
+
+  for (const reaction of
+    (notificationReactions as
+      | {
+          notification_id: string;
+          user_id: string;
+          emoji: string;
+        }[]
+      | null) ?? []) {
+    const existing = reactionsByNotification.get(reaction.notification_id) ?? [];
+    const summary = existing.find((item) => item.emoji === reaction.emoji);
+
+    if (summary) {
+      summary.count += 1;
+      summary.reactedByCurrentUser =
+        summary.reactedByCurrentUser || reaction.user_id === user?.id;
+    } else {
+      existing.push({
+        emoji: reaction.emoji,
+        count: 1,
+        reactedByCurrentUser: reaction.user_id === user?.id,
+      });
+    }
+
+    reactionsByNotification.set(reaction.notification_id, existing);
+  }
+
+  const commentsByNotification = new Map<string, NotificationCommentRow[]>();
+  const reactionsByComment = new Map<string, ReactionSummary[]>();
+
+  for (const reaction of
+    (notificationCommentReactions as
+      | {
+          comment_id: string;
+          user_id: string;
+          emoji: string;
+        }[]
+      | null) ?? []) {
+    const existing = reactionsByComment.get(reaction.comment_id) ?? [];
+    const summary = existing.find((item) => item.emoji === reaction.emoji);
+
+    if (summary) {
+      summary.count += 1;
+      summary.reactedByCurrentUser =
+        summary.reactedByCurrentUser || reaction.user_id === user?.id;
+    } else {
+      existing.push({
+        emoji: reaction.emoji,
+        count: 1,
+        reactedByCurrentUser: reaction.user_id === user?.id,
+      });
+    }
+
+    reactionsByComment.set(reaction.comment_id, existing);
+  }
+
+  for (const comment of
+    (notificationComments as NotificationCommentRow[] | null) ?? []) {
+    const existing = commentsByNotification.get(comment.notification_id) ?? [];
+    existing.push({
+      ...comment,
+      reactions: reactionsByComment.get(comment.id) ?? [],
+    });
+    commentsByNotification.set(comment.notification_id, existing);
+  }
+
+  const notificationListWithSocial = notificationList.map((notification) => ({
+    ...notification,
+    reactions: reactionsByNotification.get(notification.id) ?? [],
+    comments: commentsByNotification.get(notification.id) ?? [],
+  }));
 
   return (
     <>
@@ -392,6 +620,28 @@ export default async function HomePage() {
         jokersLeft={jokersLeft}
         currentGameweekLabel={currentGameweekLabel}
       />
+
+      {hasLiveGameweekPoints ? (
+        <div className="brand-card mb-3 border-emerald-300/25 bg-emerald-300/10 p-4 sm:flex sm:items-center sm:justify-between sm:gap-4">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wide text-emerald-200">
+              Live GW points
+            </p>
+            <p className="mt-1 text-sm text-slate-300">
+              {liveGameweekPoints} as it stands from {liveFixtureCount} live
+              fixture{liveFixtureCount === 1 ? "" : "s"}. Official points
+              update after full time.
+            </p>
+          </div>
+          <Link
+            href={latestGameweek ? `/predictions?gameweek=${latestGameweek.id}` : "/predictions"}
+            prefetch={false}
+            className="brand-button-secondary mt-3 shrink-0 sm:mt-0"
+          >
+            View live picks
+          </Link>
+        </div>
+      ) : null}
 
       <section className="space-y-3">
         {!activeSeason ? (
@@ -606,7 +856,13 @@ export default async function HomePage() {
         ) : null}
       </section>
 
-      <LeagueActivityFeed notifications={notificationList} />
+      {user ? (
+        <LeagueActivityFeed
+          notifications={notificationListWithSocial}
+          currentUserId={user.id}
+          canModerate={profile?.role === "admin"}
+        />
+      ) : null}
     </>
   );
 }

@@ -14,6 +14,10 @@ import {
   mapExternalStatusToFixtureStatus,
   type ExternalFixtureRow,
 } from "@/utils/external-fixtures";
+import {
+  buildFixtureTimingWindow,
+  isKickoffOutsideTimingWindow,
+} from "@/utils/fixture-timing-window";
 
 const slotNumbers = [1, 2, 3, 4];
 
@@ -28,6 +32,70 @@ type ActiveSeasonExternalConfig = {
   base_competition_code: string | null;
   base_competition_name: string | null;
 };
+
+type FixtureKickoffRow = {
+  id: string;
+  kickoff_at: string;
+};
+
+async function getGameweekTimingWindow({
+  supabase,
+  gameweekId,
+  baseCompetitionCode,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  gameweekId: string;
+  baseCompetitionCode: string | null;
+}) {
+  const { data: selectedFixtures } = await supabase
+    .from("fixtures")
+    .select("id, kickoff_at")
+    .eq("gameweek_id", gameweekId)
+    .order("kickoff_at", { ascending: true });
+
+  const selectedFixtureKickoffs = (
+    (selectedFixtures as FixtureKickoffRow[] | null) ?? []
+  ).map((fixture) => fixture.kickoff_at);
+
+  if (!baseCompetitionCode) {
+    return buildFixtureTimingWindow({
+      selectedFixtureKickoffs,
+      baseCompetitionKickoffs: [],
+    });
+  }
+
+  const nowIso = new Date().toISOString();
+  const { data: baseFixtures } = await supabase
+    .from("external_fixtures")
+    .select("external_matchday, external_stage, kickoff_at")
+    .eq("provider", "football_data")
+    .eq("external_competition_code", baseCompetitionCode)
+    .in("status", ["TIMED", "SCHEDULED"])
+    .gt("kickoff_at", nowIso)
+    .order("kickoff_at", { ascending: true });
+
+  const baseFixtureRows =
+    (baseFixtures as
+      | {
+          external_matchday: number | null;
+          external_stage: string | null;
+          kickoff_at: string;
+        }[]
+      | null) ?? [];
+  const firstBaseGroupKey = baseFixtureRows[0]
+    ? getExternalFixtureGroupKey(baseFixtureRows[0])
+    : null;
+  const baseCompetitionKickoffs = firstBaseGroupKey
+    ? baseFixtureRows
+        .filter((fixture) => getExternalFixtureGroupKey(fixture) === firstBaseGroupKey)
+        .map((fixture) => fixture.kickoff_at)
+    : [];
+
+  return buildFixtureTimingWindow({
+    selectedFixtureKickoffs,
+    baseCompetitionKickoffs,
+  });
+}
 
 async function requireFixtureManagerForGameweek(gameweekId: string) {
   const supabase = await createClient();
@@ -161,6 +229,29 @@ export async function savePickerFixtures(formData: FormData) {
   }
 
   const { supabase, user } = await requireFixtureManagerForGameweek(gameweekId);
+  const { data: activeSeason } = await getActiveSeason(
+    supabase,
+    "base_competition_code",
+  );
+  const timingWindow = await getGameweekTimingWindow({
+    supabase,
+    gameweekId,
+    baseCompetitionCode:
+      (activeSeason as { base_competition_code: string | null } | null)
+        ?.base_competition_code ?? null,
+  });
+  const confirmTimingOverride =
+    formData.get("confirm_timing_override") === "1";
+  const parsedFixtures: {
+    slotNumber: number;
+    fixtureId: string;
+    homeTeam: string;
+    awayTeam: string;
+    kickoffRaw: string;
+    kickoffAt: string | null;
+    competition: string;
+    hasAnyValue: boolean;
+  }[] = [];
 
   for (const slotNumber of slotNumbers) {
     const fixtureId = String(formData.get(`fixture_id_${slotNumber}`) ?? "");
@@ -178,6 +269,48 @@ export async function savePickerFixtures(formData: FormData) {
       "Premier League";
 
     const hasAnyValue = Boolean(homeTeam || awayTeam || kickoffRaw);
+    const kickoffAt = kickoffRaw ? getKickoffIso(kickoffRaw) : null;
+
+    parsedFixtures.push({
+      slotNumber,
+      fixtureId,
+      homeTeam,
+      awayTeam,
+      kickoffRaw,
+      kickoffAt,
+      competition,
+      hasAnyValue,
+    });
+  }
+
+  const outsideWindowFixture = parsedFixtures.find(
+    (fixture) =>
+      fixture.kickoffAt &&
+      isKickoffOutsideTimingWindow({
+        kickoffAt: fixture.kickoffAt,
+        timingWindow,
+      }),
+  );
+
+  if (outsideWindowFixture && !confirmTimingOverride) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        `Fixture ${outsideWindowFixture.slotNumber} is outside the usual gameweek window. Tick "Add it anyway" to confirm.`,
+      )}`,
+    );
+  }
+
+  for (const parsedFixture of parsedFixtures) {
+    const {
+      slotNumber,
+      fixtureId,
+      homeTeam,
+      awayTeam,
+      kickoffRaw,
+      kickoffAt,
+      competition,
+      hasAnyValue,
+    } = parsedFixture;
 
     if (!hasAnyValue && fixtureId) {
       const { error: deleteError } = await supabase
@@ -209,7 +342,13 @@ export async function savePickerFixtures(formData: FormData) {
       );
     }
 
-    const kickoffAt = getKickoffIso(kickoffRaw);
+    if (!kickoffAt) {
+      redirect(
+        `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+          `Kickoff date/time is invalid for Fixture ${slotNumber}`,
+        )}`,
+      );
+    }
 
     if (fixtureId) {
       const { error: updateError } = await supabase
@@ -217,7 +356,7 @@ export async function savePickerFixtures(formData: FormData) {
         .update({
           home_team: homeTeam,
           away_team: awayTeam,
-          kickoff_at: kickoffAt,
+          kickoff_at: kickoffAt!,
           competition,
         })
         .eq("id", fixtureId)
@@ -235,7 +374,7 @@ export async function savePickerFixtures(formData: FormData) {
         gameweek_id: gameweekId,
         home_team: homeTeam,
         away_team: awayTeam,
-        kickoff_at: kickoffAt,
+        kickoff_at: kickoffAt!,
         competition,
         status: "scheduled",
       });
@@ -274,6 +413,9 @@ export async function savePickerFixtures(formData: FormData) {
 
 export async function saveExternalPickerFixtures(formData: FormData) {
   const gameweekId = String(formData.get("gameweek_id") ?? "");
+  const selectedCompetitionCode = String(
+    formData.get("competition_code") ?? "",
+  ).trim();
 
   if (!gameweekId) {
     redirect(
@@ -315,7 +457,8 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   if (
     !activeSeasonConfig ||
     activeSeasonConfig.base_provider !== "football_data" ||
-    !activeSeasonConfig.base_competition_code
+    !activeSeasonConfig.base_competition_code ||
+    !selectedCompetitionCode
   ) {
     redirect(
       `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
@@ -346,7 +489,7 @@ export async function saveExternalPickerFixtures(formData: FormData) {
       "provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, home_team, away_team, kickoff_at, status, raw_payload, last_synced_at",
     )
     .eq("provider", "football_data")
-    .eq("external_competition_code", activeSeasonConfig.base_competition_code)
+    .eq("external_competition_code", selectedCompetitionCode)
     .in("external_fixture_id", uniqueExternalIds);
 
   if (externalFixturesError) {
@@ -376,6 +519,29 @@ export async function saveExternalPickerFixtures(formData: FormData) {
     redirect(
       `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
         `${invalidFixture.home_team} vs ${invalidFixture.away_team} is not selectable`,
+      )}`,
+    );
+  }
+
+  const timingWindow = await getGameweekTimingWindow({
+    supabase,
+    gameweekId,
+    baseCompetitionCode: activeSeasonConfig.base_competition_code,
+  });
+  const selectedOutsideTimingWindow = externalFixtureList.some((fixture) =>
+    isKickoffOutsideTimingWindow({
+      kickoffAt: fixture.kickoff_at,
+      timingWindow,
+    }),
+  );
+
+  if (
+    selectedOutsideTimingWindow &&
+    formData.get("confirm_timing_override") !== "1"
+  ) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&competition=${selectedCompetitionCode}&error=${encodeURIComponent(
+        "One or more selected fixtures is outside the usual gameweek window. Tick \"Add it anyway\" to confirm.",
       )}`,
     );
   }
@@ -434,7 +600,7 @@ export async function saveExternalPickerFixtures(formData: FormData) {
         "provider, external_fixture_id, external_competition_code, external_matchday, external_stage, kickoff_at, status",
       )
       .eq("provider", "football_data")
-      .eq("external_competition_code", activeSeasonConfig.base_competition_code)
+      .eq("external_competition_code", selectedCompetitionCode)
       .in("status", ["TIMED", "SCHEDULED"])
       .gt("kickoff_at", nowIso);
 
@@ -508,11 +674,22 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   const externalFixtureById = new Map(
     externalFixtureList.map((fixture) => [fixture.external_fixture_id, fixture]),
   );
+  const { data: selectedCompetition } = await supabase
+    .from("external_competitions")
+    .select("name")
+    .eq("provider", "football_data")
+    .eq("external_competition_code", selectedCompetitionCode)
+    .maybeSingle();
+  const competitionName =
+    selectedCompetitionCode === activeSeasonConfig.base_competition_code
+      ? activeSeasonConfig.base_competition_name
+      : ((selectedCompetition as { name: string } | null)?.name ??
+        selectedCompetitionCode);
   const rows = uniqueExternalIds.map((externalFixtureId) =>
     buildLocalFixtureFromExternal({
       fixture: externalFixtureById.get(externalFixtureId)!,
       gameweekId,
-      competitionName: activeSeasonConfig.base_competition_name,
+      competitionName,
     }),
   );
 

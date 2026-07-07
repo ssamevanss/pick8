@@ -30,6 +30,14 @@ type ProfileRow = {
   display_name: string;
 };
 
+type EmailPreferenceRow = {
+  user_id: string;
+  predictions_open_enabled: boolean;
+  prediction_reminders_enabled: boolean;
+  picker_notifications_enabled: boolean;
+  weekly_summary_enabled: boolean;
+};
+
 type PredictionRow = {
   fixture_id: string;
   user_id: string;
@@ -100,6 +108,7 @@ function getEmailTemplate({
   buttonLabel,
   buttonUrl,
   footer,
+  managePreferencesUrl,
 }: {
   title: string;
   eyebrow: string;
@@ -108,6 +117,7 @@ function getEmailTemplate({
   buttonLabel: string;
   buttonUrl: string;
   footer: string;
+  managePreferencesUrl: string;
 }) {
   const fixtureItems = fixtureList
     ? fixtureList
@@ -160,6 +170,7 @@ function getEmailTemplate({
             <tr>
               <td style="border-top:1px solid #e5eee2;padding:16px 24px 22px;text-align:center;">
                 <p style="margin:0;color:#6b7a72;font-size:12px;line-height:1.5;">${escapeHtml(footer)}</p>
+                <p style="margin:8px 0 0;color:#6b7a72;font-size:12px;line-height:1.5;"><a href="${escapeHtml(managePreferencesUrl)}" style="color:#166534;text-decoration:underline;">Manage email preferences</a></p>
               </td>
             </tr>
           </table>
@@ -346,6 +357,82 @@ async function getApprovedEmailProfiles({ supabase }: { supabase: AdminSupabaseC
   };
 }
 
+async function getEmailPreferenceMap({
+  supabase,
+  userIds,
+}: {
+  supabase: AdminSupabaseClient;
+  userIds: string[];
+}) {
+  if (userIds.length === 0) {
+    return {
+      preferences: new Map<string, EmailPreferenceRow>(),
+      error: null,
+    };
+  }
+
+  const { data, error } = await supabase
+    .from("user_email_preferences")
+    .select(
+      "user_id, predictions_open_enabled, prediction_reminders_enabled, picker_notifications_enabled, weekly_summary_enabled",
+    )
+    .in("user_id", userIds);
+
+  if (error) {
+    return { preferences: new Map<string, EmailPreferenceRow>(), error };
+  }
+
+  return {
+    preferences: new Map(
+      ((data as EmailPreferenceRow[] | null) ?? []).map((row) => [
+        row.user_id,
+        row,
+      ]),
+    ),
+    error: null,
+  };
+}
+
+function preferenceEnabled({
+  preferences,
+  userId,
+  emailType,
+}: {
+  preferences: Map<string, EmailPreferenceRow>;
+  userId: string;
+  emailType: EmailNotificationType;
+}) {
+  const preference = preferences.get(userId);
+
+  if (!preference) {
+    return true;
+  }
+
+  if (emailType === "predictions_open") {
+    return preference.predictions_open_enabled;
+  }
+
+  if (emailType === "predictions_24h") {
+    return preference.prediction_reminders_enabled;
+  }
+
+  if (emailType === "picker_up_next") {
+    return preference.picker_notifications_enabled;
+  }
+
+  return true;
+}
+
+function getPreferenceFooter(baseFooter: string, siteUrl: string) {
+  const preferencesUrl = `${siteUrl}/settings`;
+
+  return {
+    text: `${baseFooter}\nManage email preferences: ${preferencesUrl}`,
+    htmlFooter: baseFooter,
+    preferencesUrl,
+  };
+}
+
 export async function sendPickerUpNextEmail({
   supabase,
   gameweekId,
@@ -403,6 +490,43 @@ export async function sendPickerUpNextEmail({
     };
   }
 
+  const { preferences, error: preferenceError } = await getEmailPreferenceMap({
+    supabase,
+    userIds: [typedPicker.id],
+  });
+
+  if (preferenceError) {
+    return {
+      summaries: [] as EmailDeliverySummary[],
+      error:
+        preferenceError.message.includes("user_email_preferences")
+          ? "Email preferences table is not available"
+          : preferenceError.message,
+    };
+  }
+
+  if (
+    !preferenceEnabled({
+      preferences,
+      userId: typedPicker.id,
+      emailType: "picker_up_next",
+    })
+  ) {
+    return {
+      summaries: [
+        {
+          event_key: `picker_up_next:${gameweek.id}:${typedPicker.id}`,
+          email_type: "picker_up_next",
+          user_id: typedPicker.id,
+          email: typedPicker.email,
+          status: "skipped",
+          reason: "email preference disabled",
+        },
+      ],
+      error: null,
+    };
+  }
+
   const { fixtures } = await getGameweekFixtures({
     supabase,
     gameweekId,
@@ -419,20 +543,22 @@ export async function sendPickerUpNextEmail({
   const subject = "You’re up next to pick fixtures";
   const footer =
     "You received this because you are the assigned fixture picker for this gameweek.";
+  const footerLinks = getPreferenceFooter(footer, siteUrl);
   const text = `Who You Got?
 
 ${intro}
 
 Pick fixtures: ${buttonUrl}
 
-${footer}`;
+${footerLinks.text}`;
   const html = getEmailTemplate({
     title: subject,
     eyebrow: "Fixture picker",
     intro,
     buttonLabel: "Pick fixtures",
     buttonUrl,
-    footer,
+    footer: footerLinks.htmlFooter,
+    managePreferencesUrl: footerLinks.preferencesUrl,
   });
 
   const summary = await sendLoggedEmail({
@@ -510,6 +636,7 @@ export async function sendPredictionsOpenEmails({
     : `The ${gameweekName} fixtures are in. Make your calls before each kickoff.`;
   const footer =
     "You received this because you are an approved player in this league.";
+  const footerLinks = getPreferenceFooter(footer, siteUrl);
   const text = `Who You Got?
 
 ${intro}
@@ -518,7 +645,7 @@ ${fixtureLines.join("\n")}
 
 Enter predictions: ${buttonUrl}
 
-${footer}`;
+${footerLinks.text}`;
   const html = getEmailTemplate({
     title: subject,
     eyebrow: "Predictions open",
@@ -526,10 +653,25 @@ ${footer}`;
     fixtureList: fixtureLines,
     buttonLabel: "Enter predictions",
     buttonUrl,
-    footer,
+    footer: footerLinks.htmlFooter,
+    managePreferencesUrl: footerLinks.preferencesUrl,
   });
 
   const summaries: EmailDeliverySummary[] = [];
+  const { preferences, error: preferenceError } = await getEmailPreferenceMap({
+    supabase,
+    userIds: profiles.map((profile) => profile.id),
+  });
+
+  if (preferenceError) {
+    return {
+      summaries: [] as EmailDeliverySummary[],
+      error:
+        preferenceError.message.includes("user_email_preferences")
+          ? "Email preferences table is not available"
+          : preferenceError.message,
+    };
+  }
 
   for (const profile of profiles) {
     if (excludeUserId && profile.id === excludeUserId) {
@@ -540,6 +682,24 @@ ${footer}`;
         email: profile.email,
         status: "skipped",
         reason: "actioning user excluded",
+      });
+      continue;
+    }
+
+    if (
+      !preferenceEnabled({
+        preferences,
+        userId: profile.id,
+        emailType: "predictions_open",
+      })
+    ) {
+      summaries.push({
+        event_key: `predictions_open:${gameweek.id}:${profile.id}`,
+        email_type: "predictions_open",
+        user_id: profile.id,
+        email: profile.email,
+        status: "skipped",
+        reason: "email preference disabled",
       });
       continue;
     }
@@ -662,6 +822,21 @@ export async function sendPredictionDeadlineReminderEmails({
     return { summaries: [] as EmailDeliverySummary[], error: profileError.message };
   }
 
+  const { preferences, error: preferenceError } = await getEmailPreferenceMap({
+    supabase,
+    userIds: profiles.map((profile) => profile.id),
+  });
+
+  if (preferenceError) {
+    return {
+      summaries: [] as EmailDeliverySummary[],
+      error:
+        preferenceError.message.includes("user_email_preferences")
+          ? "Email preferences table is not available"
+          : preferenceError.message,
+    };
+  }
+
   const actionableFixtureIds = [...actionableByGameweek.values()].flatMap(
     (fixturesForGameweek) => fixturesForGameweek.map((fixture) => fixture.id),
   );
@@ -715,6 +890,7 @@ export async function sendPredictionDeadlineReminderEmails({
     }Get your predictions in before kickoff.`;
     const footer =
       "You received this because you still have missing predictions for this gameweek.";
+    const footerLinks = getPreferenceFooter(footer, siteUrl);
     const text = `Who You Got?
 
 ${intro}
@@ -723,7 +899,7 @@ ${fixtureLines.join("\n")}
 
 Enter predictions: ${buttonUrl}
 
-${footer}`;
+${footerLinks.text}`;
     const html = getEmailTemplate({
       title: subject,
       eyebrow: "Predictions deadline",
@@ -731,10 +907,29 @@ ${footer}`;
       fixtureList: fixtureLines,
       buttonLabel: "Enter predictions",
       buttonUrl,
-      footer,
+      footer: footerLinks.htmlFooter,
+      managePreferencesUrl: footerLinks.preferencesUrl,
     });
 
     for (const profile of profiles) {
+      if (
+        !preferenceEnabled({
+          preferences,
+          userId: profile.id,
+          emailType: "predictions_24h",
+        })
+      ) {
+        summaries.push({
+          event_key: `predictions_24h:${gameweek.id}:${profile.id}`,
+          email_type: "predictions_24h",
+          user_id: profile.id,
+          email: profile.email,
+          status: "skipped",
+          reason: "email preference disabled",
+        });
+        continue;
+      }
+
       const predictedCount =
         predictedByUserGameweek.get(`${gameweek.id}:${profile.id}`)?.size ?? 0;
 

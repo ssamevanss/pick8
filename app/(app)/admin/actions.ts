@@ -13,12 +13,21 @@ import {
   sendPredictionsOpenEmails,
 } from "@/utils/email-notifications";
 import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
+import { generateLeagueFactNotifications } from "@/utils/league-facts";
 import { getFootballDataCompetitionOption } from "@/utils/football-competitions";
 import {
   buildLocalFixtureFromExternal,
+  getExternalFixtureGroupKey,
   mapExternalStatusToFixtureStatus,
   type ExternalFixtureRow,
 } from "@/utils/external-fixtures";
+import {
+  buildFixtureTimingWindow,
+  isKickoffOutsideTimingWindow,
+} from "@/utils/fixture-timing-window";
+import {
+  calculatePredictionPoints,
+} from "@/utils/provisional-scoring";
 
 type SupabaseLikeClient =
   | Awaited<ReturnType<typeof createClient>>
@@ -47,11 +56,79 @@ type ActiveSeasonExternalConfig = {
   base_competition_name: string | null;
 };
 
+type FixtureKickoffRow = {
+  id: string;
+  kickoff_at: string;
+};
+
+async function getAdminGameweekTimingWindow({
+  supabase,
+  gameweekId,
+  baseCompetitionCode,
+}: {
+  supabase: SupabaseLikeClient;
+  gameweekId: string;
+  baseCompetitionCode: string | null;
+}) {
+  const { data: selectedFixtures } = await supabase
+    .from("fixtures")
+    .select("id, kickoff_at")
+    .eq("gameweek_id", gameweekId)
+    .order("kickoff_at", { ascending: true });
+
+  const selectedFixtureKickoffs = (
+    (selectedFixtures as FixtureKickoffRow[] | null) ?? []
+  ).map((fixture) => fixture.kickoff_at);
+
+  if (!baseCompetitionCode) {
+    return buildFixtureTimingWindow({
+      selectedFixtureKickoffs,
+      baseCompetitionKickoffs: [],
+    });
+  }
+
+  const nowIso = new Date().toISOString();
+  const { data: baseFixtures } = await supabase
+    .from("external_fixtures")
+    .select("external_matchday, external_stage, kickoff_at")
+    .eq("provider", "football_data")
+    .eq("external_competition_code", baseCompetitionCode)
+    .in("status", ["TIMED", "SCHEDULED"])
+    .gt("kickoff_at", nowIso)
+    .order("kickoff_at", { ascending: true });
+
+  const baseFixtureRows =
+    (baseFixtures as
+      | {
+          external_matchday: number | null;
+          external_stage: string | null;
+          kickoff_at: string;
+        }[]
+      | null) ?? [];
+  const firstBaseGroupKey = baseFixtureRows[0]
+    ? getExternalFixtureGroupKey(baseFixtureRows[0])
+    : null;
+  const baseCompetitionKickoffs = firstBaseGroupKey
+    ? baseFixtureRows
+        .filter(
+          (fixture) =>
+            getExternalFixtureGroupKey(fixture) === firstBaseGroupKey,
+        )
+        .map((fixture) => fixture.kickoff_at)
+    : [];
+
+  return buildFixtureTimingWindow({
+    selectedFixtureKickoffs,
+    baseCompetitionKickoffs,
+  });
+}
+
 type ActivityGameweekRow = {
   id: string;
   season_id: string;
   gameweek_number: number;
   name: string | null;
+  is_double_gameweek: boolean | null;
 };
 
 type ActivityFixtureRow = {
@@ -67,21 +144,6 @@ type ActivityFixtureRow = {
 type WeeklyPredictionRow = {
   user_id: string;
   points: number | null;
-  profiles:
-    | {
-        display_name: string;
-      }
-    | {
-        display_name: string;
-      }[]
-    | null;
-};
-
-type LeaderboardMovementRow = {
-  user_id: string;
-  rank: number | null;
-  previous_rank: number | null;
-  total_points: number;
   profiles:
     | {
         display_name: string;
@@ -175,12 +237,6 @@ function getIsDoubleGameweekFromFixture(fixture: FixtureToScore) {
   return Boolean(fixture.gameweeks?.is_double_gameweek);
 }
 
-function getResult(homeScore: number, awayScore: number) {
-  if (homeScore > awayScore) return "home";
-  if (awayScore > homeScore) return "away";
-  return "draw";
-}
-
 function calculatePoints({
   predictionHome,
   predictionAway,
@@ -196,30 +252,19 @@ function calculatePoints({
   usedJoker: boolean;
   isDoubleGameweek?: boolean;
 }) {
-  const isExactScore =
-    predictionHome === actualHome && predictionAway === actualAway;
-
-  const isCorrectResult =
-    getResult(predictionHome, predictionAway) === getResult(actualHome, actualAway);
-
-  let points = 0;
-
-  if (isExactScore) {
-    points = 5;
-  } else if (isCorrectResult) {
-    points = 3;
-  }
-
-  if (isDoubleGameweek) {
-    points = points * 2;
-  } else if (usedJoker) {
-    points = points * 2;
-  }
+  const score = calculatePredictionPoints({
+    predictionHome,
+    predictionAway,
+    actualHome,
+    actualAway,
+    usedJoker,
+    isDoubleGameweek,
+  });
 
   return {
-    points,
-    isExactScore,
-    isCorrectResult,
+    points: score.points,
+    isExactScore: score.isExactScore,
+    isCorrectResult: score.isCorrectResult,
   };
 }
 
@@ -662,6 +707,37 @@ export async function addFixtureToGameweek(formData: FormData) {
 
   const kickoffAt = getKickoffIso(kickoffRaw);
 
+  if (!kickoffAt) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        "Kickoff date/time is invalid",
+      )}`,
+    );
+  }
+
+  const { data: activeSeason } = await getActiveSeason(
+    supabase,
+    "base_competition_code",
+  );
+  const timingWindow = await getAdminGameweekTimingWindow({
+    supabase,
+    gameweekId,
+    baseCompetitionCode:
+      (activeSeason as { base_competition_code: string | null } | null)
+        ?.base_competition_code ?? null,
+  });
+
+  if (
+    isKickoffOutsideTimingWindow({ kickoffAt, timingWindow }) &&
+    formData.get("confirm_timing_override") !== "1"
+  ) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        "This fixture is outside the usual gameweek window. Tick \"Add it anyway\" to confirm.",
+      )}`,
+    );
+  }
+
   const { error } = await supabase.from("fixtures").insert({
     gameweek_id: gameweekId,
     home_team: homeTeam,
@@ -755,6 +831,9 @@ export async function addExternalFixturesToGameweek(formData: FormData) {
   const { supabase, user } = await requireAdmin();
 
   const gameweekId = String(formData.get("gameweek_id") ?? "");
+  const selectedCompetitionCode = String(
+    formData.get("competition_code") ?? "",
+  ).trim();
   const selectedExternalIds = formData
     .getAll("external_fixture_id")
     .map((value) => String(value))
@@ -809,7 +888,8 @@ export async function addExternalFixturesToGameweek(formData: FormData) {
 
   if (
     activeSeasonConfig.base_provider !== "football_data" ||
-    !activeSeasonConfig.base_competition_code
+    !activeSeasonConfig.base_competition_code ||
+    !selectedCompetitionCode
   ) {
     redirect(
       `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
@@ -824,7 +904,7 @@ export async function addExternalFixturesToGameweek(formData: FormData) {
       "provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, home_team, away_team, kickoff_at, status, raw_payload, last_synced_at",
     )
     .eq("provider", "football_data")
-    .eq("external_competition_code", activeSeasonConfig.base_competition_code)
+    .eq("external_competition_code", selectedCompetitionCode)
     .in("external_fixture_id", uniqueExternalIds);
 
   if (externalFixturesError) {
@@ -854,6 +934,29 @@ export async function addExternalFixturesToGameweek(formData: FormData) {
     redirect(
       `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
         `${invalidFixture.home_team} vs ${invalidFixture.away_team} is not selectable`,
+      )}`,
+    );
+  }
+
+  const timingWindow = await getAdminGameweekTimingWindow({
+    supabase,
+    gameweekId,
+    baseCompetitionCode: activeSeasonConfig.base_competition_code,
+  });
+  const selectedOutsideTimingWindow = externalFixtureList.some((fixture) =>
+    isKickoffOutsideTimingWindow({
+      kickoffAt: fixture.kickoff_at,
+      timingWindow,
+    }),
+  );
+
+  if (
+    selectedOutsideTimingWindow &&
+    formData.get("confirm_timing_override") !== "1"
+  ) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&competition=${selectedCompetitionCode}&error=${encodeURIComponent(
+        "One or more selected fixtures is outside the usual gameweek window. Tick \"Add it anyway\" to confirm.",
       )}`,
     );
   }
@@ -901,13 +1004,24 @@ export async function addExternalFixturesToGameweek(formData: FormData) {
   const externalFixtureById = new Map(
     externalFixtureList.map((fixture) => [fixture.external_fixture_id, fixture]),
   );
+  const { data: selectedCompetition } = await supabase
+    .from("external_competitions")
+    .select("name")
+    .eq("provider", "football_data")
+    .eq("external_competition_code", selectedCompetitionCode)
+    .maybeSingle();
+  const competitionName =
+    selectedCompetitionCode === activeSeasonConfig.base_competition_code
+      ? activeSeasonConfig.base_competition_name
+      : ((selectedCompetition as { name: string } | null)?.name ??
+        selectedCompetitionCode);
   const rows = uniqueExternalIds
     .filter((externalFixtureId) => !duplicateInCurrentGameweek.has(externalFixtureId))
     .map((externalFixtureId) =>
       buildLocalFixtureFromExternal({
         fixture: externalFixtureById.get(externalFixtureId)!,
         gameweekId,
-        competitionName: activeSeasonConfig.base_competition_name,
+        competitionName,
       }),
     );
 
@@ -2260,22 +2374,6 @@ function formatPlayerList(names: string[]) {
   return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
 }
 
-function formatMovementText({
-  name,
-  movement,
-}: {
-  name: string;
-  movement: number;
-}) {
-  if (movement > 0) {
-    return `${name} up ${movement} position${movement === 1 ? "" : "s"}`;
-  }
-
-  const fall = Math.abs(movement);
-
-  return `${name} down ${fall} position${fall === 1 ? "" : "s"}`;
-}
-
 async function getGameweekFixtureIds({
   supabase,
   gameweekId,
@@ -2310,7 +2408,7 @@ async function upsertGameweekCompleteActivity({
 }) {
   const { data: gameweek } = await supabase
     .from("gameweeks")
-    .select("id, season_id, gameweek_number, name")
+    .select("id, season_id, gameweek_number, name, is_double_gameweek")
     .eq("id", gameweekId)
     .single();
 
@@ -2411,64 +2509,11 @@ async function upsertGameweekCompleteActivity({
       points: entry.points,
     }));
 
-  const { data: leaderboardRows } = await supabase
-    .from("leaderboard_entries")
-    .select(
-      `
-      user_id,
-      rank,
-      previous_rank,
-      total_points,
-      profiles (
-        display_name
-      )
-    `,
-    )
-    .eq("season_id", typedGameweek.season_id)
-    .order("rank", { ascending: true });
-
-  const movementRows =
-    (leaderboardRows as LeaderboardMovementRow[] | null) ?? [];
-
-  const movements = movementRows
-    .filter((entry) => entry.rank !== null && entry.previous_rank !== null)
-    .map((entry) => ({
-      name: getProfileDisplayName(entry.profiles),
-      movement: (entry.previous_rank ?? 0) - (entry.rank ?? 0),
-    }))
-    .filter((entry) => entry.movement !== 0);
-
-  const maxRise =
-    movements.filter((entry) => entry.movement > 0).length > 0
-      ? Math.max(
-          ...movements
-            .filter((entry) => entry.movement > 0)
-            .map((entry) => entry.movement),
-        )
-      : 0;
-
-  const maxFall =
-    movements.filter((entry) => entry.movement < 0).length > 0
-      ? Math.min(
-          ...movements
-            .filter((entry) => entry.movement < 0)
-            .map((entry) => entry.movement),
-        )
-      : 0;
-
-  const biggestRisers = movements
-    .filter((entry) => entry.movement === maxRise && maxRise > 0)
-    .map((entry) => ({
-      name: entry.name,
-      movement: entry.movement,
-    }));
-
-  const biggestFallers = movements
-    .filter((entry) => entry.movement === maxFall && maxFall < 0)
-    .map((entry) => ({
-      name: entry.name,
-      movement: entry.movement,
-    }));
+  // `leaderboard_entries.previous_rank` can change during repeated scoring
+  // within one gameweek, so it is not a reliable completed-gameweek snapshot.
+  // Suppress movement activity until a dedicated snapshot table exists.
+  const biggestRisers: { name: string; movement: number }[] = [];
+  const biggestFallers: { name: string; movement: number }[] = [];
 
   const gameweekName = formatGameweekName(typedGameweek);
 
@@ -2489,40 +2534,11 @@ async function upsertGameweekCompleteActivity({
         )} with ${topWeeklyPoints} point${topWeeklyPoints === 1 ? "" : "s"}.`
       : "No weekly winner because no points were scored.";
 
-  const riserText =
-    biggestRisers.length > 0
-      ? `Biggest riser${biggestRisers.length === 1 ? "" : "s"}: ${formatPlayerList(
-          biggestRisers.map((riser) =>
-            formatMovementText({
-              name: riser.name,
-              movement: riser.movement,
-            }),
-          ),
-        )}.`
-      : "";
-
-  const fallerText =
-    biggestFallers.length > 0
-      ? `Biggest faller${biggestFallers.length === 1 ? "" : "s"}: ${formatPlayerList(
-          biggestFallers.map((faller) =>
-            formatMovementText({
-              name: faller.name,
-              movement: faller.movement,
-            }),
-          ),
-        )}.`
-      : "";
-
-  const movementText =
-    riserText || fallerText
-      ? [riserText, fallerText].filter(Boolean).join(" ")
-      : "No leaderboard movement this week.";
-
   await upsertActivityNotification({
     eventKey: `gameweek_complete:${gameweekId}`,
     type: "results_available",
     title: `${gameweekName} complete`,
-    body: `${gameweekName} is complete. ${winnerText} ${movementText}`,
+    body: `${gameweekName} is complete. ${winnerText}`,
     seasonId: typedGameweek.season_id,
     gameweekId,
     metadata: {
@@ -2534,6 +2550,19 @@ async function upsertGameweekCompleteActivity({
       biggestRisers,
       biggestFallers,
     },
+  });
+
+  await generateLeagueFactNotifications({
+    supabase,
+    seasonId: typedGameweek.season_id,
+    gameweekId,
+    gameweekNumber: typedGameweek.gameweek_number,
+    gameweekName,
+    isDoubleGameweek: Boolean(typedGameweek.is_double_gameweek),
+    fixtures,
+    weeklyLeaderboard,
+    biggestRisers,
+    biggestFallers,
   });
 
   return true;

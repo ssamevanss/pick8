@@ -435,6 +435,10 @@ Rules:
 - `gameweek_id` supports export, cleanup, and future reminders.
 - `metadata` stores structured JSON for rich UI.
 - `season_id` and `gameweek_id` remain nullable so legacy notifications can be kept safely.
+- League facts/highlights use normal notification rows with `type = info`,
+  event keys shaped like `league_fact:<gameweek_id>:slot:<n>`, and metadata
+  fields such as `factType`, `subjectKey`, and `interestingness`. No separate
+  facts table is required for the MVP.
 
 Important SQL:
 
@@ -460,6 +464,101 @@ on public.notifications (season_id, created_at desc);
 
 create index if not exists notifications_gameweek_idx
 on public.notifications (gameweek_id);
+```
+
+## Social reactions and comments
+
+Lightweight social features are stored separately from gameplay tables so they
+do not affect scoring, leaderboard recalculation, result sync, or fixture
+locking.
+
+### `prediction_reactions`
+
+Represents one emoji reaction from an approved user to another user's visible
+prediction.
+
+Important columns:
+
+- `season_id`
+- `gameweek_id`
+- `fixture_id`
+- `prediction_user_id`: the user whose prediction is being reacted to
+- `user_id`: the reacting user
+- `emoji`
+
+Rules:
+
+- Unique by `(fixture_id, prediction_user_id, user_id)`, so each user has one
+  current reaction per prediction.
+- Users can change reaction by selecting a different emoji.
+- Selecting the same emoji again removes the reaction.
+- Server actions only allow prediction reactions after the fixture is locked,
+  preserving pre-kickoff prediction privacy.
+- The MVP allowed emoji set is `😂`, `🔥`, `👀`, `😭`, and `🤝`.
+
+### `notification_reactions`
+
+Represents one emoji reaction from an approved user to a league activity item.
+
+Important columns:
+
+- `season_id`
+- `gameweek_id`
+- `notification_id`
+- `user_id`
+- `emoji`
+
+Rules:
+
+- Unique by `(notification_id, user_id)`, so each user has one current reaction
+  per activity item.
+- Reactions are shown on active-season dashboard activity only.
+
+### `notification_comments`
+
+Represents short comments under league activity items.
+
+Important columns:
+
+- `season_id`
+- `gameweek_id`
+- `notification_id`
+- `user_id`
+- `body`
+
+Rules:
+
+- Comments are capped at 240 characters.
+- Approved users can comment on active-season activity.
+- Users can delete their own comments. Admins can delete any comment.
+- Comments are intentionally flat, not deeply threaded.
+
+### `notification_comment_reactions`
+
+Represents one emoji reaction from an approved user to a league activity
+comment.
+
+Important columns:
+
+- `season_id`
+- `gameweek_id`
+- `comment_id`
+- `user_id`
+- `emoji`
+
+Rules:
+
+- Unique by `(comment_id, user_id)`, so each user has one current reaction per
+  comment.
+- Users can change reaction by selecting a different emoji.
+- Selecting the same emoji again removes the reaction.
+- The MVP allowed emoji set is `😂`, `🔥`, `👀`, `😭`, and `🤝`.
+
+Migration:
+
+```text
+docs/2026-07-06-social-reactions.sql
+docs/2026-07-07-comment-reactions.sql
 ```
 
 ## `prediction_reminders`
@@ -566,6 +665,79 @@ on public.email_notifications (user_id, sent_at desc);
 
 create index if not exists email_notifications_type_sent_idx
 on public.email_notifications (email_type, sent_at desc);
+```
+
+## `user_email_preferences`
+
+User-managed opt-outs for non-operational league emails.
+
+Important columns:
+
+- `user_id`
+- `predictions_open_enabled`
+- `prediction_reminders_enabled`
+- `picker_notifications_enabled`
+- `weekly_summary_enabled`
+- `updated_at`
+
+Rules:
+
+- One row per profile.
+- Missing row means all email categories are treated as enabled.
+- Preferences affect email delivery only. In-app dashboard notifications still
+  appear.
+- Current mapping:
+  - `predictions_open` checks `predictions_open_enabled`
+  - `predictions_24h` checks `prediction_reminders_enabled`
+  - `picker_up_next` checks `picker_notifications_enabled`
+  - `weekly_summary_enabled` is reserved for future recap emails
+- Users manage preferences from `/settings`.
+
+Migration:
+
+```text
+docs/2026-07-06-user-email-preferences.sql
+```
+
+## `user_notifications`
+
+User-scoped notification inbox for social activity shown by the header bell.
+
+Important columns:
+
+- `user_id`: recipient
+- `notification_type`
+- `target_type`
+- `target_id`
+- `grouping_key`
+- `title`
+- `body`
+- `metadata`
+- `read_at`
+- `created_at`
+- `updated_at`
+
+Rules:
+
+- Unique by `(user_id, grouping_key)` so similar events update one grouped inbox
+  row instead of creating noisy duplicates.
+- Metadata stores grouped actor ids/names and target context.
+- Rows become unread again when a grouped event receives a new actor.
+- Users can only read and mark their own inbox rows via RLS.
+- Writes are performed by server actions after approved-user checks.
+
+Current grouped event types:
+
+- `prediction_reaction`
+- `activity_reaction`
+- `activity_comment`
+- `activity_thread_comment`
+- `comment_reaction`
+
+Migration:
+
+```text
+docs/2026-07-07-user-notifications.sql
 ```
 
 ## `fixture_picker_order`

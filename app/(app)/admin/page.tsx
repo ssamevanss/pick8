@@ -57,6 +57,11 @@ import {
   getFootballDataCompetitionOption,
   type FootballCompetitionOption,
 } from "@/utils/football-competitions";
+import { getExternalFixtureGroupKey } from "@/utils/external-fixtures";
+import {
+  buildFixtureTimingWindow,
+  formatTimingWindow,
+} from "@/utils/fixture-timing-window";
 
 type Profile = {
   id: string;
@@ -141,6 +146,7 @@ export default async function AdminPage({
     error?: string;
     gameweek?: string;
     tab?: string;
+    competition?: string;
   }>;
 }) {
   const params = searchParams ? await searchParams : {};
@@ -561,23 +567,78 @@ export default async function AdminPage({
   const adminExternalFixturesConfigured =
     activeSeasonExternalConfig?.base_provider === "football_data" &&
     Boolean(activeSeasonExternalConfig.base_competition_code);
+  const selectedAdminCompetition =
+    seasonSettingsCompetitionOptions.find(
+      (competition) =>
+        competition.external_competition_code === params.competition,
+    ) ??
+    seasonSettingsCompetitionOptions.find(
+      (competition) =>
+        competition.external_competition_code ===
+        activeSeasonExternalConfig?.base_competition_code,
+    ) ??
+    seasonSettingsCompetitionOptions[0] ??
+    null;
+  const selectedAdminCompetitionCode =
+    selectedAdminCompetition?.external_competition_code ??
+    activeSeasonExternalConfig?.base_competition_code ??
+    null;
   const nowIso = new Date().toISOString();
   const { data: adminExternalFixtureRows } =
-    adminExternalFixturesConfigured
+    adminExternalFixturesConfigured && selectedAdminCompetitionCode
       ? await supabase
           .from("external_fixtures")
           .select(
             "id, provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, home_team, away_team, kickoff_at, status",
           )
           .eq("provider", "football_data")
+          .eq("external_competition_code", selectedAdminCompetitionCode)
+          .in("status", ["TIMED", "SCHEDULED"])
+          .gt("kickoff_at", nowIso)
+          .order("kickoff_at", { ascending: true })
+      : { data: [] };
+  const { data: adminBaseExternalFixtureRows } =
+    adminExternalFixturesConfigured &&
+    activeSeasonExternalConfig?.base_competition_code
+      ? await supabase
+          .from("external_fixtures")
+          .select(
+            "external_matchday, external_stage, kickoff_at",
+          )
+          .eq("provider", "football_data")
           .eq(
             "external_competition_code",
-            activeSeasonExternalConfig!.base_competition_code!,
+            activeSeasonExternalConfig.base_competition_code,
           )
           .in("status", ["TIMED", "SCHEDULED"])
           .gt("kickoff_at", nowIso)
           .order("kickoff_at", { ascending: true })
       : { data: [] };
+  const adminBaseRows =
+    (adminBaseExternalFixtureRows as
+      | {
+          external_matchday: number | null;
+          external_stage: string | null;
+          kickoff_at: string;
+        }[]
+      | null) ?? [];
+  const adminBaseFirstGroupKey = adminBaseRows[0]
+    ? getExternalFixtureGroupKey(adminBaseRows[0])
+    : null;
+  const adminTimingWindow = buildFixtureTimingWindow({
+    selectedFixtureKickoffs: fixtureList.map((fixture) => fixture.kickoff_at),
+    baseCompetitionKickoffs: adminBaseFirstGroupKey
+      ? adminBaseRows
+          .filter(
+            (fixture) =>
+              getExternalFixtureGroupKey(fixture) === adminBaseFirstGroupKey,
+          )
+          .map((fixture) => fixture.kickoff_at)
+      : [],
+  });
+  const adminTimingWindowText = adminTimingWindow
+    ? formatTimingWindow(adminTimingWindow)
+    : null;
   const externalFixtureUsage = new Map<string, string>();
 
   for (const fixture of activeSeasonFixtures) {
@@ -896,15 +957,29 @@ export default async function AdminPage({
               configured={adminExternalFixturesConfigured}
               provider={activeSeasonExternalConfig?.base_provider ?? null}
               competitionCode={
-                activeSeasonExternalConfig?.base_competition_code ?? null
+                selectedAdminCompetitionCode
               }
               competitionName={
-                activeSeasonExternalConfig?.base_competition_name ?? null
+                selectedAdminCompetition?.name ??
+                activeSeasonExternalConfig?.base_competition_name ??
+                null
               }
+              baseCompetitionCode={
+                activeSeasonExternalConfig?.base_competition_code ?? null
+              }
+              competitionOptions={seasonSettingsCompetitionOptions}
+              timingWindowText={adminTimingWindowText}
+              timingWindow={adminTimingWindow}
               fixtures={adminExternalFixtureOptions}
             />
 
-            <AdminAddFixtureForm gameweekId={selectedGameweek?.id ?? null} />
+            <AdminAddFixtureForm
+              gameweekId={selectedGameweek?.id ?? null}
+              timingWindowText={adminTimingWindowText}
+              defaultCompetitionName={
+                activeSeasonExternalConfig?.base_competition_name ?? null
+              }
+            />
           </div>
           <details className="brand-card mt-6 p-4">
             <summary className="cursor-pointer select-none text-sm font-semibold text-slate-300">

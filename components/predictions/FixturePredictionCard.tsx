@@ -1,10 +1,18 @@
 import PredictionOutcomeBadge from "./PredictionOutcomeBadge";
 import TeamIdentity from "./TeamIdentity";
+import EmojiReactionControls from "@/components/social/EmojiReactionControls";
+import { togglePredictionReaction } from "@/utils/social-actions";
+import {
+  calculateProvisionalPredictionScore,
+  getScoreResult,
+  isLiveExternalStatus,
+} from "@/utils/provisional-scoring";
 import type {
   ExternalFixtureScore,
   Fixture,
   FixtureTeamForm,
   Prediction,
+  ReactionSummary,
   TeamFormResult,
 } from "./types";
 
@@ -18,6 +26,7 @@ type FixturePredictionCardProps = {
   teamForm: FixtureTeamForm;
   isDoubleGameweek?: boolean;
   externalScore?: ExternalFixtureScore | null;
+  predictionReactionsByKey?: Map<string, ReactionSummary[]>;
 };
 
 function formatKickoff(kickoffAt: string) {
@@ -63,9 +72,7 @@ function sortPredictions(a: Prediction, b: Prediction) {
 }
 
 function getPredictionPickType(prediction: Prediction) {
-  if (prediction.home_score > prediction.away_score) return "home";
-  if (prediction.home_score < prediction.away_score) return "away";
-  return "draw";
+  return getScoreResult(prediction.home_score, prediction.away_score);
 }
 
 function getPredictionPickRank(prediction: Prediction) {
@@ -271,6 +278,127 @@ function PredictionSplit({
   );
 }
 
+function LockedPredictionRow({
+  prediction,
+  currentUserId,
+  usedJoker,
+  reactions,
+  exactAsDisplayed,
+  exactIsLive,
+}: {
+  prediction: Prediction;
+  currentUserId: string;
+  usedJoker: boolean;
+  reactions: ReactionSummary[];
+  exactAsDisplayed: boolean;
+  exactIsLive: boolean;
+}) {
+  const isOwnPrediction = prediction.user_id === currentUserId;
+  const displayName = getPredictionDisplayName(prediction);
+
+  return (
+    <div
+      className={`rounded-lg border px-2 py-1.5 text-xs sm:text-sm ${
+        isOwnPrediction
+          ? "border-emerald-300/30 bg-emerald-300/10 text-white ring-1 ring-emerald-300/20"
+          : "border-white/10 bg-slate-950/55 text-slate-200"
+      }`}
+    >
+      <div className="flex min-h-7 items-center gap-2">
+        <span
+          className={`min-w-0 flex-1 truncate ${
+            isOwnPrediction ? "font-black" : "font-semibold"
+          }`}
+          title={displayName}
+        >
+          {displayName}
+          {isOwnPrediction ? (
+            <span className="ml-1 text-[10px] font-bold uppercase tracking-wide text-emerald-300">
+              You
+            </span>
+          ) : null}
+        </span>
+
+        <span className="shrink-0 font-black tabular-nums text-white">
+          {prediction.home_score}-{prediction.away_score}
+        </span>
+
+        {exactAsDisplayed ? (
+          <span
+            className={`grid h-6 w-6 shrink-0 place-items-center rounded-full border text-xs ${
+              exactIsLive
+                ? "border-emerald-300/40 bg-emerald-300/15 text-emerald-200"
+                : "border-amber-300/40 bg-amber-300/15 text-amber-200"
+            }`}
+            title={exactIsLive ? "Exact right now" : "Exact score"}
+            aria-label={exactIsLive ? "Exact right now" : "Exact score"}
+          >
+            ★
+          </span>
+        ) : null}
+
+        {usedJoker ? (
+          <span
+            title="Joker used"
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-amber-200/60 bg-amber-300 text-[12px] text-slate-950"
+          >
+            🃏
+          </span>
+        ) : null}
+
+        {!isOwnPrediction ? (
+          <EmojiReactionControls
+            action={togglePredictionReaction}
+            hiddenFields={{
+              fixture_id: prediction.fixture_id,
+              prediction_user_id: prediction.user_id,
+            }}
+            reactions={reactions}
+            compact
+            ariaLabel={`React to ${displayName}'s prediction`}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function GroupStatusBadge({
+  groupType,
+  displayedResultType,
+  isLive,
+}: {
+  groupType: "home" | "draw" | "away";
+  displayedResultType: "home" | "draw" | "away" | null;
+  isLive: boolean;
+}) {
+  if (!displayedResultType) {
+    return null;
+  }
+
+  const isCorrectGroup = groupType === displayedResultType;
+
+  return (
+    <span
+      className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wide ${
+        isCorrectGroup
+          ? isLive
+            ? "border-emerald-300/40 bg-emerald-300/15 text-emerald-200"
+            : "border-emerald-300/35 bg-emerald-300/10 text-emerald-200"
+          : "border-red-300/30 bg-red-400/10 text-red-200"
+      }`}
+    >
+      {isCorrectGroup
+        ? isLive
+          ? "Live result"
+          : "Result"
+        : isLive
+          ? "Off track"
+          : "Incorrect"}
+    </span>
+  );
+}
+
 function JokerPlayingCard({
   selected,
   muted = false,
@@ -370,6 +498,7 @@ export default function FixturePredictionCard({
   teamForm,
   isDoubleGameweek = false,
   externalScore,
+  predictionReactionsByKey = new Map(),
 }: FixturePredictionCardProps) {
   const ownPrediction = predictions.find(
     (prediction) => prediction.user_id === currentUserId,
@@ -383,6 +512,7 @@ export default function FixturePredictionCard({
     fixture.home_score !== null && fixture.away_score !== null;
   const hasExternalDisplayScore =
     !hasActualResult &&
+    isLiveExternalStatus(externalScore?.status) &&
     externalScore?.home_score !== null &&
     externalScore?.home_score !== undefined &&
     externalScore?.away_score !== null &&
@@ -405,6 +535,13 @@ export default function FixturePredictionCard({
   const externalSyncedText = hasExternalDisplayScore
     ? formatLastSynced(externalScore?.last_synced_at ?? fixture.external_last_synced_at)
     : null;
+  const liveScoreLabel = hasExternalDisplayScore
+    ? "Live / provisional as it stands"
+    : null;
+  const displayedResultType =
+    displayedHomeScore !== null && displayedAwayScore !== null
+      ? getScoreResult(displayedHomeScore, displayedAwayScore)
+      : null;
 
   const hasJoker = !isDoubleGameweek && ownJokerFixtureIds.has(fixture.id);
   const jokerDisabled =
@@ -413,18 +550,21 @@ export default function FixturePredictionCard({
   const sortedPredictions = [...predictions].sort(sortPredictions);
   const predictionGroups = [
     {
+      type: "home" as const,
       label: `${fixture.home_team} win`,
       predictions: sortedPredictions.filter(
         (prediction) => getPredictionPickType(prediction) === "home",
       ),
     },
     {
+      type: "draw" as const,
       label: "Draw",
       predictions: sortedPredictions.filter(
         (prediction) => getPredictionPickType(prediction) === "draw",
       ),
     },
     {
+      type: "away" as const,
       label: `${fixture.away_team} win`,
       predictions: sortedPredictions.filter(
         (prediction) => getPredictionPickType(prediction) === "away",
@@ -491,7 +631,26 @@ export default function FixturePredictionCard({
                 </span>
 
                 <PredictionOutcomeBadge prediction={ownPrediction} />
+                {hasExternalDisplayScore ? (
+                  <span className="inline-flex min-w-24 items-center justify-center rounded-full bg-emerald-300/10 px-2 py-0.5 text-xs font-bold text-emerald-200 ring-1 ring-emerald-300/30">
+                    {
+                      calculateProvisionalPredictionScore({
+                        predictionHome: ownPrediction.home_score,
+                        predictionAway: ownPrediction.away_score,
+                        actualHome: displayedHomeScore ?? 0,
+                        actualAway: displayedAwayScore ?? 0,
+                        usedJoker: hasJoker,
+                        isDoubleGameweek,
+                      }).label
+                    }
+                  </span>
+                ) : null}
               </div>
+              {liveScoreLabel ? (
+                <p className="mt-2 text-xs text-slate-400">
+                  {liveScoreLabel}. Official points are applied after full time.
+                </p>
+              ) : null}
             </div>
           ) : (
             <div className="mt-3 border-t border-white/10 pt-3">
@@ -576,62 +735,57 @@ export default function FixturePredictionCard({
       ) : null}
 
       {isLocked && sortedPredictions.length > 0 ? (
-        <details className="mt-4 rounded-xl border border-white/10 bg-slate-900/70 p-3 text-sm">
-          <summary className="cursor-pointer select-none font-medium text-slate-300">
-            View predictions ({sortedPredictions.length})
+        <details className="mt-3 rounded-xl border border-white/10 bg-slate-900/70 p-2.5 text-sm">
+          <summary className="cursor-pointer select-none rounded-lg px-1 py-1 font-bold text-slate-300 outline-none transition hover:text-white focus-visible:ring-2 focus-visible:ring-emerald-300/50">
+            Predictions ({sortedPredictions.length})
           </summary>
 
-          <div className="mt-3 space-y-4">
+          <div className="mt-2 max-h-80 space-y-3 overflow-y-auto pr-1">
             {predictionGroups.map((group) => (
               <div key={group.label}>
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                  {group.label}
-                </p>
-                <div className="mt-2 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <p className="min-w-0 truncate text-[10px] font-black uppercase tracking-wide text-slate-500">
+                      {group.label}
+                    </p>
+                    <GroupStatusBadge
+                      groupType={group.type}
+                      displayedResultType={displayedResultType}
+                      isLive={hasExternalDisplayScore}
+                    />
+                  </div>
+                  <span className="shrink-0 rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] font-bold text-slate-400">
+                    {group.predictions.length}
+                  </span>
+                </div>
+
+                <div className="mt-1.5 space-y-1">
                   {group.predictions.map((prediction) => {
-                    const isOwnPrediction = prediction.user_id === currentUserId;
                     const usedJoker =
                       !isDoubleGameweek &&
                       jokerPredictionKeys.has(
                         `${prediction.fixture_id}:${prediction.user_id}`,
                       );
+                    const exactAsDisplayed =
+                      displayedHomeScore !== null &&
+                      displayedAwayScore !== null &&
+                      prediction.home_score === displayedHomeScore &&
+                      prediction.away_score === displayedAwayScore;
 
                     return (
-                      <div
+                      <LockedPredictionRow
                         key={`${prediction.fixture_id}-${prediction.user_id}`}
-                        className={`grid grid-cols-[1fr_auto] gap-2 rounded-xl border border-white/10 bg-slate-950/60 p-3 sm:grid-cols-[1fr_auto_auto] sm:items-center ${
-                          isOwnPrediction
-                            ? "font-bold text-white ring-1 ring-emerald-400/30"
-                            : "text-slate-200"
-                        }`}
-                      >
-                        <span className="min-w-0 truncate">
-                          {getPredictionDisplayName(prediction)}
-                          {isOwnPrediction ? (
-                            <span className="ml-1 text-xs font-medium text-emerald-300">
-                              (you)
-                            </span>
-                          ) : null}
-                        </span>
-
-                        <span className="flex justify-end gap-1 text-right font-semibold tabular-nums">
-                          {usedJoker ? (
-                            <span
-                              title="Joker used"
-                              className="inline-flex items-center gap-1 rounded-full border border-amber-200/60 bg-amber-300 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-950"
-                            >
-                              Joker <span className="text-[9px]">2x</span>
-                            </span>
-                          ) : null}
-                          <span>
-                            {prediction.home_score} - {prediction.away_score}
-                          </span>
-                        </span>
-
-                        <span className="col-span-2 flex justify-start sm:col-span-1 sm:justify-end">
-                          <PredictionOutcomeBadge prediction={prediction} />
-                        </span>
-                      </div>
+                        prediction={prediction}
+                        currentUserId={currentUserId}
+                        usedJoker={usedJoker}
+                        exactAsDisplayed={exactAsDisplayed}
+                        exactIsLive={hasExternalDisplayScore}
+                        reactions={
+                          predictionReactionsByKey.get(
+                            `${prediction.fixture_id}:${prediction.user_id}`,
+                          ) ?? []
+                        }
+                      />
                     );
                   })}
                 </div>

@@ -5,11 +5,15 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState, type MouseEvent } from "react";
 import type { ReactNode } from "react";
 import BrandMark from "@/components/brand/BrandMark";
+import NotificationBell, {
+  type HeaderUserNotification,
+} from "@/components/notifications/NotificationBell";
 
 type AppShellProps = {
   children: ReactNode;
   isAdmin?: boolean;
   canPickFixtures?: boolean;
+  notifications?: HeaderUserNotification[];
 };
 
 const baseNavItems = [
@@ -33,6 +37,7 @@ export default function AppShell({
   children,
   isAdmin = false,
   canPickFixtures = false,
+  notifications = [],
 }: AppShellProps) {
   const pathname = usePathname();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -89,6 +94,8 @@ export default function AppShell({
           <BrandMark />
 
           <div className="flex shrink-0 items-center gap-2">
+            <NotificationBell notifications={notifications} />
+
             <Link
               href="/rules"
               prefetch={false}
@@ -102,6 +109,21 @@ export default function AppShell({
               }`}
             >
               {activePendingHref === "/rules" ? "Loading..." : "Rules"}
+            </Link>
+
+            <Link
+              href="/settings"
+              prefetch={false}
+              onClick={(event) => handleNavigate(event, "/settings")}
+              className={`min-h-10 rounded-full border px-3 py-2 text-sm font-semibold transition ${
+                isCurrentRoute(pathname, "/settings")
+                  ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
+                  : activePendingHref === "/settings"
+                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                    : "border-white/10 bg-slate-900/70 text-slate-300 hover:text-white active:bg-slate-800"
+              }`}
+            >
+              {activePendingHref === "/settings" ? "Loading..." : "Settings"}
             </Link>
 
             <Link

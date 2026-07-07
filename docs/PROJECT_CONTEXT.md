@@ -123,8 +123,14 @@ Rules:
 - If the active season has a configured base provider/competition, the picker
   can select from a player-facing fixture list backed by local
   `external_fixtures`.
+- The fixture list defaults to the season base competition. If enabled cached
+  competitions exist, the picker/admin can intentionally browse another
+  competition for special fixtures such as cup ties or European games.
 - Cached external fixtures are grouped by provider matchday first, then stage or kickoff date. Provider matchday is not treated as app gameweek number.
 - Selected cached fixtures are copied into the existing `fixtures` table with external provenance fields.
+- When a selected cached or manual fixture falls outside the inferred usual
+  gameweek timing window, the UI shows a warning and requires explicit
+  confirmation. This is advisory so special fixtures remain possible.
 - The picker never calls football-data.org directly.
 - Picker can edit until predictions exist for that gameweek.
 - Admin override happens via Admin pages, not this picker page.
@@ -150,6 +156,8 @@ Rules:
   fixtures, while team-name changes after predictions exist only apply when the
   local team name is a placeholder such as `TBD`, `TBC`, or `Winner of`.
 - Completed, void, and postponed selected fixtures are not modified by refresh.
+- Manual fixtures without `external_fixture_id` are never modified by external
+  fixture refresh or result sync.
 
 ### `/leaderboard`
 
@@ -161,6 +169,12 @@ Current behaviour:
 - Supports archived season final leaderboard via `?season=<season_id>`.
 - Only archived seasons with `show_in_archive = true` should appear to users.
 - Archived leaderboard exposes final standings only, not old predictions.
+- Supports table and chart views. Chart view uses official scored predictions
+  only to build cumulative player totals by completed/scored app gameweek. It
+  does not extend flat lines into future unplayed gameweeks.
+- Chart view defaults to the top 10 players, can optionally show every player
+  with `players=all`, has a tap/click legend to show or hide lines, and includes
+  lightweight play/pause/reset animation across scored gameweeks.
 
 ### `/admin`
 
@@ -370,6 +384,20 @@ Admin enters/changes result
 External result sync follows the same scoring, leaderboard, and post-result
 activity path after provider results are applied.
 
+Live/provisional scoring:
+
+- Cached `external_fixtures` live scores can be displayed while a fixture is in
+  play.
+- The Predictions page can show provisional labels such as `Live exact`,
+  `Live result`, and `Off track`, plus a `Live GW points` total for the current
+  user.
+- The Dashboard can show the same user's live gameweek points when cached live
+  scores are available.
+- Provisional points are display-only. They are not written to
+  `predictions.points`, and `leaderboard_entries` remains official/final.
+- Provisional display uses the same 0/3/5, Joker, and Double Gameweek rules as
+  final scoring, with no Joker plus Double Gameweek stacking.
+
 If scores are edited directly in SQL, prediction points and leaderboard are not automatically recalculated unless a scoring script/action is also run.
 
 ## League activity feed
@@ -381,7 +409,6 @@ Important examples:
 - Fixtures selected
 - Gameweek complete
 - Weekly winners
-- Biggest risers/fallers
 - Next picker up
 
 `notifications.event_key` is used to upsert/avoid duplicate activity items.
@@ -392,8 +419,66 @@ Important examples:
 - fixture results
 - weekly leaderboard mini-table
 - weekly winners
-- biggest risers
-- biggest fallers
+
+League facts/highlights:
+
+- When a gameweek is completed through manual result entry or external result
+  sync, the app generates up to 3 extra activity items with
+  `event_key = league_fact:<gameweek_id>:slot:<n>`.
+- Facts are normal `notifications` rows with `type = info`, so existing
+  reactions and comments work without a separate `league_facts` table.
+- Metadata includes `factType`, `subjectKey`, `interestingness`, `gameweekId`,
+  and `gameweekName`.
+- Stable slot event keys mean rerunning result sync updates the same fact slots
+  instead of creating duplicate highlights.
+- Implemented MVP fact candidates include weekly high score/record, exact-score
+  record or no exacts, near-perfect gameweek, popular scoreline, no one calling
+  a fixture result, most-predicted outcome wrong, prediction split upset, Joker
+  success/disaster, best/cold last-three-gameweek form, common season
+  scoreline, easiest/hardest team to predict, and closest leaderboard gap.
+- Per-gameweek riser/faller activity is suppressed until the app has a
+  completed-gameweek rank snapshot table. `leaderboard_entries.previous_rank`
+  can be affected by repeated scoring inside the same gameweek, so it is not
+  used for weekly movement facts.
+
+Future fact candidates:
+
+- Lowest winning weekly score.
+- Most painful near miss.
+- Perfect gameweek as a distinct all-fixtures exact-score achievement.
+- Most successful Joker user over the season.
+- Most failed Jokers over the season.
+- Team causing most prediction upsets as distinct from hardest team to predict.
+- Most volatile player over the season.
+- Rival/head-to-head facts between adjacent leaderboard players.
+- Longest exact-score drought.
+- Longest scoring streak.
+
+Lightweight social MVP:
+
+- Locked prediction rows support compact emoji reactions after kickoff only.
+- Activity feed items support one emoji reaction per user and short comments.
+- Activity comments support the same compact emoji reactions as activity items.
+- Reaction/comment writes use server actions with approved-user checks.
+- Prediction reactions use one current reaction per user per target prediction,
+  not one reaction per emoji, to keep the UI quiet.
+- Activity and comment reactions also use one current reaction per user per
+  target.
+- Comments are flat and capped at 240 characters. Users can delete their own
+  comments; admins can delete any comment.
+
+Header social inbox:
+
+- The app header includes a compact notification bell backed by
+  `user_notifications`.
+- Inbox rows are grouped by recipient + target/type rather than one row per
+  reaction/comment.
+- Current grouped events include reactions to a user's prediction, reactions or
+  comments on fixture-picked activity owned by that picker, replies on activity
+  items a user has commented on, and reactions to a user's comment.
+- Users are not notified about their own reactions/comments.
+- Opening the bell does not mark notifications read automatically. Users can
+  use the explicit "Mark all read" button, which updates only their own rows.
 
 ## Supabase helpers
 
@@ -486,6 +571,17 @@ Fixture-picked activity sends a one-time predictions-open email to approved
 users once the current fixture set is complete. If fixtures are edited before
 predictions exist, the in-app notification is updated, but the predictions-open
 email is not resent automatically.
+
+Users manage email preferences at `/settings`. Missing
+`user_email_preferences` rows default to all categories enabled. Preferences
+only affect email delivery:
+
+- `predictions_open` -> `predictions_open_enabled`
+- `predictions_24h` -> `prediction_reminders_enabled`
+- `picker_up_next` -> `picker_notifications_enabled`
+
+Email footers link to `/settings` for preference management. In-app dashboard
+activity is still shown even when a user opts out of an email type.
 
 `/api/cron/send-prediction-reminders` remains separate from result sync. It
 sends missed picker-up-next emails and less-than-24-hours prediction reminders.

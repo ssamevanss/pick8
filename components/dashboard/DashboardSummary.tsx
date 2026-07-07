@@ -1,25 +1,24 @@
 import type { LeaderboardSummary } from "@/components/predictions/types";
+import RankMedal from "@/components/leaderboard/RankMedal";
 
 type DashboardSummaryProps = {
   leaderboardEntry: LeaderboardSummary;
   jokersLeft: number;
   currentGameweekLabel?: string;
+  showWeeklyPoints?: boolean;
 };
-
-function getRankMedal(rank: number | null | undefined) {
-  if (rank === 1) return { label: "Gold", className: "bg-amber-300 text-slate-950" };
-  if (rank === 2) return { label: "Silver", className: "bg-slate-200 text-slate-950" };
-  if (rank === 3) return { label: "Bronze", className: "bg-amber-700 text-amber-50" };
-  return null;
-}
 
 export default function DashboardSummary({
   leaderboardEntry,
   jokersLeft,
   currentGameweekLabel,
+  showWeeklyPoints = false,
 }: DashboardSummaryProps) {
-  const medal = getRankMedal(leaderboardEntry?.rank);
-  const gridColumns = currentGameweekLabel ? "lg:grid-cols-4" : "sm:grid-cols-3";
+  const gridColumns = currentGameweekLabel
+    ? "lg:grid-cols-4"
+    : showWeeklyPoints
+      ? "sm:grid-cols-4"
+      : "sm:grid-cols-3";
 
   return (
     <section className={`mb-5 grid grid-cols-2 gap-2 sm:mb-6 ${gridColumns}`}>
@@ -42,21 +41,20 @@ export default function DashboardSummary({
           <p className="text-xl font-black text-white sm:text-2xl">
             {leaderboardEntry?.rank ? `${leaderboardEntry.rank}` : "-"}
           </p>
-          {medal ? (
-            <span
-              className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wide ${medal.className}`}
-              aria-label={`${medal.label} rank`}
-              title={`${medal.label} rank`}
-            >
-              {leaderboardEntry?.rank === 1
-                ? "Gold"
-                : leaderboardEntry?.rank === 2
-                  ? "Silver"
-                  : "Bronze"}
-            </span>
-          ) : null}
+          <RankMedal rank={leaderboardEntry?.rank} />
         </div>
       </div>
+
+      {showWeeklyPoints ? (
+        <div className="brand-card min-w-0 p-3">
+          <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">
+            GW points
+          </p>
+          <p className="mt-1 text-xl font-black text-white sm:mt-2 sm:text-2xl">
+            {leaderboardEntry?.weekly_points ?? 0}
+          </p>
+        </div>
+      ) : null}
 
       <div className="brand-card min-w-0 p-3">
         <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">

@@ -12,10 +12,15 @@ import type {
   JokerUsage,
   LeaderboardSummary,
   Prediction,
+  ReactionSummary,
   TeamFormResult,
 } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
+import {
+  calculateProvisionalPredictionScore,
+  isLiveExternalStatus,
+} from "@/utils/provisional-scoring";
 import { savePredictions } from "./actions";
 
 type CompletedFixtureForForm = {
@@ -190,6 +195,14 @@ export default async function DashboardPage({
           .in("fixture_id", fixtureIds)
       : { data: null, error: null };
 
+  const { data: predictionReactions } =
+    fixtureIds.length > 0
+      ? await supabase
+          .from("prediction_reactions")
+          .select("fixture_id, prediction_user_id, user_id, emoji")
+          .in("fixture_id", fixtureIds)
+      : { data: [] };
+
   const { data: jokerUsage, error: jokerUsageError } =
     fixtureIds.length > 0
       ? await supabase
@@ -286,11 +299,40 @@ export default async function DashboardPage({
       : { data: null };
 
   const predictionsByFixture = new Map<string, Prediction[]>();
+  const predictionReactionsByKey = new Map<string, ReactionSummary[]>();
 
   for (const prediction of (predictions as Prediction[] | null) ?? []) {
     const existing = predictionsByFixture.get(prediction.fixture_id) ?? [];
     existing.push(prediction);
     predictionsByFixture.set(prediction.fixture_id, existing);
+  }
+
+  for (const reaction of
+    (predictionReactions as
+      | {
+          fixture_id: string;
+          prediction_user_id: string;
+          user_id: string;
+          emoji: string;
+        }[]
+      | null) ?? []) {
+    const key = `${reaction.fixture_id}:${reaction.prediction_user_id}`;
+    const existing = predictionReactionsByKey.get(key) ?? [];
+    const summary = existing.find((item) => item.emoji === reaction.emoji);
+
+    if (summary) {
+      summary.count += 1;
+      summary.reactedByCurrentUser =
+        summary.reactedByCurrentUser || reaction.user_id === user?.id;
+    } else {
+      existing.push({
+        emoji: reaction.emoji,
+        count: 1,
+        reactedByCurrentUser: reaction.user_id === user?.id,
+      });
+    }
+
+    predictionReactionsByKey.set(key, existing);
   }
 
   const openFixtureIds = fixtureList
@@ -348,6 +390,49 @@ export default async function DashboardPage({
     return !gameweek?.is_double_gameweek;
   }).length;
   const jokersLeft = Math.max(0, 3 - jokersUsed);
+  let liveGameweekPoints = 0;
+  let hasLiveGameweekPoints = false;
+  let liveFixtureCount = 0;
+
+  for (const fixture of fixtureList) {
+    const ownPrediction = (predictionsByFixture.get(fixture.id) ?? []).find(
+      (prediction) => prediction.user_id === user?.id,
+    );
+
+    if (!ownPrediction) {
+      continue;
+    }
+
+    if (fixture.status === "completed" && ownPrediction.points !== null) {
+      liveGameweekPoints += ownPrediction.points;
+      continue;
+    }
+
+    const externalScore = fixture.external_fixture_id
+      ? externalScoreByFixtureId.get(fixture.external_fixture_id)
+      : null;
+
+    if (
+      !externalScore ||
+      !isLiveExternalStatus(externalScore.status) ||
+      externalScore.home_score === null ||
+      externalScore.away_score === null
+    ) {
+      continue;
+    }
+
+    const usedJoker = !isDoubleGameweek && ownJokerFixtureIds.has(fixture.id);
+    liveGameweekPoints += calculateProvisionalPredictionScore({
+      predictionHome: ownPrediction.home_score,
+      predictionAway: ownPrediction.away_score,
+      actualHome: externalScore.home_score,
+      actualAway: externalScore.away_score,
+      usedJoker,
+      isDoubleGameweek,
+    }).points;
+    hasLiveGameweekPoints = true;
+    liveFixtureCount += 1;
+  }
 
   return (
     <>
@@ -368,6 +453,7 @@ export default async function DashboardPage({
       <DashboardSummary
         leaderboardEntry={leaderboardEntry as LeaderboardSummary}
         jokersLeft={jokersLeft}
+        showWeeklyPoints
       />
 
       <section className="brand-card mt-8 p-4 sm:p-5">
@@ -402,6 +488,24 @@ export default async function DashboardPage({
           <p className="brand-alert-success mb-4">
             Double Gameweek — all points count 2x.
           </p>
+        ) : null}
+
+        {hasLiveGameweekPoints ? (
+          <div className="mb-4 rounded-2xl border border-emerald-300/25 bg-emerald-300/10 p-3 sm:flex sm:items-center sm:justify-between sm:gap-4">
+            <div>
+              <p className="text-xs font-black uppercase tracking-wide text-emerald-200">
+                Live GW points
+              </p>
+              <p className="mt-1 text-sm text-slate-300">
+                As it stands from {liveFixtureCount} live fixture
+                {liveFixtureCount === 1 ? "" : "s"}. Official points update
+                after full time.
+              </p>
+            </div>
+            <p className="mt-2 text-3xl font-black tabular-nums text-white sm:mt-0">
+              {liveGameweekPoints}
+            </p>
+          </div>
         ) : null}
 
         {!activeSeason ? (
@@ -469,6 +573,7 @@ export default async function DashboardPage({
               ownJokerFixtureIds={ownJokerFixtureIds}
               jokersLeft={jokersLeft}
               isDoubleGameweek={isDoubleGameweek}
+              predictionReactionsByKey={predictionReactionsByKey}
               teamForm={
                 formByFixture.get(fixture.id) ?? { home: [], away: [] }
               }

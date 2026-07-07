@@ -2,6 +2,11 @@ import { formatInTimeZone } from "date-fns-tz";
 import { addExternalFixturesToGameweek } from "@/app/(app)/admin/actions";
 import SubmitButton from "@/components/forms/SubmitButton";
 import { getExternalFixtureGroupKey } from "@/utils/external-fixtures";
+import {
+  isKickoffOutsideTimingWindow,
+  type FixtureTimingWindow,
+} from "@/utils/fixture-timing-window";
+import type { FootballCompetitionOption } from "@/utils/football-competitions";
 
 export type AdminExternalFixtureOption = {
   id: string;
@@ -25,6 +30,10 @@ type AdminExternalFixturePickerCardProps = {
   provider: string | null;
   competitionCode: string | null;
   competitionName: string | null;
+  baseCompetitionCode: string | null;
+  competitionOptions: FootballCompetitionOption[];
+  timingWindowText: string | null;
+  timingWindow: FixtureTimingWindow | null;
   fixtures: AdminExternalFixtureOption[];
 };
 
@@ -80,6 +89,10 @@ export default function AdminExternalFixturePickerCard({
   provider,
   competitionCode,
   competitionName,
+  baseCompetitionCode,
+  competitionOptions,
+  timingWindowText,
+  timingWindow,
   fixtures,
 }: AdminExternalFixturePickerCardProps) {
   if (!gameweekId) {
@@ -87,12 +100,19 @@ export default function AdminExternalFixturePickerCard({
   }
 
   const groups = groupFixtures(fixtures);
+  const isBaseCompetition = competitionCode === baseCompetitionCode;
+  const hasTimingWarnings = fixtures.some((fixture) =>
+    isKickoffOutsideTimingWindow({
+      kickoffAt: fixture.kickoff_at,
+      timingWindow,
+    }),
+  );
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-      <h3 className="text-lg font-semibold">Add cached external fixtures</h3>
+      <h3 className="text-lg font-semibold">Add fixtures from match list</h3>
       <p className="mt-1 text-sm text-slate-400">
-        Select fixtures from the local external cache. This does not call the
+        Select cached fixtures for this gameweek. This does not call the
         provider directly.
       </p>
 
@@ -107,6 +127,44 @@ export default function AdminExternalFixturePickerCard({
         )}
       </div>
 
+      {configured && competitionOptions.length > 1 ? (
+        <form
+          action="/admin"
+          className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]"
+        >
+          <input type="hidden" name="tab" value="gameweeks" />
+          <input type="hidden" name="gameweek" value={gameweekId} />
+          <label className="min-w-0">
+            <span className="text-sm font-semibold text-slate-300">
+              Browse competition
+            </span>
+            <select
+              name="competition"
+              defaultValue={competitionCode ?? ""}
+              className="brand-input mt-1"
+            >
+              {competitionOptions.map((competition) => (
+                <option
+                  key={competition.external_competition_code}
+                  value={competition.external_competition_code}
+                >
+                  {competition.name} ({competition.external_competition_code})
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" className="brand-button-secondary sm:self-end">
+            Browse
+          </button>
+        </form>
+      ) : null}
+
+      {configured && !isBaseCompetition ? (
+        <p className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs font-semibold text-amber-200">
+          Special fixture override: this is not the season base competition.
+        </p>
+      ) : null}
+
       {!configured ? null : groups.length === 0 ? (
         <p className="mt-4 rounded-lg bg-slate-900 p-3 text-sm text-slate-400">
           No selectable cached fixtures are available for this competition.
@@ -114,6 +172,11 @@ export default function AdminExternalFixturePickerCard({
       ) : (
         <form action={addExternalFixturesToGameweek} className="mt-4 space-y-4">
           <input type="hidden" name="gameweek_id" value={gameweekId} />
+          <input
+            type="hidden"
+            name="competition_code"
+            value={competitionCode ?? ""}
+          />
 
           {groups.map((group) => (
             <fieldset
@@ -127,6 +190,10 @@ export default function AdminExternalFixturePickerCard({
               <div className="mt-2 space-y-2">
                 {group.fixtures.map((fixture) => {
                   const disabled = Boolean(fixture.disabledReason);
+                  const outsideTimingWindow = isKickoffOutsideTimingWindow({
+                    kickoffAt: fixture.kickoff_at,
+                    timingWindow,
+                  });
 
                   return (
                     <label
@@ -134,6 +201,8 @@ export default function AdminExternalFixturePickerCard({
                       className={`flex gap-3 rounded-lg border p-3 text-sm ${
                         disabled
                           ? "cursor-not-allowed border-slate-800 bg-slate-900/60 opacity-60"
+                          : outsideTimingWindow
+                            ? "cursor-pointer border-amber-300/25 bg-amber-300/10"
                           : "cursor-pointer border-slate-700 bg-slate-900"
                       }`}
                     >
@@ -168,6 +237,11 @@ export default function AdminExternalFixturePickerCard({
                             ? ` · ${fixture.disabledReason}`
                             : ""}
                         </span>
+                        {outsideTimingWindow && timingWindowText ? (
+                          <span className="mt-1 block text-xs font-semibold text-amber-200">
+                            Outside usual gameweek window ({timingWindowText})
+                          </span>
+                        ) : null}
                       </span>
                     </label>
                   );
@@ -176,9 +250,24 @@ export default function AdminExternalFixturePickerCard({
             </fieldset>
           ))}
 
+          {hasTimingWarnings && timingWindowText ? (
+            <label className="flex gap-3 rounded-xl border border-amber-300/25 bg-amber-300/10 p-3 text-sm text-amber-100">
+              <input
+                type="checkbox"
+                name="confirm_timing_override"
+                value="1"
+                className="mt-1 h-4 w-4 accent-amber-300"
+              />
+              <span>
+                This match is outside the usual gameweek window (
+                {timingWindowText}). Add it anyway?
+              </span>
+            </label>
+          ) : null}
+
           <SubmitButton
-            idleLabel="Add selected cached fixtures"
-            pendingLabel="Adding cached fixtures..."
+            idleLabel="Add selected fixtures"
+            pendingLabel="Adding fixtures..."
             className="w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
           />
         </form>

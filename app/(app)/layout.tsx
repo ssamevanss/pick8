@@ -6,6 +6,7 @@ import { getActiveSeason } from "@/utils/seasons";
 import { getEditablePickerGameweeks } from "@/utils/picker-eligibility";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
+import type { HeaderUserNotification } from "@/components/notifications/NotificationBell";
 
 type AppLayoutProps = {
   children: ReactNode;
@@ -61,9 +62,21 @@ export default async function AppLayout({ children }: AppLayoutProps) {
       })
     : [];
   const canPickFixtures = editablePickerGameweeks.length > 0;
+  const { data: userNotifications } = await supabase
+    .from("user_notifications")
+    .select("id, title, body, read_at, updated_at")
+    .eq("user_id", user.id)
+    .order("updated_at", { ascending: false })
+    .limit(12);
+  const notifications =
+    (userNotifications as HeaderUserNotification[] | null) ?? [];
 
   return (
-    <AppShell isAdmin={isAdmin} canPickFixtures={canPickFixtures}>
+    <AppShell
+      isAdmin={isAdmin}
+      canPickFixtures={canPickFixtures}
+      notifications={notifications}
+    >
       {children}
     </AppShell>
   );

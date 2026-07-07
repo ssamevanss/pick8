@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import SubmitButton from "@/components/forms/SubmitButton";
 import ToastTrigger from "@/components/toast/ToastTrigger";
+import TeamIdentity from "@/components/predictions/TeamIdentity";
 import type { Fixture, Gameweek } from "@/components/predictions/types";
 import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
@@ -14,7 +15,13 @@ import {
   getExpectedExternalPickCount,
   getExternalFixtureGroupKey,
 } from "@/utils/external-fixtures";
+import {
+  buildFixtureTimingWindow,
+  formatTimingWindow,
+  isKickoffOutsideTimingWindow,
+} from "@/utils/fixture-timing-window";
 import { saveExternalPickerFixtures, savePickerFixtures } from "./actions";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { formatInTimeZone } from "date-fns-tz";
 
@@ -25,6 +32,14 @@ type ActiveSeasonPickerConfig = {
   base_provider: string | null;
   base_competition_code: string | null;
   base_competition_name: string | null;
+};
+
+type ExternalCompetitionOption = {
+  provider: string;
+  external_competition_code: string;
+  name: string;
+  enabled: boolean;
+  display_order: number;
 };
 
 type PickerFixture = Fixture & {
@@ -121,7 +136,13 @@ function groupExternalFixtures(fixtures: ExternalFixtureCacheRow[]) {
 export default async function PickFixturesPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ saved?: string; error?: string; gameweek?: string }>;
+  searchParams?: Promise<{
+    saved?: string;
+    error?: string;
+    edit?: string;
+    gameweek?: string;
+    competition?: string;
+  }>;
 }) {
   const params = searchParams ? await searchParams : {};
   const supabase = await createClient();
@@ -237,6 +258,52 @@ export default async function PickFixturesPage({
     activeSeasonConfig?.base_provider === "football_data" &&
     Boolean(activeSeasonConfig.base_competition_code);
 
+  const { data: competitionRows } = externalFixturesConfigured
+    ? await supabase
+        .from("external_competitions")
+        .select("provider, external_competition_code, name, enabled, display_order")
+        .eq("provider", "football_data")
+        .eq("enabled", true)
+        .order("display_order", { ascending: true })
+    : { data: null };
+  const externalCompetitionOptions =
+    (competitionRows as ExternalCompetitionOption[] | null) ?? [];
+  const competitionOptions =
+    externalCompetitionOptions.length > 0
+      ? externalCompetitionOptions
+      : activeSeasonConfig?.base_competition_code
+        ? [
+            {
+              provider: "football_data",
+              external_competition_code: activeSeasonConfig.base_competition_code,
+              name:
+                activeSeasonConfig.base_competition_name ??
+                activeSeasonConfig.base_competition_code,
+              enabled: true,
+              display_order: 0,
+            },
+          ]
+        : [];
+  const requestedCompetitionCode = params.competition ?? null;
+  const selectedCompetition =
+    competitionOptions.find(
+      (competition) =>
+        competition.external_competition_code === requestedCompetitionCode,
+    ) ??
+    competitionOptions.find(
+      (competition) =>
+        competition.external_competition_code ===
+        activeSeasonConfig?.base_competition_code,
+    ) ??
+    competitionOptions[0] ??
+    null;
+  const selectedCompetitionCode =
+    selectedCompetition?.external_competition_code ??
+    activeSeasonConfig?.base_competition_code ??
+    null;
+  const isBaseCompetition =
+    selectedCompetitionCode === activeSeasonConfig?.base_competition_code;
+
   const { data: seasonGameweeks } = activeSeasonConfig?.id
     ? await supabase
         .from("gameweeks")
@@ -268,21 +335,32 @@ export default async function PickFixturesPage({
 
   const nowIso = new Date().toISOString();
   const { data: externalFixtures, error: externalFixturesError } =
-    externalFixturesConfigured
+    externalFixturesConfigured && selectedCompetitionCode
       ? await supabase
           .from("external_fixtures")
           .select(
             "id, provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, home_team, away_team, kickoff_at, status, last_synced_at",
           )
           .eq("provider", activeSeasonConfig!.base_provider!)
-          .eq(
-            "external_competition_code",
-            activeSeasonConfig!.base_competition_code!,
-          )
+          .eq("external_competition_code", selectedCompetitionCode)
           .in("status", selectableExternalStatuses)
           .gt("kickoff_at", nowIso)
           .order("kickoff_at", { ascending: true })
       : { data: null, error: null };
+
+  const { data: baseCompetitionFixtureRows } =
+    externalFixturesConfigured && activeSeasonConfig?.base_competition_code
+      ? await supabase
+          .from("external_fixtures")
+          .select(
+            "id, provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, home_team, away_team, kickoff_at, status, last_synced_at",
+          )
+          .eq("provider", activeSeasonConfig.base_provider!)
+          .eq("external_competition_code", activeSeasonConfig.base_competition_code)
+          .in("status", selectableExternalStatuses)
+          .gt("kickoff_at", nowIso)
+          .order("kickoff_at", { ascending: true })
+      : { data: [] };
 
   const allExternalFixtureRows =
     (externalFixtures as ExternalFixtureCacheRow[] | null) ?? [];
@@ -303,6 +381,31 @@ export default async function PickFixturesPage({
     ) ??
     externalFixtureGroups[0] ??
     null;
+  const baseExternalFixtureRows =
+    (baseCompetitionFixtureRows as ExternalFixtureCacheRow[] | null) ?? [];
+  const baseExternalGroups = groupExternalFixtures(baseExternalFixtureRows);
+  const baseTimingGroup =
+    baseExternalGroups.find((group) =>
+      group.fixtures.some((fixture) =>
+        currentExternalFixtureIds.has(fixture.external_fixture_id),
+      ),
+    ) ??
+    baseExternalGroups[0] ??
+    null;
+  const timingWindow = buildFixtureTimingWindow({
+    selectedFixtureKickoffs: fixtureList.map((fixture) => fixture.kickoff_at),
+    baseCompetitionKickoffs:
+      baseTimingGroup?.fixtures.map((fixture) => fixture.kickoff_at) ?? [],
+  });
+  const timingWindowText = timingWindow ? formatTimingWindow(timingWindow) : null;
+  const selectedGroupHasTimingWarnings = Boolean(
+    selectedExternalGroup?.fixtures.some((fixture) =>
+      isKickoffOutsideTimingWindow({
+        kickoffAt: fixture.kickoff_at,
+        timingWindow,
+      }),
+    ),
+  );
   const expectedExternalPickCount = selectedExternalGroup
     ? getExpectedExternalPickCount(selectedExternalGroup.fixtures.length)
     : 0;
@@ -323,8 +426,12 @@ export default async function PickFixturesPage({
   const activePickerIsComplete =
     activeExpectedFixtureCount > 0 &&
     activeSelectedFixtureCount === activeExpectedFixtureCount;
+  const isEditingFixtureSelection = params.edit === "1" || !activePickerIsComplete;
+  const showFixtureEditor = isEditingFixtureSelection && !isLockedByPredictions;
   const gameweekHelperText =
-    externalModeAvailable && expectedExternalPickCount > 0
+    activePickerIsComplete && !isEditingFixtureSelection
+      ? "Fixtures are picked. You can edit them until predictions start."
+      : externalModeAvailable && expectedExternalPickCount > 0
       ? `Select the ${expectedExternalPickCount} fixture${
           expectedExternalPickCount === 1 ? "" : "s"
         } for this matchday, then save once.`
@@ -395,10 +502,65 @@ export default async function PickFixturesPage({
           </p>
         ) : null}
 
+        {activePickerIsComplete ? (
+          <section className="brand-card-soft mb-6 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
+                  Fixtures picked
+                </p>
+                <h3 className="mt-1 text-lg font-semibold">
+                  Selected fixtures
+                </h3>
+                <p className="mt-1 text-sm text-slate-400">
+                  {isLockedByPredictions
+                    ? "Predictions have started, so fixtures can no longer be edited."
+                    : "Review the saved picks or edit them before predictions start."}
+                </p>
+              </div>
+
+              {!isLockedByPredictions && !isEditingFixtureSelection ? (
+                <Link
+                  href={`/pick-fixtures?gameweek=${selectedGameweek.id}&edit=1${
+                    selectedCompetitionCode
+                      ? `&competition=${selectedCompetitionCode}`
+                      : ""
+                  }`}
+                  prefetch={false}
+                  className="brand-button-secondary w-fit"
+                >
+                  Edit fixtures
+                </Link>
+              ) : null}
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              {fixtureList.map((fixture) => (
+                <div
+                  key={fixture.id}
+                  className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                >
+                  <TeamIdentity teamName={fixture.home_team} compact />
+                  <span className="rounded-full bg-slate-950 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-500">
+                    v
+                  </span>
+                  <TeamIdentity
+                    teamName={fixture.away_team}
+                    align="right"
+                    compact
+                  />
+                  <span className="col-span-3 text-xs text-slate-500">
+                    {formatKickoff(fixture.kickoff_at)} · {fixture.competition}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         {isLockedByPredictions ? (
           <p className="brand-alert-warning mb-4">
-            Fixture selection is locked because predictions have already been
-            entered. Ask an admin if a fixture needs to be changed.
+            Predictions have started, so fixtures can no longer be edited.
           </p>
         ) : null}
 
@@ -410,7 +572,7 @@ export default async function PickFixturesPage({
           </p>
         ) : null}
 
-        {externalFixturesConfigured ? (
+        {showFixtureEditor && externalFixturesConfigured ? (
           <section className="brand-card-soft mb-6 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -418,14 +580,19 @@ export default async function PickFixturesPage({
                   Fixture list
                 </p>
                 <h3 className="mt-1 text-lg font-semibold">
-                  {activeSeasonConfig?.base_competition_name ??
-                    activeSeasonConfig?.base_competition_code}
+                  {selectedCompetition?.name ?? selectedCompetitionCode}
                 </h3>
                 <p className="mt-1 text-sm text-slate-400">
                   Latest available matches. Last refreshed:{" "}
                   {formatLastImported(latestExternalImport)}. If something is
                   missing, ask an admin to refresh the list.
                 </p>
+                {!isBaseCompetition ? (
+                  <p className="mt-2 rounded-xl border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs font-semibold text-amber-200">
+                    Special fixture override: this is not the season base
+                    competition.
+                  </p>
+                ) : null}
               </div>
 
               <span className="brand-pill w-fit">
@@ -433,6 +600,34 @@ export default async function PickFixturesPage({
                 selected
               </span>
             </div>
+
+            {competitionOptions.length > 1 ? (
+              <form className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]" action="/pick-fixtures">
+                <input type="hidden" name="gameweek" value={selectedGameweek.id} />
+                <label className="min-w-0">
+                  <span className="text-sm font-semibold text-slate-300">
+                    Browse competition
+                  </span>
+                  <select
+                    name="competition"
+                    defaultValue={selectedCompetitionCode ?? ""}
+                    className="brand-input mt-1"
+                  >
+                    {competitionOptions.map((competition) => (
+                      <option
+                        key={competition.external_competition_code}
+                        value={competition.external_competition_code}
+                      >
+                        {competition.name} ({competition.external_competition_code})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button type="submit" className="brand-button-secondary sm:self-end">
+                  Browse
+                </button>
+              </form>
+            ) : null}
 
             {externalFixturesError ? (
               <p className="brand-alert-danger mt-4">
@@ -467,6 +662,11 @@ export default async function PickFixturesPage({
                   name="expected_pick_count"
                   value={expectedExternalPickCount}
                 />
+                <input
+                  type="hidden"
+                  name="competition_code"
+                  value={selectedCompetitionCode ?? ""}
+                />
 
                 <div className="space-y-5">
                   <div key={selectedExternalGroup.key}>
@@ -487,11 +687,20 @@ export default async function PickFixturesPage({
                           currentExternalFixtureIds.has(
                             fixture.external_fixture_id,
                           );
+                        const outsideTimingWindow =
+                          isKickoffOutsideTimingWindow({
+                            kickoffAt: fixture.kickoff_at,
+                            timingWindow,
+                          });
 
                         return (
                           <label
                             key={fixture.external_fixture_id}
-                            className="flex cursor-pointer gap-3 rounded-xl border border-white/10 bg-slate-900/70 p-3 transition has-[:checked]:border-emerald-400/70 has-[:checked]:bg-emerald-400/10 hover:border-emerald-400/30"
+                            className={`flex cursor-pointer gap-3 rounded-xl border p-3 transition has-[:checked]:border-emerald-400/70 has-[:checked]:bg-emerald-400/10 hover:border-emerald-400/30 ${
+                              outsideTimingWindow
+                                ? "border-amber-300/25 bg-amber-300/10"
+                                : "border-white/10 bg-slate-900/70"
+                            }`}
                           >
                             <input
                               type="checkbox"
@@ -515,6 +724,11 @@ export default async function PickFixturesPage({
                                     "Round TBC")}{" "}
                                 · {fixture.status}
                               </span>
+                              {outsideTimingWindow && timingWindowText ? (
+                                <span className="mt-1 block text-xs font-semibold text-amber-200">
+                                  Outside usual gameweek window ({timingWindowText})
+                                </span>
+                              ) : null}
                             </span>
                           </label>
                         );
@@ -522,6 +736,21 @@ export default async function PickFixturesPage({
                     </div>
                   </div>
                 </div>
+
+                {selectedGroupHasTimingWarnings && timingWindowText ? (
+                  <label className="mt-3 flex gap-3 rounded-xl border border-amber-300/25 bg-amber-300/10 p-3 text-sm text-amber-100">
+                    <input
+                      type="checkbox"
+                      name="confirm_timing_override"
+                      value="1"
+                      className="mt-1 h-4 w-4 accent-amber-300"
+                    />
+                    <span>
+                      This match is outside the usual gameweek window (
+                      {timingWindowText}). Add it anyway?
+                    </span>
+                  </label>
+                ) : null}
 
                 <p className="mt-3 rounded-xl border border-white/10 bg-slate-900/70 p-3 text-xs text-slate-400">
                   Select {expectedExternalPickCount} fixture
@@ -545,7 +774,7 @@ export default async function PickFixturesPage({
               </p>
             ) : null}
           </section>
-        ) : (
+        ) : showFixtureEditor ? (
           <section className="brand-card-soft mb-6 p-4">
             <p className="text-sm font-semibold text-slate-300">
               The match list is not set up for this season.
@@ -554,16 +783,17 @@ export default async function PickFixturesPage({
               Use the manual fallback below.
             </p>
           </section>
-        )}
+        ) : null}
 
-        <details
+        {showFixtureEditor ? (
+          <details
           className={
             externalModeAvailable
               ? "brand-card-soft p-4"
               : ""
           }
           open={!externalModeAvailable}
-        >
+          >
           <summary
             className={
               externalModeAvailable
@@ -661,7 +891,11 @@ export default async function PickFixturesPage({
                     </label>
                     <input
                       name={`competition_${slotNumber}`}
-                      defaultValue={fixture?.competition ?? "Premier League"}
+                      defaultValue={
+                        fixture?.competition ??
+                        activeSeasonConfig?.base_competition_name ??
+                        "Premier League"
+                      }
                       disabled={isLockedByPredictions}
                       className={inputClassName}
                     />
@@ -683,15 +917,33 @@ export default async function PickFixturesPage({
               These fixtures are now read-only for the picker.
             </p>
           ) : (
-            <SubmitButton
-              idleLabel="Save fixtures"
-              pendingLabel="Saving fixtures..."
-              className="brand-button-primary w-full"
-            />
+            <>
+              {timingWindowText ? (
+                <label className="flex gap-3 rounded-xl border border-amber-300/25 bg-amber-300/10 p-3 text-sm text-amber-100">
+                  <input
+                    type="checkbox"
+                    name="confirm_timing_override"
+                    value="1"
+                    className="mt-1 h-4 w-4 accent-amber-300"
+                  />
+                  <span>
+                    If any manual fixture is outside the usual gameweek window (
+                    {timingWindowText}), add it anyway.
+                  </span>
+                </label>
+              ) : null}
+
+              <SubmitButton
+                idleLabel="Save fixtures"
+                pendingLabel="Saving fixtures..."
+                className="brand-button-primary w-full"
+              />
+            </>
           )}
             </form>
           </div>
-        </details>
+          </details>
+        ) : null}
       </section>
     </>
   );

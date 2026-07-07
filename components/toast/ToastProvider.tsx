@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 
-type ToastTone = "success" | "info";
+type ToastTone = "success" | "info" | "error";
 
 type ToastInput = {
   title: string;
@@ -33,6 +33,10 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 function getToastClassName(tone: ToastTone) {
   if (tone === "success") {
     return "border-emerald-300/30 bg-[#07111f]/95 text-white shadow-emerald-950/30";
+  }
+
+  if (tone === "error") {
+    return "border-red-300/30 bg-[#07111f]/95 text-white shadow-red-950/30";
   }
 
   return "border-sky-300/25 bg-[#07111f]/95 text-white shadow-sky-950/30";
@@ -126,4 +130,8 @@ export function useToast() {
   }
 
   return context;
+}
+
+export function useOptionalToast() {
+  return useContext(ToastContext);
 }

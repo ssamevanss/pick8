@@ -157,7 +157,9 @@ With the current World Cup test setup:
 3. Log in as the assigned picker for an unlocked active-season gameweek.
 4. Open `/pick-fixtures`.
 5. Use the Fixture list section to select the available cached fixtures
-   for the selected external matchday group.
+   for the selected external matchday group. It defaults to the season base
+   competition, but a Browse competition selector appears when more enabled
+   cached competitions are available.
 6. Save selected cached fixtures.
 7. Confirm the expected number of rows were inserted into `fixtures` with:
    - `status = scheduled`
@@ -177,6 +179,22 @@ football-data.org from the browser, copies the same provenance fields into
 `fixtures`, and rejects duplicates that are already selected in another active
 season gameweek. Manual fixture entry remains available underneath for
 overrides.
+
+Special fixtures from another competition:
+
+- Use the Browse competition selector in `/pick-fixtures` or Admin -> Gameweeks.
+- Alternate competitions must already exist in `external_competitions` and have
+  cached rows in `external_fixtures`.
+- The UI labels this as a special fixture override when the selected
+  competition is not the season base competition.
+- If a selected cached or manual fixture is outside the usual gameweek timing
+  window, the app shows a warning and requires an "add it anyway" confirmation.
+- The timing window is inferred from already selected fixtures for the
+  gameweek. If none exist yet, it falls back to the next base-competition
+  external group. A 12-hour buffer is applied on either side to avoid noisy
+  warnings for normal weekend spread.
+- The warning is not a hard block; it is there to catch accidental wrong-week
+  selections while still allowing cup ties and moved fixtures.
 
 ## External result sync
 
@@ -449,6 +467,7 @@ Before enabling it, run:
 
 ```bash
 docs/2026-07-06-email-notifications.sql
+docs/2026-07-06-user-email-preferences.sql
 ```
 
 The email layer sends/logs:
@@ -484,6 +503,28 @@ World Cup gameweek is complete once a user has predictions for those two
 fixtures; normal PL gameweeks still normally have four selected fixtures.
 Prediction-open and reminder emails mention Double Gameweek when the selected
 gameweek is marked as double.
+
+Email preferences:
+
+- Users manage email preferences at `/settings`.
+- Missing `user_email_preferences` rows are treated as all enabled.
+- `predictions_open` respects `predictions_open_enabled`.
+- `predictions_24h` respects `prediction_reminders_enabled`.
+- `picker_up_next` respects `picker_notifications_enabled`.
+- Email footers include a Manage email preferences link.
+- Opting out affects email only; dashboard activity and app access are
+  unchanged.
+
+Social notification inbox:
+
+- Run `docs/2026-07-07-user-notifications.sql` before enabling the header bell
+  in production.
+- The bell uses `user_notifications` for grouped, user-scoped social activity.
+- Rows are grouped by recipient + target/type, so repeated reactions/comments
+  update one unread inbox item instead of creating a noisy stream.
+- Users can only read and mark their own inbox notifications. Writes are made
+  by server actions after approved-user checks.
+- The inbox is separate from email notifications and does not send email.
 
 Expected full PL season volume for 30 players and 38 gameweeks:
 

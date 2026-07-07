@@ -1,0 +1,667 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { createAdminClient } from "@/utils/supabase/admin";
+import { createClient } from "@/utils/supabase/server";
+import {
+  formatGroupedActorText,
+  upsertGroupedUserNotification,
+} from "@/utils/user-notifications";
+
+const ALLOWED_REACTIONS = new Set(["😂", "🔥", "👀", "😭", "🤝"]);
+const MAX_COMMENT_LENGTH = 240;
+
+type FixtureScopeRow = {
+  id: string;
+  kickoff_at: string;
+  status: string;
+  home_team?: string | null;
+  away_team?: string | null;
+  gameweek_id: string;
+  gameweeks:
+    | {
+        season_id: string;
+        seasons:
+          | {
+              status: string | null;
+            }
+          | {
+              status: string | null;
+            }[]
+          | null;
+      }
+    | {
+        season_id: string;
+        seasons:
+          | {
+              status: string | null;
+            }
+          | {
+              status: string | null;
+            }[]
+          | null;
+      }[]
+    | null;
+};
+
+type NotificationScopeRow = {
+  id: string;
+  season_id: string | null;
+  gameweek_id: string | null;
+  type?: string | null;
+  title?: string | null;
+  body?: string | null;
+  metadata?: Record<string, unknown> | null;
+  seasons:
+    | {
+        status: string | null;
+      }
+    | {
+        status: string | null;
+      }[]
+    | null;
+};
+
+type NotificationCommentScopeRow = {
+  id: string;
+  season_id: string;
+  gameweek_id: string | null;
+  notification_id: string;
+  notifications:
+    | {
+        seasons:
+          | {
+              status: string | null;
+            }
+          | {
+              status: string | null;
+            }[]
+          | null;
+      }
+    | {
+        seasons:
+          | {
+              status: string | null;
+            }
+          | {
+              status: string | null;
+            }[]
+          | null;
+      }[]
+    | null;
+};
+
+function getFixtureGameweek(row: FixtureScopeRow) {
+  return Array.isArray(row.gameweeks) ? row.gameweeks[0] : row.gameweeks;
+}
+
+function getSeasonStatus(
+  season:
+    | { status: string | null }
+    | { status: string | null }[]
+    | null
+    | undefined,
+) {
+  return Array.isArray(season) ? season[0]?.status : season?.status;
+}
+
+async function getApprovedUser() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    return { supabase, user: null, profile: null };
+  }
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("id, status")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (profile?.status !== "approved") {
+    return { supabase, user: null, profile: null };
+  }
+
+  return { supabase, user, profile };
+}
+
+function getProfileDisplayName(
+  profile:
+    | { display_name?: string | null }
+    | { display_name?: string | null }[]
+    | null
+    | undefined,
+) {
+  if (Array.isArray(profile)) {
+    return profile[0]?.display_name ?? "Someone";
+  }
+
+  return profile?.display_name ?? "Someone";
+}
+
+async function getActorName(userId: string) {
+  const admin = createAdminClient();
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("display_name")
+    .eq("id", userId)
+    .maybeSingle();
+
+  return getProfileDisplayName(profile);
+}
+
+function getEmoji(formData: FormData) {
+  const emoji = String(formData.get("emoji") ?? "");
+
+  return ALLOWED_REACTIONS.has(emoji) ? emoji : null;
+}
+
+export async function togglePredictionReaction(formData: FormData) {
+  const emoji = getEmoji(formData);
+  const fixtureId = String(formData.get("fixture_id") ?? "");
+  const predictionUserId = String(formData.get("prediction_user_id") ?? "");
+
+  if (!emoji || !fixtureId || !predictionUserId) {
+    return;
+  }
+
+  const { supabase, user } = await getApprovedUser();
+
+  if (!user || user.id === predictionUserId) {
+    return;
+  }
+
+  const { data: prediction } = await supabase
+    .from("predictions")
+    .select("fixture_id, user_id, home_score, away_score")
+    .eq("fixture_id", fixtureId)
+    .eq("user_id", predictionUserId)
+    .maybeSingle();
+
+  if (!prediction) {
+    return;
+  }
+
+  const { data: fixture } = await supabase
+    .from("fixtures")
+    .select(
+      `
+      id,
+      kickoff_at,
+      status,
+      home_team,
+      away_team,
+      gameweek_id,
+      gameweeks!inner (
+        season_id,
+        seasons!inner (
+          status
+        )
+      )
+    `,
+    )
+    .eq("id", fixtureId)
+    .maybeSingle();
+
+  if (!fixture) {
+    return;
+  }
+
+  const typedFixture = fixture as FixtureScopeRow;
+  const gameweek = getFixtureGameweek(typedFixture);
+  const seasonStatus = getSeasonStatus(gameweek?.seasons);
+  const isLocked =
+    typedFixture.status !== "scheduled" ||
+    new Date(typedFixture.kickoff_at) <= new Date();
+
+  if (!gameweek?.season_id || seasonStatus !== "active" || !isLocked) {
+    return;
+  }
+
+  const admin = createAdminClient();
+  const { data: existing } = await admin
+    .from("prediction_reactions")
+    .select("id, emoji")
+    .eq("fixture_id", fixtureId)
+    .eq("prediction_user_id", predictionUserId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (existing?.emoji === emoji) {
+    await admin.from("prediction_reactions").delete().eq("id", existing.id);
+  } else {
+    await admin.from("prediction_reactions").upsert(
+      {
+        season_id: gameweek.season_id,
+        gameweek_id: typedFixture.gameweek_id,
+        fixture_id: fixtureId,
+        prediction_user_id: predictionUserId,
+        user_id: user.id,
+        emoji,
+        updated_at: new Date().toISOString(),
+      },
+      {
+        onConflict: "fixture_id,prediction_user_id,user_id",
+      },
+    );
+
+    const actorName = await getActorName(user.id);
+    const scoreline =
+      typeof prediction.home_score === "number" &&
+      typeof prediction.away_score === "number"
+        ? `${prediction.home_score}-${prediction.away_score}`
+        : "your";
+    const matchup =
+      typedFixture.home_team && typedFixture.away_team
+        ? `${typedFixture.home_team} v ${typedFixture.away_team}`
+        : "a fixture";
+
+    await upsertGroupedUserNotification({
+      recipientUserId: predictionUserId,
+      actorUserId: user.id,
+      actorName,
+      notificationType: "prediction_reaction",
+      targetType: "prediction",
+      targetId: `${fixtureId}:${predictionUserId}`,
+      title: "Prediction reaction",
+      bodySingular: (name) =>
+        `${name} reacted to your ${scoreline} prediction for ${matchup}.`,
+      bodyGrouped: (names, otherCount) =>
+        `${formatGroupedActorText(
+          names,
+          otherCount,
+        )} reacted to your ${scoreline} prediction for ${matchup}.`,
+      metadata: {
+        fixtureId,
+        predictionUserId,
+        matchup,
+        scoreline,
+      },
+    });
+  }
+
+  revalidatePath("/predictions");
+}
+
+async function getNotificationScope(notificationId: string) {
+  const supabase = await createClient();
+
+  const { data: notification } = await supabase
+    .from("notifications")
+    .select(
+      `
+      id,
+      type,
+      title,
+      body,
+      metadata,
+      season_id,
+      gameweek_id,
+      seasons (
+        status
+      )
+    `,
+    )
+    .eq("id", notificationId)
+    .maybeSingle();
+
+  if (!notification) {
+    return null;
+  }
+
+  const typedNotification = notification as NotificationScopeRow;
+
+  if (
+    !typedNotification.season_id ||
+    getSeasonStatus(typedNotification.seasons) !== "active"
+  ) {
+    return null;
+  }
+
+  return typedNotification;
+}
+
+async function getNotificationCommentScope(commentId: string) {
+  const supabase = await createClient();
+
+  const { data: comment } = await supabase
+    .from("notification_comments")
+    .select(
+      `
+      id,
+      season_id,
+      gameweek_id,
+      notification_id,
+      notifications!inner (
+        seasons!inner (
+          status
+        )
+      )
+    `,
+    )
+    .eq("id", commentId)
+    .maybeSingle();
+
+  if (!comment) {
+    return null;
+  }
+
+  const typedComment = comment as NotificationCommentScopeRow;
+  const notification = Array.isArray(typedComment.notifications)
+    ? typedComment.notifications[0]
+    : typedComment.notifications;
+
+  if (getSeasonStatus(notification?.seasons) !== "active") {
+    return null;
+  }
+
+  return typedComment;
+}
+
+export async function toggleNotificationReaction(formData: FormData) {
+  const emoji = getEmoji(formData);
+  const notificationId = String(formData.get("notification_id") ?? "");
+
+  if (!emoji || !notificationId) {
+    return;
+  }
+
+  const { user } = await getApprovedUser();
+
+  if (!user) {
+    return;
+  }
+
+  const notification = await getNotificationScope(notificationId);
+
+  if (!notification?.season_id) {
+    return;
+  }
+
+  const admin = createAdminClient();
+  const { data: existing } = await admin
+    .from("notification_reactions")
+    .select("id, emoji")
+    .eq("notification_id", notificationId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (existing?.emoji === emoji) {
+    await admin.from("notification_reactions").delete().eq("id", existing.id);
+  } else {
+    await admin.from("notification_reactions").upsert(
+      {
+        season_id: notification.season_id,
+        gameweek_id: notification.gameweek_id,
+        notification_id: notificationId,
+        user_id: user.id,
+        emoji,
+        updated_at: new Date().toISOString(),
+      },
+      {
+        onConflict: "notification_id,user_id",
+      },
+    );
+
+    const recipientUserId = await getActivityOwnerUserId({
+      notification,
+      admin,
+    });
+    const actorName = await getActorName(user.id);
+    const activityTitle = notification.title ?? "a league activity item";
+
+    await upsertGroupedUserNotification({
+      recipientUserId,
+      actorUserId: user.id,
+      actorName,
+      notificationType: "activity_reaction",
+      targetType: "notification",
+      targetId: notificationId,
+      title: "Activity reaction",
+      bodySingular: (name) => `${name} reacted to ${activityTitle}.`,
+      bodyGrouped: (names, otherCount) =>
+        `${formatGroupedActorText(names, otherCount)} reacted to ${activityTitle}.`,
+      metadata: {
+        notificationId,
+        activityTitle,
+      },
+    });
+  }
+
+  revalidatePath("/dashboard");
+}
+
+export async function addNotificationComment(formData: FormData) {
+  const notificationId = String(formData.get("notification_id") ?? "");
+  const body = String(formData.get("body") ?? "").trim();
+
+  if (
+    !notificationId ||
+    body.length === 0 ||
+    body.length > MAX_COMMENT_LENGTH
+  ) {
+    return;
+  }
+
+  const { user } = await getApprovedUser();
+
+  if (!user) {
+    return;
+  }
+
+  const notification = await getNotificationScope(notificationId);
+
+  if (!notification?.season_id) {
+    return;
+  }
+
+  const admin = createAdminClient();
+  const { data: insertedComment } = await admin
+    .from("notification_comments")
+    .insert({
+    season_id: notification.season_id,
+    gameweek_id: notification.gameweek_id,
+    notification_id: notificationId,
+    user_id: user.id,
+    body,
+    })
+    .select("id")
+    .single();
+
+  const actorName = await getActorName(user.id);
+  const activityTitle = notification.title ?? "a league activity item";
+  const activityOwnerUserId = await getActivityOwnerUserId({
+    notification,
+    admin,
+  });
+
+  await upsertGroupedUserNotification({
+    recipientUserId: activityOwnerUserId,
+    actorUserId: user.id,
+    actorName,
+    notificationType: "activity_comment",
+    targetType: "notification",
+    targetId: notificationId,
+    title: "New comment",
+    bodySingular: (name) => `${name} commented on ${activityTitle}.`,
+    bodyGrouped: (names, otherCount) =>
+      `${formatGroupedActorText(names, otherCount)} commented on ${activityTitle}.`,
+    metadata: {
+      notificationId,
+      commentId: insertedComment?.id,
+      activityTitle,
+    },
+  });
+
+  const { data: previousComments } = await admin
+    .from("notification_comments")
+    .select("user_id")
+    .eq("notification_id", notificationId)
+    .neq("user_id", user.id);
+  const previousCommenterIds = [
+    ...new Set(
+      ((previousComments as { user_id: string }[] | null) ?? []).map(
+        (comment) => comment.user_id,
+      ),
+    ),
+  ].filter((userId) => userId !== activityOwnerUserId);
+
+  for (const recipientUserId of previousCommenterIds) {
+    await upsertGroupedUserNotification({
+      recipientUserId,
+      actorUserId: user.id,
+      actorName,
+      notificationType: "activity_thread_comment",
+      targetType: "notification",
+      targetId: notificationId,
+      title: "New reply",
+      bodySingular: (name) =>
+        `${name} also commented on ${activityTitle}.`,
+      bodyGrouped: (names, otherCount) =>
+        `${formatGroupedActorText(
+          names,
+          otherCount,
+        )} also commented on ${activityTitle}.`,
+      metadata: {
+        notificationId,
+        commentId: insertedComment?.id,
+        activityTitle,
+      },
+    });
+  }
+
+  revalidatePath("/dashboard");
+}
+
+export async function deleteNotificationComment(formData: FormData) {
+  const commentId = String(formData.get("comment_id") ?? "");
+
+  if (!commentId) {
+    return;
+  }
+
+  const { user, profile } = await getApprovedUser();
+
+  if (!user || !profile) {
+    return;
+  }
+
+  const admin = createAdminClient();
+  const { data: userProfile } = await admin
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  let query = admin.from("notification_comments").delete().eq("id", commentId);
+
+  if (userProfile?.role !== "admin") {
+    query = query.eq("user_id", user.id);
+  }
+
+  await query;
+  revalidatePath("/dashboard");
+}
+
+export async function toggleNotificationCommentReaction(formData: FormData) {
+  const emoji = getEmoji(formData);
+  const commentId = String(formData.get("comment_id") ?? "");
+
+  if (!emoji || !commentId) {
+    return;
+  }
+
+  const { user } = await getApprovedUser();
+
+  if (!user) {
+    return;
+  }
+
+  const comment = await getNotificationCommentScope(commentId);
+
+  if (!comment?.season_id) {
+    return;
+  }
+
+  const admin = createAdminClient();
+  const { data: existing } = await admin
+    .from("notification_comment_reactions")
+    .select("id, emoji")
+    .eq("comment_id", commentId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (existing?.emoji === emoji) {
+    await admin
+      .from("notification_comment_reactions")
+      .delete()
+      .eq("id", existing.id);
+  } else {
+    await admin.from("notification_comment_reactions").upsert(
+      {
+        season_id: comment.season_id,
+        gameweek_id: comment.gameweek_id,
+        comment_id: commentId,
+        user_id: user.id,
+        emoji,
+        updated_at: new Date().toISOString(),
+      },
+      {
+        onConflict: "comment_id,user_id",
+      },
+    );
+
+    const { data: commentOwner } = await admin
+      .from("notification_comments")
+      .select("user_id, body")
+      .eq("id", commentId)
+      .maybeSingle();
+    const actorName = await getActorName(user.id);
+
+    await upsertGroupedUserNotification({
+      recipientUserId: (commentOwner as { user_id: string } | null)?.user_id,
+      actorUserId: user.id,
+      actorName,
+      notificationType: "comment_reaction",
+      targetType: "comment",
+      targetId: commentId,
+      title: "Comment reaction",
+      bodySingular: (name) => `${name} reacted to your comment.`,
+      bodyGrouped: (names, otherCount) =>
+        `${formatGroupedActorText(names, otherCount)} reacted to your comment.`,
+      metadata: {
+        commentId,
+        notificationId: comment.notification_id,
+      },
+    });
+  }
+
+  revalidatePath("/dashboard");
+}
+
+async function getActivityOwnerUserId({
+  notification,
+  admin,
+}: {
+  notification: NotificationScopeRow;
+  admin: ReturnType<typeof createAdminClient>;
+}) {
+  if (notification.type !== "fixtures_selected" || !notification.gameweek_id) {
+    return null;
+  }
+
+  const { data: gameweek } = await admin
+    .from("gameweeks")
+    .select("fixture_picker_id")
+    .eq("id", notification.gameweek_id)
+    .maybeSingle();
+
+  return (
+    (gameweek as { fixture_picker_id: string | null } | null)
+      ?.fixture_picker_id ?? null
+  );
+}
