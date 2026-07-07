@@ -159,11 +159,9 @@ function getGameweekFromPrediction(prediction: PredictionPointsRow) {
 function buildLeaderboardHref({
   seasonId,
   view,
-  players,
 }: {
   seasonId: string | null;
   view?: "table" | "chart";
-  players?: "top" | "all";
 }) {
   const params = new URLSearchParams();
 
@@ -175,10 +173,6 @@ function buildLeaderboardHref({
     params.set("view", view);
   }
 
-  if (players && players !== "top") {
-    params.set("players", players);
-  }
-
   const query = params.toString();
 
   return query ? `/leaderboard?${query}` : "/leaderboard";
@@ -188,14 +182,11 @@ function buildChartPlayers({
   entries,
   gameweeks,
   predictionRows,
-  showAllPlayers,
 }: {
   entries: LeaderboardEntry[];
   gameweeks: GameweekRow[];
   predictionRows: PredictionPointsRow[];
-  showAllPlayers: boolean;
 }): LeaderboardChartPlayer[] {
-  const selectedEntries = showAllPlayers ? entries : entries.slice(0, 10);
   const pointsByUserGameweek = new Map<string, number>();
 
   for (const prediction of predictionRows) {
@@ -212,7 +203,7 @@ function buildChartPlayers({
     );
   }
 
-  return selectedEntries.map((entry) => {
+  return entries.map((entry) => {
     let runningTotal = 0;
 
     return {
@@ -239,7 +230,6 @@ export default async function LeaderboardPage({
   const resolvedSearchParams = await searchParams;
   const selectedArchivedSeasonId = resolvedSearchParams.season ?? null;
   const view = resolvedSearchParams.view === "chart" ? "chart" : "table";
-  const showAllPlayers = resolvedSearchParams.players === "all";
 
   const supabase = await createClient();
 
@@ -330,7 +320,6 @@ export default async function LeaderboardPage({
     entries,
     gameweeks: scoredGameweeks,
     predictionRows,
-    showAllPlayers,
   });
   const gameweekNumbers = scoredGameweeks.map(
     (gameweek) => gameweek.gameweek_number,
@@ -409,7 +398,6 @@ export default async function LeaderboardPage({
               href={buildLeaderboardHref({
                 seasonId: selectedArchivedSeason?.id ?? null,
                 view: "table",
-                players: showAllPlayers ? "all" : "top",
               })}
               prefetch={false}
               className={`rounded-full px-4 py-2 text-sm font-black transition ${
@@ -424,7 +412,6 @@ export default async function LeaderboardPage({
               href={buildLeaderboardHref({
                 seasonId: selectedArchivedSeason?.id ?? null,
                 view: "chart",
-                players: showAllPlayers ? "all" : "top",
               })}
               prefetch={false}
               className={`rounded-full px-4 py-2 text-sm font-black transition ${
@@ -436,20 +423,6 @@ export default async function LeaderboardPage({
               Chart
             </Link>
           </div>
-
-          {view === "chart" && entries.length > 10 ? (
-            <Link
-              href={buildLeaderboardHref({
-                seasonId: selectedArchivedSeason?.id ?? null,
-                view: "chart",
-                players: showAllPlayers ? "top" : "all",
-              })}
-              prefetch={false}
-              className="inline-flex min-h-10 items-center justify-center rounded-full border border-white/10 bg-slate-950/70 px-4 text-sm font-bold text-slate-200 transition hover:border-emerald-300/40 hover:text-white"
-            >
-              {showAllPlayers ? "Show top 10" : "Show all players"}
-            </Link>
-          ) : null}
         </div>
 
         {error ? (
@@ -468,11 +441,9 @@ export default async function LeaderboardPage({
 
         {entries.length > 0 && view === "chart" ? (
           <LeaderboardChart
-            key={`${selectedSeason?.id ?? "none"}-${showAllPlayers ? "all" : "top"}-${gameweekNumbers.join("-")}`}
+            key={`${selectedSeason?.id ?? "none"}-${gameweekNumbers.join("-")}`}
             players={chartPlayers}
             gameweekNumbers={gameweekNumbers}
-            showingAllPlayers={showAllPlayers}
-            totalPlayerCount={entries.length}
           />
         ) : null}
 

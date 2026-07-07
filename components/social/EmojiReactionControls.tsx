@@ -75,11 +75,16 @@ export default function EmojiReactionControls({
   hiddenFields,
   reactions,
   compact = false,
+  placement = "auto",
   ariaLabel,
 }: EmojiReactionControlsProps) {
   const toast = useOptionalToast();
   const [isPending, setIsPending] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const [popoverAlign, setPopoverAlign] = useState<"left" | "center" | "right">(
+    "right",
+  );
+  const [popoverSide, setPopoverSide] = useState<"top" | "bottom">("top");
   const [optimisticReactions, setOptimisticReactions] = useState<
     ReactionSummary[] | null
   >(null);
@@ -150,12 +155,47 @@ export default function EmojiReactionControls({
     };
   }, [isOpen]);
 
+  function positionPopover() {
+    const wrapper = wrapperRef.current;
+
+    if (!wrapper || typeof window === "undefined") {
+      return;
+    }
+
+    const rect = wrapper.getBoundingClientRect();
+    const popoverWidth = compact ? 192 : 224;
+    const viewportPadding = 8;
+    const availableAbove = rect.top;
+
+    if (
+      placement === "bottom" ||
+      (placement === "auto" && availableAbove < 52)
+    ) {
+      setPopoverSide("bottom");
+    } else {
+      setPopoverSide("top");
+    }
+
+    if (rect.left + popoverWidth > window.innerWidth - viewportPadding) {
+      setPopoverAlign("right");
+      return;
+    }
+
+    if (rect.right - popoverWidth < viewportPadding) {
+      setPopoverAlign("left");
+      return;
+    }
+
+    setPopoverAlign("center");
+  }
+
   function togglePopover() {
     if (isOpen) {
       setIsOpen(false);
       return;
     }
 
+    positionPopover();
     setIsOpen(true);
   }
 
@@ -271,13 +311,31 @@ export default function EmojiReactionControls({
       {isOpen ? (
         <div
           ref={popoverRef}
-          className={`absolute bottom-full right-0 z-50 mb-1 box-border flex items-center gap-0.5 rounded-xl border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl shadow-black/40 ring-1 ring-emerald-300/10 ${
+          className={`absolute z-50 box-border flex items-center gap-0.5 rounded-xl border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl shadow-black/40 ring-1 ring-emerald-300/10 ${
             compact ? "w-48" : "w-56"
-          } max-w-[calc(100vw-1rem)]`}
+          } max-w-[calc(100vw-1rem)] ${
+            popoverSide === "top" ? "bottom-full mb-1" : "top-full mt-1"
+          } ${
+            popoverAlign === "left"
+              ? "left-0"
+              : popoverAlign === "center"
+                ? "left-1/2 -translate-x-1/2"
+                : "right-0"
+          }`}
           aria-label={ariaLabel}
         >
           <span
-            className="pointer-events-none absolute -bottom-1 right-3 h-2.5 w-2.5 rotate-45 border-b border-r border-white/10 bg-slate-950/95"
+            className={`pointer-events-none absolute h-2.5 w-2.5 rotate-45 bg-slate-950/95 ${
+              popoverSide === "top"
+                ? "-bottom-1 border-b border-r border-white/10"
+                : "-top-1 border-l border-t border-white/10"
+            } ${
+              popoverAlign === "left"
+                ? "left-3"
+                : popoverAlign === "center"
+                  ? "left-1/2 -translate-x-1/2"
+                  : "right-3"
+            }`}
             aria-hidden="true"
           />
           {EMOJIS.map((emoji) => {

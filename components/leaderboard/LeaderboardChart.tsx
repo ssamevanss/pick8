@@ -18,8 +18,6 @@ export type LeaderboardChartPlayer = {
 type LeaderboardChartProps = {
   players: LeaderboardChartPlayer[];
   gameweekNumbers: number[];
-  showingAllPlayers: boolean;
-  totalPlayerCount: number;
 };
 
 const lineColours = [
@@ -82,8 +80,6 @@ function getLatestPoint(points: LeaderboardChartPoint[]) {
 export default function LeaderboardChart({
   players,
   gameweekNumbers,
-  showingAllPlayers,
-  totalPlayerCount,
 }: LeaderboardChartProps) {
   const [visiblePlayerIds, setVisiblePlayerIds] = useState<Set<string>>(
     () => new Set(players.map((player) => player.userId)),
@@ -186,11 +182,6 @@ export default function LeaderboardChart({
             Cumulative season points by gameweek.
           </p>
         </div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          {showingAllPlayers
-            ? `Showing all ${totalPlayerCount} players`
-            : `Showing top ${Math.min(10, totalPlayerCount)}`}
-        </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -320,9 +311,7 @@ export default function LeaderboardChart({
                   strokeWidth={originalIndex >= 0 && originalIndex < 3 ? 3 : 2}
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  opacity={
-                    showingAllPlayers && originalIndex >= 10 ? 0.5 : 0.95
-                  }
+                  opacity={originalIndex >= 10 ? 0.58 : 0.95}
                 />
                 <circle
                   cx={paddingX + xStep * latestIndex}
@@ -339,34 +328,36 @@ export default function LeaderboardChart({
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-        {players.slice(0, showingAllPlayers ? players.length : 10).map((player, index) => {
+        {players.map((player, index) => {
           const isVisible = visiblePlayerIds.has(player.userId);
 
           return (
-          <button
-            key={player.userId}
-            type="button"
-            onClick={() => togglePlayer(player.userId)}
-            className={`flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition ${
-              isVisible
-                ? "border-white/10 bg-slate-950/55"
-                : "border-white/5 bg-slate-950/25 opacity-45"
-            }`}
-            aria-pressed={isVisible}
-          >
-            <span
-              className="h-2.5 w-2.5 shrink-0 rounded-full"
-              style={{ backgroundColor: lineColours[index % lineColours.length] }}
-              aria-hidden="true"
-            />
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-200">
-              {player.name}
-            </span>
-            <span className="text-sm font-black text-white">
-              {player.totalPoints}
-            </span>
-          </button>
-        );
+            <button
+              key={player.userId}
+              type="button"
+              onClick={() => togglePlayer(player.userId)}
+              className={`flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition ${
+                isVisible
+                  ? "border-white/10 bg-slate-950/55"
+                  : "border-white/5 bg-slate-950/25 opacity-45"
+              }`}
+              aria-pressed={isVisible}
+            >
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{
+                  backgroundColor: lineColours[index % lineColours.length],
+                }}
+                aria-hidden="true"
+              />
+              <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-200">
+                {player.name}
+              </span>
+              <span className="text-sm font-black text-white">
+                {player.totalPoints}
+              </span>
+            </button>
+          );
         })}
       </div>
     </div>

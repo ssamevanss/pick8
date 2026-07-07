@@ -200,3 +200,17 @@ export function getTeamAsset(teamName: string): TeamAsset {
     tone: "fallback",
   };
 }
+
+export function getTeamShortLabel(teamName: string) {
+  const asset = getTeamAsset(teamName);
+
+  if (asset.tone !== "fallback" && asset.initials) {
+    return asset.initials;
+  }
+
+  if (asset.label) {
+    return asset.label;
+  }
+
+  return asset.initials || teamName || getInitials(teamName);
+}

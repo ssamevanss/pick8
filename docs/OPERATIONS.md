@@ -504,6 +504,12 @@ fixtures; normal PL gameweeks still normally have four selected fixtures.
 Prediction-open and reminder emails mention Double Gameweek when the selected
 gameweek is marked as double.
 
+Gmail tab placement is controlled by Gmail and can vary by user. The app keeps
+24-hour reminder emails plain and transactional, with a text link instead of a
+promotional-style button, to improve the chance of Primary or Updates placement.
+Users can move a reminder to Primary or mark it as important to train Gmail for
+future league emails.
+
 Email preferences:
 
 - Users manage email preferences at `/settings`.

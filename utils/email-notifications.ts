@@ -100,6 +100,14 @@ function formatKickoffForEmail(kickoffAt: string) {
   }).format(new Date(kickoffAt));
 }
 
+function formatTimeForEmail(kickoffAt: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(kickoffAt));
+}
+
 function getEmailTemplate({
   title,
   eyebrow,
@@ -181,6 +189,42 @@ function getEmailTemplate({
 </html>`;
 }
 
+function getPlainReminderEmailTemplate({
+  subject,
+  greeting,
+  body,
+  linkLabel,
+  linkUrl,
+  footer,
+  managePreferencesUrl,
+}: {
+  subject: string;
+  greeting: string;
+  body: string;
+  linkLabel: string;
+  linkUrl: string;
+  footer: string;
+  managePreferencesUrl: string;
+}) {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${escapeHtml(subject)}</title>
+  </head>
+  <body style="margin:0;background:#ffffff;color:#17231a;font-family:Arial,Helvetica,sans-serif;">
+    <div style="max-width:560px;margin:0 auto;padding:24px 18px;">
+      <p style="margin:0 0 14px;font-size:15px;line-height:1.5;">${escapeHtml(greeting)},</p>
+      <p style="margin:0 0 14px;font-size:15px;line-height:1.5;">${escapeHtml(body)}</p>
+      <p style="margin:0 0 22px;font-size:15px;line-height:1.5;">${escapeHtml(linkLabel)}: <a href="${escapeHtml(linkUrl)}" style="color:#166534;text-decoration:underline;">${escapeHtml(linkUrl)}</a></p>
+      <p style="margin:0;color:#6b7a72;font-size:12px;line-height:1.5;">${escapeHtml(footer)}</p>
+      <p style="margin:8px 0 0;color:#6b7a72;font-size:12px;line-height:1.5;"><a href="${escapeHtml(managePreferencesUrl)}" style="color:#166534;text-decoration:underline;">Manage email preferences</a></p>
+    </div>
+  </body>
+</html>`;
+}
+
 function getFixtureLines(fixtures: FixtureRow[]) {
   return fixtures.map(
     (fixture) =>
@@ -188,6 +232,10 @@ function getFixtureLines(fixtures: FixtureRow[]) {
         fixture.kickoff_at,
       )}`,
   );
+}
+
+function getFirstName(displayName: string) {
+  return displayName.trim().split(/\s+/)[0] || displayName;
 }
 
 async function getExistingEmailNotification({
@@ -881,35 +929,39 @@ export async function sendPredictionDeadlineReminderEmails({
     const actionableFixtures = actionableByGameweek.get(gameweek.id) ?? [];
     const gameweekName = formatGameweekName(gameweek);
     const buttonUrl = `${siteUrl}/predictions?gameweek=${gameweek.id}`;
-    const fixtureLines = getFixtureLines(actionableFixtures);
-    const subject = "Less than 24 hours to enter your predictions";
-    const intro = `${gameweekName} has fixture${
-      actionableFixtures.length === 1 ? "" : "s"
-    } kicking off in the next 24 hours. ${
-      gameweek.is_double_gameweek ? "It is a Double Gameweek, with all points counting 2x. " : ""
-    }Get your predictions in before kickoff.`;
+    const firstKickoff = actionableFixtures[0]?.kickoff_at;
+    const deadlineText = firstKickoff
+      ? formatTimeForEmail(firstKickoff)
+      : "kickoff";
+    const subject = `${gameweekName} predictions close soon`;
+    const reminderBody = `${gameweekName} predictions close at ${deadlineText}.${
+      gameweek.is_double_gameweek ? " It is a Double Gameweek." : ""
+    }`;
     const footer =
       "You received this because you still have missing predictions for this gameweek.";
     const footerLinks = getPreferenceFooter(footer, siteUrl);
-    const text = `Who You Got?
 
-${intro}
+    function getReminderText(profile: ProfileRow) {
+      return `Hi ${getFirstName(profile.display_name)},
 
-${fixtureLines.join("\n")}
+${reminderBody}
 
-Enter predictions: ${buttonUrl}
+Make your picks: ${buttonUrl}
 
 ${footerLinks.text}`;
-    const html = getEmailTemplate({
-      title: subject,
-      eyebrow: "Predictions deadline",
-      intro,
-      fixtureList: fixtureLines,
-      buttonLabel: "Enter predictions",
-      buttonUrl,
-      footer: footerLinks.htmlFooter,
-      managePreferencesUrl: footerLinks.preferencesUrl,
-    });
+    }
+
+    function getReminderHtml(profile: ProfileRow) {
+      return getPlainReminderEmailTemplate({
+        subject,
+        greeting: `Hi ${getFirstName(profile.display_name)}`,
+        body: reminderBody,
+        linkLabel: "Make your picks",
+        linkUrl: buttonUrl,
+        footer: footerLinks.htmlFooter,
+        managePreferencesUrl: footerLinks.preferencesUrl,
+      });
+    }
 
     for (const profile of profiles) {
       if (
@@ -956,8 +1008,8 @@ ${footerLinks.text}`;
           eventKey: `predictions_24h:${gameweek.id}:${profile.id}`,
           to: profile.email!,
           subject,
-          text,
-          html,
+          text: getReminderText(profile),
+          html: getReminderHtml(profile),
           metadata: {
             gameweekName,
             fixtureIds: actionableFixtures.map((fixture) => fixture.id),

@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { getTeamAsset } from "@/utils/team-assets";
+import { getTeamAsset, getTeamShortLabel } from "@/utils/team-assets";
 
 type TeamIdentityProps = {
   teamName: string;
@@ -13,6 +13,7 @@ export default function TeamIdentity({
   compact = false,
 }: TeamIdentityProps) {
   const asset = getTeamAsset(teamName);
+  const mobileLabel = getTeamShortLabel(teamName);
   const reverse = align === "right";
 
   return (
@@ -49,11 +50,13 @@ export default function TeamIdentity({
       <span
         className={`min-w-0 font-semibold leading-tight ${
           compact
-            ? "whitespace-normal break-words text-xs min-[380px]:text-sm"
+            ? "text-xs min-[380px]:text-sm"
             : "truncate"
         }`}
+        title={teamName}
       >
-        {teamName}
+        <span className="sm:hidden">{mobileLabel}</span>
+        <span className="hidden sm:inline">{teamName}</span>
       </span>
     </span>
   );

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { ReactNode } from "react";
 import BrandMark from "@/components/brand/BrandMark";
 import NotificationBell, {
@@ -41,6 +41,8 @@ export default function AppShell({
 }: AppShellProps) {
   const pathname = usePathname();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const mobileMenuRef = useRef<HTMLDivElement | null>(null);
   const navItems = [
     ...baseNavItems,
     ...(canPickFixtures ? [pickFixturesNavItem] : []),
@@ -56,6 +58,40 @@ export default function AppShell({
 
     return () => window.clearTimeout(timeout);
   }, [pendingHref]);
+
+  useEffect(() => {
+    if (!isMobileMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (mobileMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setIsMobileMenuOpen(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsMobileMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isMobileMenuOpen]);
 
   function handleNavigate(
     event: MouseEvent<HTMLAnchorElement>,
@@ -80,7 +116,7 @@ export default function AppShell({
     pendingHref && !isCurrentRoute(pathname, pendingHref) ? pendingHref : null;
 
   return (
-    <main className="app-surface min-h-screen text-white">
+    <main className="app-surface min-h-dvh text-white">
       <div
         aria-hidden="true"
         className={`fixed inset-x-0 top-0 z-50 h-1 origin-left bg-emerald-400 transition-all duration-500 ${
@@ -89,9 +125,11 @@ export default function AppShell({
             : "scale-x-0 opacity-0"
         }`}
       />
-      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-4 pb-24 pt-4 sm:pt-6">
-        <header className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-[#0b1627]/80 px-3 py-3 shadow-xl shadow-black/20 backdrop-blur sm:px-4">
-          <BrandMark />
+      <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 pb-[calc(6.5rem+env(safe-area-inset-bottom))] pt-4 sm:pb-28 sm:pt-6">
+        <header className="relative mb-6 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#0b1627]/80 px-3 py-3 shadow-xl shadow-black/20 backdrop-blur sm:gap-4 sm:px-4">
+          <div className="min-w-0">
+            <BrandMark />
+          </div>
 
           <div className="flex shrink-0 items-center gap-2">
             <NotificationBell notifications={notifications} />
@@ -100,7 +138,7 @@ export default function AppShell({
               href="/rules"
               prefetch={false}
               onClick={(event) => handleNavigate(event, "/rules")}
-              className={`min-h-10 rounded-full border px-3 py-2 text-sm font-semibold transition ${
+              className={`hidden min-h-10 rounded-full border px-3 py-2 text-sm font-semibold transition sm:inline-flex ${
                 isCurrentRoute(pathname, "/rules")
                   ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
                   : activePendingHref === "/rules"
@@ -115,7 +153,7 @@ export default function AppShell({
               href="/settings"
               prefetch={false}
               onClick={(event) => handleNavigate(event, "/settings")}
-              className={`min-h-10 rounded-full border px-3 py-2 text-sm font-semibold transition ${
+              className={`hidden min-h-10 rounded-full border px-3 py-2 text-sm font-semibold transition sm:inline-flex ${
                 isCurrentRoute(pathname, "/settings")
                   ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
                   : activePendingHref === "/settings"
@@ -130,7 +168,7 @@ export default function AppShell({
               href="/logout"
               prefetch={false}
               onClick={(event) => handleNavigate(event, "/logout")}
-              className={`min-h-10 rounded-full border px-3 py-2 text-sm font-semibold transition ${
+              className={`hidden min-h-10 rounded-full border px-3 py-2 text-sm font-semibold transition sm:inline-flex ${
                 activePendingHref === "/logout"
                   ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
                   : "border-white/10 bg-slate-900/70 text-slate-300 hover:text-white active:bg-slate-800"
@@ -138,6 +176,56 @@ export default function AppShell({
             >
               {activePendingHref === "/logout" ? "Signing out..." : "Sign out"}
             </Link>
+
+            <div ref={mobileMenuRef} className="relative sm:hidden">
+              <button
+                type="button"
+                onClick={() => setIsMobileMenuOpen((open) => !open)}
+                className="grid min-h-10 min-w-10 place-items-center rounded-full border border-white/10 bg-slate-900/70 text-lg font-black text-slate-200 transition hover:text-white"
+                aria-label="Open account menu"
+                aria-expanded={isMobileMenuOpen}
+              >
+                ⋯
+              </button>
+
+              {isMobileMenuOpen ? (
+                <div className="absolute right-0 top-full z-[70] mt-2 w-44 overflow-hidden rounded-2xl border border-white/10 bg-[#07111f] p-2 shadow-2xl shadow-black/50">
+                  {[
+                    { href: "/rules", label: "Rules" },
+                    { href: "/settings", label: "Settings" },
+                    { href: "/logout", label: "Sign out" },
+                  ].map((item) => {
+                    const isActive = isCurrentRoute(pathname, item.href);
+                    const isPending = activePendingHref === item.href;
+
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        prefetch={false}
+                        onClick={(event) => {
+                          handleNavigate(event, item.href);
+                          setIsMobileMenuOpen(false);
+                        }}
+                        className={`block rounded-xl px-3 py-2.5 text-sm font-bold transition ${
+                          isActive
+                            ? "bg-emerald-400 text-slate-950"
+                            : isPending
+                              ? "bg-emerald-500/10 text-emerald-300"
+                              : "text-slate-200 hover:bg-slate-900 hover:text-white"
+                        }`}
+                      >
+                        {isPending
+                          ? item.href === "/logout"
+                            ? "Signing out..."
+                            : "Loading..."
+                          : item.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
           </div>
         </header>
 
@@ -151,7 +239,7 @@ export default function AppShell({
         </div>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/90 px-2 py-2 shadow-2xl shadow-black/40 backdrop-blur-xl sm:px-4 sm:py-3">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl shadow-black/40 backdrop-blur-xl sm:px-4 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pt-3">
         <div
           className="mx-auto grid max-w-5xl gap-1 sm:gap-2"
           style={{
