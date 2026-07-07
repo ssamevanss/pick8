@@ -64,10 +64,17 @@ export default async function AppLayout({ children }: AppLayoutProps) {
   const canPickFixtures = editablePickerGameweeks.length > 0;
   const { data: userNotifications } = await supabase
     .from("user_notifications")
-    .select("id, title, body, read_at, updated_at")
+    .select(
+      "id, title, body, read_at, updated_at, notification_type, target_type, target_id, metadata",
+    )
     .eq("user_id", user.id)
     .order("updated_at", { ascending: false })
-    .limit(12);
+    .limit(20);
+  const { count: unreadNotificationCount } = await supabase
+    .from("user_notifications")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .is("read_at", null);
   const notifications =
     (userNotifications as HeaderUserNotification[] | null) ?? [];
 
@@ -76,6 +83,7 @@ export default async function AppLayout({ children }: AppLayoutProps) {
       isAdmin={isAdmin}
       canPickFixtures={canPickFixtures}
       notifications={notifications}
+      unreadNotificationCount={unreadNotificationCount ?? 0}
     >
       {children}
     </AppShell>

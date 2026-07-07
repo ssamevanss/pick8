@@ -50,6 +50,26 @@ export async function markUserNotificationsRead(formData: FormData) {
   revalidatePath("/pick-fixtures");
 }
 
+export async function markUserNotificationRead(notificationId: string) {
+  const { supabase, userId } = await getApprovedUserId();
+
+  if (!userId || !notificationId) {
+    return;
+  }
+
+  await supabase
+    .from("user_notifications")
+    .update({ read_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("id", notificationId)
+    .is("read_at", null);
+
+  revalidatePath("/dashboard");
+  revalidatePath("/predictions");
+  revalidatePath("/leaderboard");
+  revalidatePath("/pick-fixtures");
+}
+
 export async function markAllUserNotificationsRead() {
   const { supabase, userId } = await getApprovedUserId();
 

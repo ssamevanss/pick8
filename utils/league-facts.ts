@@ -152,6 +152,14 @@ function formatFixtureName(fixture: FactFixture) {
   return `${fixture.home_team} v ${fixture.away_team}`;
 }
 
+function formatPercentage(count: number, total: number) {
+  if (total <= 0) {
+    return "0%";
+  }
+
+  return `${Math.round((count / total) * 100)}%`;
+}
+
 function formatPlayerList(names: string[]) {
   if (names.length === 0) return "";
   if (names.length === 1) return names[0];
@@ -320,11 +328,16 @@ function buildFixturePredictionFacts({
     const mostPredictedResult = getTopCount(resultCounts);
 
     if (mostPredictedResult && mostPredictedResult[0] !== actualResult) {
+      const wrongShare = formatPercentage(
+        mostPredictedResult[1],
+        fixturePredictions.length,
+      );
+
       addCandidate(candidates, {
         factType: "most_predicted_outcome_wrong",
         subjectKey: fixture.id,
         title: "The crowd picked the wrong side",
-        body: `${mostPredictedResult[1]} player${mostPredictedResult[1] === 1 ? "" : "s"} backed the wrong outcome in ${fixtureName}.`,
+        body: `${wrongShare} of players picked the wrong outcome in ${fixtureName} (${mostPredictedResult[1]} of ${fixturePredictions.length}).`,
         interestingness:
           64 +
           mostPredictedResult[1] * 2 +
@@ -336,11 +349,15 @@ function buildFixturePredictionFacts({
           mostPredictedResult: mostPredictedResult[0],
           mostPredictedCount: mostPredictedResult[1],
           predictionCount: fixturePredictions.length,
+          wrongShare,
         },
       });
     }
 
     const correctShare = correctCount / fixturePredictions.length;
+    const correctPredictors = fixturePredictions
+      .filter((prediction) => prediction.is_correct_result)
+      .map((prediction) => getDisplayName(prediction.profiles));
 
     addCandidate(
       candidates,
@@ -349,12 +366,16 @@ function buildFixturePredictionFacts({
             factType: "prediction_split_upset",
             subjectKey: fixture.id,
             title: "A proper prediction upset",
-            body: `Only ${correctCount} of ${fixturePredictions.length} players called ${fixtureName} correctly.`,
+            body:
+              correctCount === 1
+                ? `Only ${correctPredictors[0]} called ${fixtureName} correctly.`
+                : `Only ${correctCount} of ${fixturePredictions.length} players called ${fixtureName} correctly.`,
             interestingness: 70 + (1 - correctShare) * 24,
             metadata: {
               fixtureId: fixture.id,
               fixtureName,
               correctCount,
+              correctPredictors,
               predictionCount: fixturePredictions.length,
             },
           }
@@ -947,26 +968,30 @@ export async function generateLeagueFactNotifications({
       return [...selected, candidate];
     }, []);
 
-  await Promise.all(
-    selectedFacts.map((fact, index) =>
-      upsertActivityNotification({
-        eventKey: `league_fact:${gameweekId}:slot:${index + 1}`,
-        type: "info",
-        title: fact.title,
-        body: fact.body,
-        seasonId,
+  if (selectedFacts.length > 0) {
+    await upsertActivityNotification({
+      eventKey: `league_facts:${gameweekId}`,
+      type: "info",
+      title: `${gameweekName} highlights`,
+      body: `${selectedFacts.length} highlight${
+        selectedFacts.length === 1 ? "" : "s"
+      } from ${gameweekName}.`,
+      seasonId,
+      gameweekId,
+      metadata: {
         gameweekId,
-        metadata: {
-          gameweekId,
-          gameweekName,
+        gameweekName,
+        highlights: selectedFacts.map((fact) => ({
+          title: fact.title,
+          body: fact.body,
           factType: fact.factType,
           subjectKey: fact.subjectKey,
           interestingness: Math.round(fact.interestingness),
           ...fact.metadata,
-        },
-      }),
-    ),
-  );
+        })),
+      },
+    });
+  }
 
   return selectedFacts;
 }

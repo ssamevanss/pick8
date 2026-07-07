@@ -185,7 +185,12 @@ function formatGameweekName(gameweek: {
   return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
 }
 
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ activity?: string; comments?: string }>;
+}) {
+  const params = searchParams ? await searchParams : {};
   const supabase = await createClient();
 
   const {
@@ -861,6 +866,10 @@ export default async function HomePage() {
           notifications={notificationListWithSocial}
           currentUserId={user.id}
           canModerate={profile?.role === "admin"}
+          highlightedActivityId={params.activity ?? null}
+          openCommentsForActivityId={
+            params.comments === "1" ? params.activity ?? null : null
+          }
         />
       ) : null}
     </>

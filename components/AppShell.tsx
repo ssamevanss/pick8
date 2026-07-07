@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import BrandMark from "@/components/brand/BrandMark";
 import NotificationBell, {
@@ -14,6 +15,13 @@ type AppShellProps = {
   isAdmin?: boolean;
   canPickFixtures?: boolean;
   notifications?: HeaderUserNotification[];
+  unreadNotificationCount?: number;
+};
+
+type MobileMenuPosition = {
+  top: number;
+  left: number;
+  width: number;
 };
 
 const baseNavItems = [
@@ -38,11 +46,16 @@ export default function AppShell({
   isAdmin = false,
   canPickFixtures = false,
   notifications = [],
+  unreadNotificationCount = 0,
 }: AppShellProps) {
   const pathname = usePathname();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [mobileMenuPosition, setMobileMenuPosition] =
+    useState<MobileMenuPosition | null>(null);
   const mobileMenuRef = useRef<HTMLDivElement | null>(null);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const mobileMenuPanelRef = useRef<HTMLDivElement | null>(null);
   const navItems = [
     ...baseNavItems,
     ...(canPickFixtures ? [pickFixturesNavItem] : []),
@@ -71,7 +84,10 @@ export default function AppShell({
         return;
       }
 
-      if (mobileMenuRef.current?.contains(target)) {
+      if (
+        mobileMenuRef.current?.contains(target) ||
+        mobileMenuPanelRef.current?.contains(target)
+      ) {
         return;
       }
 
@@ -90,6 +106,25 @@ export default function AppShell({
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isMobileMenuOpen]);
+
+  useEffect(() => {
+    if (!isMobileMenuOpen) {
+      return;
+    }
+
+    function updateMobileMenuPosition() {
+      setMobileMenuPosition(calculateMobileMenuPosition());
+    }
+
+    updateMobileMenuPosition();
+    window.addEventListener("resize", updateMobileMenuPosition);
+    window.addEventListener("scroll", updateMobileMenuPosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updateMobileMenuPosition);
+      window.removeEventListener("scroll", updateMobileMenuPosition, true);
     };
   }, [isMobileMenuOpen]);
 
@@ -115,6 +150,34 @@ export default function AppShell({
   const activePendingHref =
     pendingHref && !isCurrentRoute(pathname, pendingHref) ? pendingHref : null;
 
+  function calculateMobileMenuPosition(): MobileMenuPosition | null {
+    const button = mobileMenuButtonRef.current;
+
+    if (!button || typeof window === "undefined") {
+      return null;
+    }
+
+    const rect = button.getBoundingClientRect();
+    const viewportPadding = 12;
+    const width = 176;
+    const left = Math.min(
+      Math.max(viewportPadding, rect.right - width),
+      window.innerWidth - width - viewportPadding,
+    );
+
+    return {
+      top: rect.bottom + 8,
+      left,
+      width,
+    };
+  }
+
+  const mobileMenuItems = [
+    { href: "/rules", label: "Rules" },
+    { href: "/settings", label: "Settings" },
+    { href: "/logout", label: "Sign out" },
+  ];
+
   return (
     <main className="app-surface min-h-dvh text-white">
       <div
@@ -132,7 +195,10 @@ export default function AppShell({
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
-            <NotificationBell notifications={notifications} />
+            <NotificationBell
+              notifications={notifications}
+              unreadCount={unreadNotificationCount}
+            />
 
             <Link
               href="/rules"
@@ -179,52 +245,18 @@ export default function AppShell({
 
             <div ref={mobileMenuRef} className="relative sm:hidden">
               <button
+                ref={mobileMenuButtonRef}
                 type="button"
-                onClick={() => setIsMobileMenuOpen((open) => !open)}
+                onClick={() => {
+                  setMobileMenuPosition(calculateMobileMenuPosition());
+                  setIsMobileMenuOpen((open) => !open);
+                }}
                 className="grid min-h-10 min-w-10 place-items-center rounded-full border border-white/10 bg-slate-900/70 text-lg font-black text-slate-200 transition hover:text-white"
                 aria-label="Open account menu"
                 aria-expanded={isMobileMenuOpen}
               >
                 ⋯
               </button>
-
-              {isMobileMenuOpen ? (
-                <div className="absolute right-0 top-full z-[70] mt-2 w-44 overflow-hidden rounded-2xl border border-white/10 bg-[#07111f] p-2 shadow-2xl shadow-black/50">
-                  {[
-                    { href: "/rules", label: "Rules" },
-                    { href: "/settings", label: "Settings" },
-                    { href: "/logout", label: "Sign out" },
-                  ].map((item) => {
-                    const isActive = isCurrentRoute(pathname, item.href);
-                    const isPending = activePendingHref === item.href;
-
-                    return (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        prefetch={false}
-                        onClick={(event) => {
-                          handleNavigate(event, item.href);
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`block rounded-xl px-3 py-2.5 text-sm font-bold transition ${
-                          isActive
-                            ? "bg-emerald-400 text-slate-950"
-                            : isPending
-                              ? "bg-emerald-500/10 text-emerald-300"
-                              : "text-slate-200 hover:bg-slate-900 hover:text-white"
-                        }`}
-                      >
-                        {isPending
-                          ? item.href === "/logout"
-                            ? "Signing out..."
-                            : "Loading..."
-                          : item.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              ) : null}
             </div>
           </div>
         </header>
@@ -239,7 +271,7 @@ export default function AppShell({
         </div>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl shadow-black/40 backdrop-blur-xl sm:px-4 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pt-3">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl shadow-black/40 backdrop-blur-xl after:pointer-events-none after:fixed after:inset-x-0 after:bottom-[-32px] after:h-[calc(32px+env(safe-area-inset-bottom))] after:bg-slate-950/95 sm:px-4 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pt-3">
         <div
           className="mx-auto grid max-w-5xl gap-1 sm:gap-2"
           style={{
@@ -278,6 +310,51 @@ export default function AppShell({
           ))}
         </div>
       </nav>
+
+      {isMobileMenuOpen && mobileMenuPosition
+        ? createPortal(
+            <div
+              ref={mobileMenuPanelRef}
+              className="fixed z-[90] overflow-hidden rounded-2xl border border-white/10 bg-[#07111f] p-2 shadow-2xl shadow-black/50 sm:hidden"
+              style={{
+                top: mobileMenuPosition.top,
+                left: mobileMenuPosition.left,
+                width: mobileMenuPosition.width,
+              }}
+            >
+              {mobileMenuItems.map((item) => {
+                const isActive = isCurrentRoute(pathname, item.href);
+                const isPending = activePendingHref === item.href;
+
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    prefetch={false}
+                    onClick={(event) => {
+                      handleNavigate(event, item.href);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`block rounded-xl px-3 py-2.5 text-sm font-bold transition ${
+                      isActive
+                        ? "bg-emerald-400 text-slate-950"
+                        : isPending
+                          ? "bg-emerald-500/10 text-emerald-300"
+                          : "text-slate-200 hover:bg-slate-900 hover:text-white"
+                    }`}
+                  >
+                    {isPending
+                      ? item.href === "/logout"
+                        ? "Signing out..."
+                        : "Loading..."
+                      : item.label}
+                  </Link>
+                );
+              })}
+            </div>,
+            document.body,
+          )
+        : null}
     </main>
   );
 }

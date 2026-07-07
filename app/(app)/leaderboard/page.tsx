@@ -393,7 +393,7 @@ export default async function LeaderboardPage({
 
       <section className="brand-card p-4 sm:p-5">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="inline-flex rounded-full border border-white/10 bg-slate-950/70 p-1">
+          <div className="inline-flex w-fit self-start rounded-full border border-white/10 bg-slate-950/70 p-1">
             <Link
               href={buildLeaderboardHref({
                 seasonId: selectedArchivedSeason?.id ?? null,

@@ -573,7 +573,7 @@ export default function FixturePredictionCard({
   ].filter((group) => group.predictions.length > 0);
 
   return (
-    <div className="brand-card-soft p-4">
+    <div id={`fixture-${fixture.id}`} className="brand-card-soft scroll-mt-24 p-4">
       <input type="hidden" name="fixture_id" value={fixture.id} />
 
       <p className="text-xs text-slate-500">

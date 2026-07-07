@@ -154,6 +154,24 @@ async function getActorName(userId: string) {
   return getProfileDisplayName(profile);
 }
 
+async function getApprovedUserIdsExcept({
+  admin,
+  excludedUserIds,
+}: {
+  admin: ReturnType<typeof createAdminClient>;
+  excludedUserIds: string[];
+}) {
+  const { data: profiles } = await admin
+    .from("profiles")
+    .select("id")
+    .eq("status", "approved");
+  const excluded = new Set(excludedUserIds.filter(Boolean));
+
+  return ((profiles as { id: string }[] | null) ?? [])
+    .map((profile) => profile.id)
+    .filter((userId) => !excluded.has(userId));
+}
+
 function getEmoji(formData: FormData) {
   const emoji = String(formData.get("emoji") ?? "");
 
@@ -264,7 +282,7 @@ export async function togglePredictionReaction(formData: FormData) {
       recipientUserId: predictionUserId,
       actorUserId: user.id,
       actorName,
-      notificationType: "prediction_reaction",
+      notificationType: "prediction_reactions",
       targetType: "prediction",
       targetId: `${fixtureId}:${predictionUserId}`,
       title: "Prediction reaction",
@@ -276,7 +294,9 @@ export async function togglePredictionReaction(formData: FormData) {
           otherCount,
         )} reacted to your ${scoreline} prediction for ${matchup}.`,
       metadata: {
+        targetHref: `/predictions?gameweek=${typedFixture.gameweek_id}&fixture=${fixtureId}#fixture-${fixtureId}`,
         fixtureId,
+        gameweekId: typedFixture.gameweek_id,
         predictionUserId,
         matchup,
         scoreline,
@@ -418,7 +438,7 @@ export async function toggleNotificationReaction(formData: FormData) {
       recipientUserId,
       actorUserId: user.id,
       actorName,
-      notificationType: "activity_reaction",
+      notificationType: "activity_reactions",
       targetType: "notification",
       targetId: notificationId,
       title: "Activity reaction",
@@ -426,6 +446,7 @@ export async function toggleNotificationReaction(formData: FormData) {
       bodyGrouped: (names, otherCount) =>
         `${formatGroupedActorText(names, otherCount)} reacted to ${activityTitle}.`,
       metadata: {
+        targetHref: `/dashboard?activity=${notificationId}&comments=1#activity-${notificationId}`,
         notificationId,
         activityTitle,
       },
@@ -463,13 +484,13 @@ export async function addNotificationComment(formData: FormData) {
   const { data: insertedComment } = await admin
     .from("notification_comments")
     .insert({
-    season_id: notification.season_id,
-    gameweek_id: notification.gameweek_id,
-    notification_id: notificationId,
-    user_id: user.id,
-    body,
+      season_id: notification.season_id,
+      gameweek_id: notification.gameweek_id,
+      notification_id: notificationId,
+      user_id: user.id,
+      body,
     })
-    .select("id")
+    .select("id, user_id, body, created_at")
     .single();
 
   const actorName = await getActorName(user.id);
@@ -478,63 +499,49 @@ export async function addNotificationComment(formData: FormData) {
     notification,
     admin,
   });
-
-  await upsertGroupedUserNotification({
-    recipientUserId: activityOwnerUserId,
-    actorUserId: user.id,
-    actorName,
-    notificationType: "activity_comment",
-    targetType: "notification",
-    targetId: notificationId,
-    title: "New comment",
-    bodySingular: (name) => `${name} commented on ${activityTitle}.`,
-    bodyGrouped: (names, otherCount) =>
-      `${formatGroupedActorText(names, otherCount)} commented on ${activityTitle}.`,
-    metadata: {
-      notificationId,
-      commentId: insertedComment?.id,
-      activityTitle,
-    },
+  const targetHref = `/dashboard?activity=${notificationId}&comments=1#activity-${notificationId}`;
+  const approvedRecipientIds = await getApprovedUserIdsExcept({
+    admin,
+    excludedUserIds: [user.id],
   });
 
-  const { data: previousComments } = await admin
-    .from("notification_comments")
-    .select("user_id")
-    .eq("notification_id", notificationId)
-    .neq("user_id", user.id);
-  const previousCommenterIds = [
-    ...new Set(
-      ((previousComments as { user_id: string }[] | null) ?? []).map(
-        (comment) => comment.user_id,
-      ),
-    ),
-  ].filter((userId) => userId !== activityOwnerUserId);
-
-  for (const recipientUserId of previousCommenterIds) {
+  for (const recipientUserId of approvedRecipientIds) {
     await upsertGroupedUserNotification({
       recipientUserId,
       actorUserId: user.id,
       actorName,
-      notificationType: "activity_thread_comment",
+      notificationType: "activity_comments",
       targetType: "notification",
       targetId: notificationId,
-      title: "New reply",
+      title: "New activity comment",
       bodySingular: (name) =>
-        `${name} also commented on ${activityTitle}.`,
-      bodyGrouped: (names, otherCount) =>
-        `${formatGroupedActorText(
-          names,
-          otherCount,
-        )} also commented on ${activityTitle}.`,
+        `${name} commented on ${activityTitle}.`,
+      bodyGrouped: (names, otherCount) => {
+        const total = names.length + otherCount;
+        return `${total} player${total === 1 ? "" : "s"} commented on ${activityTitle}.`;
+      },
       metadata: {
+        targetHref,
         notificationId,
         commentId: insertedComment?.id,
         activityTitle,
+        latestCommentPreview: body,
+        activityOwnerUserId,
       },
     });
   }
 
   revalidatePath("/dashboard");
+
+  return insertedComment
+    ? {
+        id: insertedComment.id as string,
+        user_id: insertedComment.user_id as string,
+        body: insertedComment.body as string,
+        created_at: insertedComment.created_at as string,
+        display_name: actorName,
+      }
+    : null;
 }
 
 export async function deleteNotificationComment(formData: FormData) {
@@ -626,7 +633,7 @@ export async function toggleNotificationCommentReaction(formData: FormData) {
       recipientUserId: (commentOwner as { user_id: string } | null)?.user_id,
       actorUserId: user.id,
       actorName,
-      notificationType: "comment_reaction",
+      notificationType: "comment_reactions",
       targetType: "comment",
       targetId: commentId,
       title: "Comment reaction",
@@ -634,6 +641,7 @@ export async function toggleNotificationCommentReaction(formData: FormData) {
       bodyGrouped: (names, otherCount) =>
         `${formatGroupedActorText(names, otherCount)} reacted to your comment.`,
       metadata: {
+        targetHref: `/dashboard?activity=${comment.notification_id}&comments=1#activity-${comment.notification_id}`,
         commentId,
         notificationId: comment.notification_id,
       },

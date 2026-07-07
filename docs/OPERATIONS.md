@@ -531,6 +531,16 @@ Social notification inbox:
 - Users can only read and mark their own inbox notifications. Writes are made
   by server actions after approved-user checks.
 - The inbox is separate from email notifications and does not send email.
+- The bell badge counts unread grouped rows. Opening the dropdown does not mark
+  rows read; clicking a notification, using per-item Clear, or using Mark all
+  read marks rows read.
+- Social inbox test: sign in as User A and comment on a league activity item;
+  sign in as User B and confirm the bell badge increments, click the inbox row,
+  and confirm it navigates to `/dashboard?activity=...&comments=1` with the
+  comments open and the unread count reduced.
+- Current direct-actor detection covers prediction owners, comment owners, and
+  fixture-picker activity owners. Richer named-player extraction from highlight
+  text can be added later if needed.
 
 Expected full PL season volume for 30 players and 38 gameweeks:
 
