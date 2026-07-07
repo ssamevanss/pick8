@@ -638,7 +638,6 @@ export default function FixturePredictionCard({
                   </span>
                 </span>
 
-                <PredictionOutcomeBadge prediction={ownPrediction} />
                 {hasExternalDisplayScore ? (
                   <span
                     className={`inline-flex min-w-24 items-center justify-center rounded-full px-2 py-0.5 text-xs font-bold ring-1 ${
@@ -649,13 +648,16 @@ export default function FixturePredictionCard({
                           : "bg-red-300/10 text-red-200 ring-red-300/30"
                     }`}
                   >
+                    Pending:{" "}
                     {ownLiveOutcome === "exact"
                       ? "Exact"
                       : ownLiveOutcome === "result"
                         ? "Result"
                         : "Off track"}
                   </span>
-                ) : null}
+                ) : (
+                  <PredictionOutcomeBadge prediction={ownPrediction} />
+                )}
               </div>
             </div>
           ) : (
