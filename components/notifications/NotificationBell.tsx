@@ -29,6 +29,7 @@ type DropdownPosition = {
   top: number;
   left: number;
   width: number;
+  maxHeight: number;
 };
 
 function formatNotificationTime(value: string) {
@@ -126,15 +127,25 @@ export default function NotificationBell({
     const rect = button.getBoundingClientRect();
     const viewportPadding = 12;
     const width = Math.min(352, window.innerWidth - viewportPadding * 2);
+    const preferredTop = rect.bottom + 8;
+    const top = Math.min(
+      preferredTop,
+      Math.max(viewportPadding, window.innerHeight - viewportPadding - 220),
+    );
+    const maxHeight = Math.max(
+      220,
+      window.innerHeight - top - viewportPadding,
+    );
     const left = Math.min(
       Math.max(viewportPadding, rect.right - width),
       window.innerWidth - width - viewportPadding,
     );
 
     return {
-      top: rect.bottom + 8,
+      top,
       left,
       width,
+      maxHeight,
     };
   }
 
@@ -244,14 +255,15 @@ export default function NotificationBell({
         ? createPortal(
             <div
               ref={panelRef}
-              className="fixed z-[80] overflow-hidden rounded-2xl border border-white/10 bg-[#07111f] shadow-2xl shadow-black/50"
+              className="fixed z-[80] flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#07111f] shadow-2xl shadow-black/50"
               style={{
                 top: dropdownPosition.top,
                 left: dropdownPosition.left,
                 width: dropdownPosition.width,
+                maxHeight: dropdownPosition.maxHeight,
               }}
             >
-              <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
                 <div>
                   <p className="text-sm font-black text-white">
                     Notifications
@@ -277,7 +289,7 @@ export default function NotificationBell({
                   No new league activity.
                 </p>
               ) : (
-                <div className="max-h-96 overflow-y-auto">
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                   {displayedNotifications.map((notification) => {
                     const isUnread =
                       notification.read_at === null &&

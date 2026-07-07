@@ -105,6 +105,13 @@ function getSeasonStatus(
   return Array.isArray(season) ? season[0]?.status : season?.status;
 }
 
+function logSocialNotificationInfo(
+  stage: string,
+  details: Record<string, unknown>,
+) {
+  console.info("[user-notifications]", stage, details);
+}
+
 async function getApprovedUser() {
   const supabase = await createClient();
   const {
@@ -161,11 +168,19 @@ async function getApprovedUserIdsExcept({
   admin: ReturnType<typeof createAdminClient>;
   excludedUserIds: string[];
 }) {
-  const { data: profiles } = await admin
+  const { data: profiles, error } = await admin
     .from("profiles")
     .select("id")
     .eq("status", "approved");
   const excluded = new Set(excludedUserIds.filter(Boolean));
+
+  if (error) {
+    console.error("[user-notifications] approved recipient lookup failed", {
+      message: error.message,
+      code: error.code,
+    });
+    return [];
+  }
 
   return ((profiles as { id: string }[] | null) ?? [])
     .map((profile) => profile.id)
@@ -277,6 +292,14 @@ export async function togglePredictionReaction(formData: FormData) {
       typedFixture.home_team && typedFixture.away_team
         ? `${typedFixture.home_team} v ${typedFixture.away_team}`
         : "a fixture";
+
+    logSocialNotificationInfo("prediction reaction notification requested", {
+      notificationType: "prediction_reactions",
+      actorUserId: user.id,
+      recipientUserId: predictionUserId,
+      fixtureId,
+      gameweekId: typedFixture.gameweek_id,
+    });
 
     await upsertGroupedUserNotification({
       recipientUserId: predictionUserId,
@@ -434,6 +457,14 @@ export async function toggleNotificationReaction(formData: FormData) {
     const actorName = await getActorName(user.id);
     const activityTitle = notification.title ?? "a league activity item";
 
+    logSocialNotificationInfo("activity reaction notification requested", {
+      notificationType: "activity_reactions",
+      actorUserId: user.id,
+      recipientUserId,
+      notificationId,
+      notificationTypeSource: notification.type ?? null,
+    });
+
     await upsertGroupedUserNotification({
       recipientUserId,
       actorUserId: user.id,
@@ -503,6 +534,15 @@ export async function addNotificationComment(formData: FormData) {
   const approvedRecipientIds = await getApprovedUserIdsExcept({
     admin,
     excludedUserIds: [user.id],
+  });
+
+  logSocialNotificationInfo("activity comment notifications requested", {
+    notificationType: "activity_comments",
+    actorUserId: user.id,
+    recipientCount: approvedRecipientIds.length,
+    recipientUserIds: approvedRecipientIds,
+    notificationId,
+    commentId: insertedComment?.id ?? null,
   });
 
   for (const recipientUserId of approvedRecipientIds) {
@@ -628,9 +668,19 @@ export async function toggleNotificationCommentReaction(formData: FormData) {
       .eq("id", commentId)
       .maybeSingle();
     const actorName = await getActorName(user.id);
+    const commentOwnerUserId =
+      (commentOwner as { user_id: string } | null)?.user_id ?? null;
+
+    logSocialNotificationInfo("comment reaction notification requested", {
+      notificationType: "comment_reactions",
+      actorUserId: user.id,
+      recipientUserId: commentOwnerUserId,
+      commentId,
+      notificationId: comment.notification_id,
+    });
 
     await upsertGroupedUserNotification({
-      recipientUserId: (commentOwner as { user_id: string } | null)?.user_id,
+      recipientUserId: commentOwnerUserId,
       actorUserId: user.id,
       actorName,
       notificationType: "comment_reactions",

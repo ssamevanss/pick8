@@ -44,6 +44,7 @@ type AdminMaintenanceCardsProps = {
   externalResultSyncSummary: ExternalResultSyncSummary;
   recalculateAction: () => void;
   rescoreAction?: () => void;
+  testNotificationAction?: () => void;
 };
 
 function getSeverityClass(severity: HealthSeverity) {
@@ -80,6 +81,7 @@ export default function AdminMaintenanceCards({
   externalResultSyncSummary,
   recalculateAction,
   rescoreAction,
+  testNotificationAction,
 }: AdminMaintenanceCardsProps) {
   return (
     <section className="mt-6 space-y-6">
@@ -268,6 +270,25 @@ export default function AdminMaintenanceCards({
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+        <h2 className="text-xl font-semibold">Social inbox diagnostics</h2>
+        <p className="mt-2 text-sm text-slate-400">
+          Create a grouped inbox notification for the current admin. Use this
+          to confirm `user_notifications` writes before debugging comments or
+          reactions.
+        </p>
+
+        {testNotificationAction ? (
+          <form action={testNotificationAction} className="mt-4">
+            <SubmitButton
+              idleLabel="Create test notification"
+              pendingLabel="Creating notification..."
+              className="w-full rounded-lg border border-emerald-500/40 px-4 py-3 text-sm font-semibold text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+            />
+          </form>
+        ) : null}
       </div>
 
       <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">

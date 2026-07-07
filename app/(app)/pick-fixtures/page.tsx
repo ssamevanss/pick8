@@ -16,10 +16,14 @@ import {
   getExternalFixtureGroupKey,
 } from "@/utils/external-fixtures";
 import {
+  buildFixtureGroupTimings,
   buildFixtureTimingWindow,
   formatTimingWindow,
+  getSpecialFixtureCutoff,
+  isKickoffBeforeSpecialFixtureCutoff,
   isKickoffOutsideTimingWindow,
 } from "@/utils/fixture-timing-window";
+import { canBrowseOtherCompetitions } from "@/utils/football-competitions";
 import { saveExternalPickerFixtures, savePickerFixtures } from "./actions";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -268,8 +272,11 @@ export default async function PickFixturesPage({
     : { data: null };
   const externalCompetitionOptions =
     (competitionRows as ExternalCompetitionOption[] | null) ?? [];
+  const allowOtherCompetitions = canBrowseOtherCompetitions(
+    activeSeasonConfig?.base_competition_code,
+  );
   const competitionOptions =
-    externalCompetitionOptions.length > 0
+    allowOtherCompetitions && externalCompetitionOptions.length > 0
       ? externalCompetitionOptions
       : activeSeasonConfig?.base_competition_code
         ? [
@@ -364,23 +371,6 @@ export default async function PickFixturesPage({
 
   const allExternalFixtureRows =
     (externalFixtures as ExternalFixtureCacheRow[] | null) ?? [];
-  const selectableExternalFixtureRows = allExternalFixtureRows.filter(
-    (fixture) =>
-      !externalFixtureUsedInAnotherGameweek.has(
-        `${fixture.provider}:${fixture.external_fixture_id}`,
-      ) || currentExternalFixtureIds.has(fixture.external_fixture_id),
-  );
-  const externalFixtureGroups = groupExternalFixtures(
-    selectableExternalFixtureRows,
-  );
-  const selectedExternalGroup =
-    externalFixtureGroups.find((group) =>
-      group.fixtures.some((fixture) =>
-        currentExternalFixtureIds.has(fixture.external_fixture_id),
-      ),
-    ) ??
-    externalFixtureGroups[0] ??
-    null;
   const baseExternalFixtureRows =
     (baseCompetitionFixtureRows as ExternalFixtureCacheRow[] | null) ?? [];
   const baseExternalGroups = groupExternalFixtures(baseExternalFixtureRows);
@@ -391,6 +381,47 @@ export default async function PickFixturesPage({
       ),
     ) ??
     baseExternalGroups[0] ??
+    null;
+  const baseGroupTimings = buildFixtureGroupTimings(baseExternalFixtureRows);
+  const currentBaseGroupKey = baseTimingGroup
+    ? getExternalFixtureGroupKey(baseTimingGroup.fixtures[0])
+    : null;
+  const specialFixtureCutoff =
+    allowOtherCompetitions && !isBaseCompetition
+      ? getSpecialFixtureCutoff({
+          baseGroups: baseGroupTimings,
+          currentGroupKey: currentBaseGroupKey,
+        })
+      : null;
+  const crossCompetitionFilteredExternalFixtureRows =
+    allowOtherCompetitions && !isBaseCompetition
+      ? allExternalFixtureRows.filter((fixture) =>
+          isKickoffBeforeSpecialFixtureCutoff({
+            kickoffAt: fixture.kickoff_at,
+            cutoff: specialFixtureCutoff,
+          }),
+        )
+      : allExternalFixtureRows;
+  const hiddenBySpecialFixtureCutoffCount =
+    allExternalFixtureRows.length -
+    crossCompetitionFilteredExternalFixtureRows.length;
+  const selectableExternalFixtureRows =
+    crossCompetitionFilteredExternalFixtureRows.filter(
+      (fixture) =>
+        !externalFixtureUsedInAnotherGameweek.has(
+          `${fixture.provider}:${fixture.external_fixture_id}`,
+        ) || currentExternalFixtureIds.has(fixture.external_fixture_id),
+    );
+  const externalFixtureGroups = groupExternalFixtures(
+    selectableExternalFixtureRows,
+  );
+  const selectedExternalGroup =
+    externalFixtureGroups.find((group) =>
+      group.fixtures.some((fixture) =>
+        currentExternalFixtureIds.has(fixture.external_fixture_id),
+      ),
+    ) ??
+    externalFixtureGroups[0] ??
     null;
   const timingWindow = buildFixtureTimingWindow({
     selectedFixtureKickoffs: fixtureList.map((fixture) => fixture.kickoff_at),
@@ -601,7 +632,7 @@ export default async function PickFixturesPage({
               </span>
             </div>
 
-            {competitionOptions.length > 1 ? (
+            {allowOtherCompetitions && competitionOptions.length > 1 ? (
               <form className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]" action="/pick-fixtures">
                 <input type="hidden" name="gameweek" value={selectedGameweek.id} />
                 <label className="min-w-0">
@@ -638,6 +669,18 @@ export default async function PickFixturesPage({
             {!externalFixturesError && allExternalFixtureRows.length === 0 ? (
               <p className="brand-alert-warning mt-4">
                 No upcoming fixtures are available for this competition.
+              </p>
+            ) : null}
+
+            {hiddenBySpecialFixtureCutoffCount > 0 ? (
+              <p className="brand-alert-warning mt-4">
+                {hiddenBySpecialFixtureCutoffCount} fixture
+                {hiddenBySpecialFixtureCutoffCount === 1 ? "" : "s"} hidden:
+                too close to the next{" "}
+                {activeSeasonConfig?.base_competition_name ??
+                  activeSeasonConfig?.base_competition_code ??
+                  "base league"}{" "}
+                gameweek.
               </p>
             ) : null}
 
@@ -785,7 +828,7 @@ export default async function PickFixturesPage({
           </section>
         ) : null}
 
-        {showFixtureEditor ? (
+        {showFixtureEditor && !externalFixturesConfigured ? (
           <details
           className={
             externalModeAvailable

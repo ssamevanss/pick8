@@ -14,7 +14,10 @@ import {
 } from "@/utils/email-notifications";
 import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
 import { generateLeagueFactNotifications } from "@/utils/league-facts";
-import { getFootballDataCompetitionOption } from "@/utils/football-competitions";
+import {
+  canBrowseOtherCompetitions,
+  getFootballDataCompetitionOption,
+} from "@/utils/football-competitions";
 import {
   buildLocalFixtureFromExternal,
   getExternalFixtureGroupKey,
@@ -22,12 +25,16 @@ import {
   type ExternalFixtureRow,
 } from "@/utils/external-fixtures";
 import {
+  buildFixtureGroupTimings,
   buildFixtureTimingWindow,
+  getSpecialFixtureCutoff,
+  isKickoffBeforeSpecialFixtureCutoff,
   isKickoffOutsideTimingWindow,
 } from "@/utils/fixture-timing-window";
 import {
   calculatePredictionPoints,
 } from "@/utils/provisional-scoring";
+import { upsertGroupedUserNotification } from "@/utils/user-notifications";
 
 type SupabaseLikeClient =
   | Awaited<ReturnType<typeof createClient>>
@@ -58,6 +65,12 @@ type ActiveSeasonExternalConfig = {
 
 type FixtureKickoffRow = {
   id: string;
+  kickoff_at: string;
+};
+
+type ExternalGroupTimingRow = {
+  external_matchday: number | null;
+  external_stage: string | null;
   kickoff_at: string;
 };
 
@@ -512,6 +525,32 @@ export async function rescoreActiveSeasonAndRecalculateLeaderboard() {
   redirect("/admin?tab=maintenance&saved=1");
 }
 
+export async function createMaintenanceTestNotification() {
+  const { user } = await requireAdmin();
+
+  await upsertGroupedUserNotification({
+    recipientUserId: user.id,
+    actorUserId: "maintenance-test",
+    actorName: "Maintenance",
+    notificationType: "maintenance_test",
+    targetType: "diagnostic",
+    targetId: `admin:${user.id}`,
+    title: "Test notification",
+    bodySingular: () => "Maintenance created a test inbox notification.",
+    bodyGrouped: () => "Maintenance created a test inbox notification.",
+    metadata: {
+      targetHref: "/dashboard",
+      source: "admin-maintenance",
+      createdBy: user.id,
+    },
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+
+  redirect("/admin?tab=maintenance&saved=1");
+}
+
 export async function createGameweekWithFixtures(formData: FormData) {
   const { supabase, user } = await requireAdmin();
 
@@ -717,14 +756,16 @@ export async function addFixtureToGameweek(formData: FormData) {
 
   const { data: activeSeason } = await getActiveSeason(
     supabase,
-    "base_competition_code",
+    "base_competition_code, base_competition_name",
   );
+  const activeSeasonCompetition = activeSeason as {
+    base_competition_code: string | null;
+    base_competition_name: string | null;
+  } | null;
   const timingWindow = await getAdminGameweekTimingWindow({
     supabase,
     gameweekId,
-    baseCompetitionCode:
-      (activeSeason as { base_competition_code: string | null } | null)
-        ?.base_competition_code ?? null,
+    baseCompetitionCode: activeSeasonCompetition?.base_competition_code ?? null,
   });
 
   if (
@@ -736,6 +777,52 @@ export async function addFixtureToGameweek(formData: FormData) {
         "This fixture is outside the usual gameweek window. Tick \"Add it anyway\" to confirm.",
       )}`,
     );
+  }
+
+  const normalizedCompetition = competition.toLowerCase();
+  const normalizedBaseCompetitionCode =
+    activeSeasonCompetition?.base_competition_code?.toLowerCase() ?? null;
+  const normalizedBaseCompetitionName =
+    activeSeasonCompetition?.base_competition_name?.toLowerCase() ?? null;
+  const isManualBaseCompetition =
+    normalizedCompetition === normalizedBaseCompetitionCode ||
+    normalizedCompetition === normalizedBaseCompetitionName;
+
+  if (
+    activeSeasonCompetition?.base_competition_code &&
+    canBrowseOtherCompetitions(activeSeasonCompetition.base_competition_code) &&
+    !isManualBaseCompetition
+  ) {
+    const { data: baseFixturesForCutoff } = await supabase
+      .from("external_fixtures")
+      .select("external_matchday, external_stage, kickoff_at")
+      .eq("provider", "football_data")
+      .eq(
+        "external_competition_code",
+        activeSeasonCompetition.base_competition_code,
+      )
+      .in("status", ["TIMED", "SCHEDULED"])
+      .gt("kickoff_at", new Date().toISOString())
+      .order("kickoff_at", { ascending: true });
+    const specialFixtureCutoff = getSpecialFixtureCutoff({
+      baseGroups: buildFixtureGroupTimings(
+        (baseFixturesForCutoff as ExternalGroupTimingRow[] | null) ?? [],
+      ),
+      currentGroupKey: null,
+    });
+
+    if (
+      !isKickoffBeforeSpecialFixtureCutoff({
+        kickoffAt,
+        cutoff: specialFixtureCutoff,
+      })
+    ) {
+      redirect(
+        `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+          "This special fixture is too close to the next base-league gameweek",
+        )}`,
+      );
+    }
   }
 
   const { error } = await supabase.from("fixtures").insert({
@@ -898,6 +985,20 @@ export async function addExternalFixturesToGameweek(formData: FormData) {
     );
   }
 
+  const allowOtherCompetitions = canBrowseOtherCompetitions(
+    activeSeasonConfig.base_competition_code,
+  );
+  const isBaseCompetition =
+    selectedCompetitionCode === activeSeasonConfig.base_competition_code;
+
+  if (!allowOtherCompetitions && !isBaseCompetition) {
+    redirect(
+      `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
+        "This tournament season only allows cached fixtures from the base competition",
+      )}`,
+    );
+  }
+
   const { data: externalFixtures, error: externalFixturesError } = await supabase
     .from("external_fixtures")
     .select(
@@ -959,6 +1060,38 @@ export async function addExternalFixturesToGameweek(formData: FormData) {
         "One or more selected fixtures is outside the usual gameweek window. Tick \"Add it anyway\" to confirm.",
       )}`,
     );
+  }
+
+  if (allowOtherCompetitions && !isBaseCompetition) {
+    const { data: baseFixturesForCutoff } = await supabase
+      .from("external_fixtures")
+      .select("external_matchday, external_stage, kickoff_at")
+      .eq("provider", "football_data")
+      .eq("external_competition_code", activeSeasonConfig.base_competition_code)
+      .in("status", ["TIMED", "SCHEDULED"])
+      .gt("kickoff_at", new Date().toISOString())
+      .order("kickoff_at", { ascending: true });
+    const specialFixtureCutoff = getSpecialFixtureCutoff({
+      baseGroups: buildFixtureGroupTimings(
+        (baseFixturesForCutoff as ExternalGroupTimingRow[] | null) ?? [],
+      ),
+      currentGroupKey: null,
+    });
+    const ineligibleSpecialFixture = externalFixtureList.find(
+      (fixture) =>
+        !isKickoffBeforeSpecialFixtureCutoff({
+          kickoffAt: fixture.kickoff_at,
+          cutoff: specialFixtureCutoff,
+        }),
+    );
+
+    if (ineligibleSpecialFixture) {
+      redirect(
+        `/admin?tab=fixtures&gameweek=${gameweekId}&competition=${selectedCompetitionCode}&error=${encodeURIComponent(
+          "One or more selected fixtures is too close to the next base-league gameweek",
+        )}`,
+      );
+    }
   }
 
   const { data: seasonGameweeks } = await supabase

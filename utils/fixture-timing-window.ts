@@ -96,3 +96,102 @@ export function formatTimingWindow(timingWindow: FixtureTimingWindow) {
 
   return `${start} to ${end}`;
 }
+
+export type FixtureGroupTimingRow = {
+  external_matchday: number | null;
+  external_stage?: string | null;
+  kickoff_at: string;
+};
+
+export type FixtureGroupTiming = {
+  key: string;
+  firstKickoffAt: string;
+  lastKickoffAt: string;
+};
+
+function getFixtureGroupKey(fixture: FixtureGroupTimingRow) {
+  if (fixture.external_matchday !== null) {
+    return `matchday:${fixture.external_matchday}`;
+  }
+
+  if (fixture.external_stage) {
+    return `stage:${fixture.external_stage}`;
+  }
+
+  return `date:${fixture.kickoff_at.slice(0, 10)}`;
+}
+
+export function buildFixtureGroupTimings(
+  fixtures: FixtureGroupTimingRow[],
+): FixtureGroupTiming[] {
+  const groups = new Map<string, string[]>();
+
+  for (const fixture of fixtures) {
+    const key = getFixtureGroupKey(fixture);
+    groups.set(key, [...(groups.get(key) ?? []), fixture.kickoff_at]);
+  }
+
+  return [...groups.entries()]
+    .flatMap(([key, kickoffs]) => {
+      const sortedKickoffs = kickoffs
+        .map((kickoff) => new Date(kickoff).getTime())
+        .filter((kickoff) => Number.isFinite(kickoff))
+        .sort((a, b) => a - b);
+
+      if (sortedKickoffs.length === 0) {
+        return [];
+      }
+
+      return {
+        key,
+        firstKickoffAt: new Date(sortedKickoffs[0]).toISOString(),
+        lastKickoffAt: new Date(
+          sortedKickoffs[sortedKickoffs.length - 1],
+        ).toISOString(),
+      };
+    })
+    .sort(
+      (a, b) =>
+        new Date(a.firstKickoffAt).getTime() -
+        new Date(b.firstKickoffAt).getTime(),
+    );
+}
+
+export function getSpecialFixtureCutoff({
+  baseGroups,
+  currentGroupKey,
+}: {
+  baseGroups: FixtureGroupTiming[];
+  currentGroupKey: string | null;
+}) {
+  if (baseGroups.length < 2) {
+    return null;
+  }
+
+  const currentIndex = currentGroupKey
+    ? baseGroups.findIndex((group) => group.key === currentGroupKey)
+    : 0;
+  const nextGroup = baseGroups[(currentIndex >= 0 ? currentIndex : 0) + 1];
+
+  if (!nextGroup) {
+    return null;
+  }
+
+  return new Date(
+    new Date(nextGroup.firstKickoffAt).getTime() - 24 * 60 * 60 * 1000,
+  ).toISOString();
+}
+
+export function isKickoffBeforeSpecialFixtureCutoff({
+  kickoffAt,
+  cutoff,
+}: {
+  kickoffAt: string;
+  cutoff: string | null;
+}) {
+  if (!cutoff) {
+    return true;
+  }
+
+  return new Date(kickoffAt).getTime() < new Date(cutoff).getTime();
+}

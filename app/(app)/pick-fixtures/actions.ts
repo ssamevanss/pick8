@@ -15,9 +15,13 @@ import {
   type ExternalFixtureRow,
 } from "@/utils/external-fixtures";
 import {
+  buildFixtureGroupTimings,
   buildFixtureTimingWindow,
+  getSpecialFixtureCutoff,
+  isKickoffBeforeSpecialFixtureCutoff,
   isKickoffOutsideTimingWindow,
 } from "@/utils/fixture-timing-window";
+import { canBrowseOtherCompetitions } from "@/utils/football-competitions";
 
 const slotNumbers = [1, 2, 3, 4];
 
@@ -35,6 +39,12 @@ type ActiveSeasonExternalConfig = {
 
 type FixtureKickoffRow = {
   id: string;
+  kickoff_at: string;
+};
+
+type ExternalGroupTimingRow = {
+  external_matchday: number | null;
+  external_stage: string | null;
   kickoff_at: string;
 };
 
@@ -467,6 +477,20 @@ export async function saveExternalPickerFixtures(formData: FormData) {
     );
   }
 
+  const allowOtherCompetitions = canBrowseOtherCompetitions(
+    activeSeasonConfig.base_competition_code,
+  );
+  const isBaseCompetition =
+    selectedCompetitionCode === activeSeasonConfig.base_competition_code;
+
+  if (!allowOtherCompetitions && !isBaseCompetition) {
+    redirect(
+      `/pick-fixtures?gameweek=${gameweekId}&error=${encodeURIComponent(
+        "This tournament season only allows fixtures from the base competition",
+      )}`,
+    );
+  }
+
   const { data: currentFixtures } = await supabase
     .from("fixtures")
     .select("id")
@@ -544,6 +568,43 @@ export async function saveExternalPickerFixtures(formData: FormData) {
         "One or more selected fixtures is outside the usual gameweek window. Tick \"Add it anyway\" to confirm.",
       )}`,
     );
+  }
+
+  let specialFixtureCutoff: string | null = null;
+
+  if (allowOtherCompetitions && !isBaseCompetition) {
+    const { data: baseFixturesForCutoff } = await supabase
+      .from("external_fixtures")
+      .select("external_matchday, external_stage, kickoff_at")
+      .eq("provider", "football_data")
+      .eq("external_competition_code", activeSeasonConfig.base_competition_code)
+      .in("status", ["TIMED", "SCHEDULED"])
+      .gt("kickoff_at", new Date().toISOString())
+      .order("kickoff_at", { ascending: true });
+    const baseGroupTimings = buildFixtureGroupTimings(
+      (baseFixturesForCutoff as ExternalGroupTimingRow[] | null) ?? [],
+    );
+    const currentBaseGroupKey =
+      baseGroupTimings[0]?.key ?? null;
+    specialFixtureCutoff = getSpecialFixtureCutoff({
+      baseGroups: baseGroupTimings,
+      currentGroupKey: currentBaseGroupKey,
+    });
+    const ineligibleSpecialFixture = externalFixtureList.find(
+      (fixture) =>
+        !isKickoffBeforeSpecialFixtureCutoff({
+          kickoffAt: fixture.kickoff_at,
+          cutoff: specialFixtureCutoff,
+        }),
+    );
+
+    if (ineligibleSpecialFixture) {
+      redirect(
+        `/pick-fixtures?gameweek=${gameweekId}&competition=${selectedCompetitionCode}&error=${encodeURIComponent(
+          "One or more selected fixtures is too close to the next base-league gameweek",
+        )}`,
+      );
+    }
   }
 
   const selectedGroupKeys = [
@@ -636,7 +697,13 @@ export async function saveExternalPickerFixtures(formData: FormData) {
   ).filter(
     (fixture) =>
       getExternalFixtureGroupKey(fixture) === selectedGroupKey &&
-      !duplicateExternalIdsInAnotherGameweek.has(fixture.external_fixture_id),
+      !duplicateExternalIdsInAnotherGameweek.has(fixture.external_fixture_id) &&
+      (isBaseCompetition ||
+        !allowOtherCompetitions ||
+        isKickoffBeforeSpecialFixtureCutoff({
+          kickoffAt: fixture.kickoff_at,
+          cutoff: specialFixtureCutoff,
+        })),
   ).length;
   const expectedPickCount = getExpectedExternalPickCount(
     selectableGroupFixtureCount,

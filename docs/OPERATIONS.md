@@ -541,6 +541,59 @@ Social notification inbox:
 - Current direct-actor detection covers prediction owners, comment owners, and
   fixture-picker activity owners. Richer named-player extraction from highlight
   text can be added later if needed.
+- If a social action writes the source reaction/comment but no inbox row appears,
+  check server logs for `[user-notifications]` errors. The grouped inbox helper
+  logs recipient lookup and `user_notifications` insert/update failures without
+  exposing secrets.
+- Admin Maintenance includes a Social inbox diagnostics card. Use Create test
+  notification to insert a grouped `maintenance_test` row for the current admin
+  before debugging social actions.
+- Useful Vercel log markers:
+  - `[user-notifications] activity comment notifications requested`
+  - `[user-notifications] prediction reaction notification requested`
+  - `[user-notifications] comment reaction notification requested`
+  - `[user-notifications] activity reaction notification requested`
+  - `[user-notifications] creating`
+  - `[user-notifications] notification inserted`
+  - `[user-notifications] notification updated`
+  - `[user-notifications] notification insert failed`
+  - `[user-notifications] skipped missing participant`
+  - `[user-notifications] skipped self notification`
+
+Debug recent inbox rows:
+
+```sql
+select
+  id,
+  user_id,
+  notification_type,
+  grouping_key,
+  read_at,
+  created_at,
+  updated_at,
+  metadata
+from public.user_notifications
+order by updated_at desc
+limit 50;
+```
+
+Debug unread counts by user:
+
+```sql
+select
+  p.id,
+  p.display_name,
+  p.email,
+  p.status,
+  p.role,
+  count(un.id) as total_notifications,
+  count(*) filter (where un.read_at is null) as unread_notifications
+from public.profiles p
+left join public.user_notifications un
+  on un.user_id = p.id
+group by p.id, p.display_name, p.email, p.status, p.role
+order by p.display_name;
+```
 
 Expected full PL season volume for 30 players and 38 gameweeks:
 

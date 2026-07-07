@@ -5,6 +5,11 @@ export type FootballCompetitionOption = {
   external_competition_id: string;
 };
 
+export type SeasonCompetitionMode = "league" | "tournament";
+
+const leagueCompetitionCodes = new Set(["PL", "PD", "SA", "BL1", "FL1"]);
+const tournamentCompetitionCodes = new Set(["WC", "EC", "EURO"]);
+
 export const footballDataCompetitionOptions: FootballCompetitionOption[] = [
   {
     provider: "football_data",
@@ -48,4 +53,28 @@ export function getFootballDataCompetitionOption(code: string) {
   return footballDataCompetitionOptions.find(
     (option) => option.external_competition_code === code,
   );
+}
+
+export function getSeasonCompetitionMode(
+  competitionCode: string | null | undefined,
+): SeasonCompetitionMode {
+  if (!competitionCode) {
+    return "tournament";
+  }
+
+  if (leagueCompetitionCodes.has(competitionCode)) {
+    return "league";
+  }
+
+  if (tournamentCompetitionCodes.has(competitionCode)) {
+    return "tournament";
+  }
+
+  return "tournament";
+}
+
+export function canBrowseOtherCompetitions(
+  competitionCode: string | null | undefined,
+) {
+  return getSeasonCompetitionMode(competitionCode) === "league";
 }

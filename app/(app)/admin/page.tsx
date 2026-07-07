@@ -31,6 +31,7 @@ import {
   updateSeasonArchiveVisibility,
   updateActiveSeasonProviderSettings,
   deleteSeason,
+  createMaintenanceTestNotification,
   recalculateActiveSeasonLeaderboard,
   rescoreActiveSeasonAndRecalculateLeaderboard,
 } from "./actions";
@@ -53,6 +54,7 @@ import AdminMaintenanceCards, {
   type ReminderReadinessRow,
 } from "@/components/admin/AdminMaintenanceCards";
 import {
+  canBrowseOtherCompetitions,
   footballDataCompetitionOptions,
   getFootballDataCompetitionOption,
   type FootballCompetitionOption,
@@ -60,7 +62,10 @@ import {
 import { getExternalFixtureGroupKey } from "@/utils/external-fixtures";
 import {
   buildFixtureTimingWindow,
+  buildFixtureGroupTimings,
   formatTimingWindow,
+  getSpecialFixtureCutoff,
+  isKickoffBeforeSpecialFixtureCutoff,
 } from "@/utils/fixture-timing-window";
 
 type Profile = {
@@ -567,17 +572,27 @@ export default async function AdminPage({
   const adminExternalFixturesConfigured =
     activeSeasonExternalConfig?.base_provider === "football_data" &&
     Boolean(activeSeasonExternalConfig.base_competition_code);
+  const adminAllowOtherCompetitions = canBrowseOtherCompetitions(
+    activeSeasonExternalConfig?.base_competition_code,
+  );
+  const adminCompetitionOptions = adminAllowOtherCompetitions
+    ? seasonSettingsCompetitionOptions
+    : seasonSettingsCompetitionOptions.filter(
+        (competition) =>
+          competition.external_competition_code ===
+          activeSeasonExternalConfig?.base_competition_code,
+      );
   const selectedAdminCompetition =
-    seasonSettingsCompetitionOptions.find(
+    adminCompetitionOptions.find(
       (competition) =>
         competition.external_competition_code === params.competition,
     ) ??
-    seasonSettingsCompetitionOptions.find(
+    adminCompetitionOptions.find(
       (competition) =>
         competition.external_competition_code ===
         activeSeasonExternalConfig?.base_competition_code,
     ) ??
-    seasonSettingsCompetitionOptions[0] ??
+    adminCompetitionOptions[0] ??
     null;
   const selectedAdminCompetitionCode =
     selectedAdminCompetition?.external_competition_code ??
@@ -639,6 +654,18 @@ export default async function AdminPage({
   const adminTimingWindowText = adminTimingWindow
     ? formatTimingWindow(adminTimingWindow)
     : null;
+  const adminBaseGroupTimings = buildFixtureGroupTimings(adminBaseRows);
+  const adminCurrentBaseGroupKey = adminBaseFirstGroupKey;
+  const adminIsBaseCompetition =
+    selectedAdminCompetitionCode ===
+    activeSeasonExternalConfig?.base_competition_code;
+  const adminSpecialFixtureCutoff =
+    adminAllowOtherCompetitions && !adminIsBaseCompetition
+      ? getSpecialFixtureCutoff({
+          baseGroups: adminBaseGroupTimings,
+          currentGroupKey: adminCurrentBaseGroupKey,
+        })
+      : null;
   const externalFixtureUsage = new Map<string, string>();
 
   for (const fixture of activeSeasonFixtures) {
@@ -664,6 +691,17 @@ export default async function AdminPage({
       ? "Already selected for this gameweek"
       : usedGameweekId
         ? "Already selected in another gameweek"
+        : adminAllowOtherCompetitions &&
+            !adminIsBaseCompetition &&
+            !isKickoffBeforeSpecialFixtureCutoff({
+              kickoffAt: fixture.kickoff_at,
+              cutoff: adminSpecialFixtureCutoff,
+            })
+          ? `Too close to the next ${
+              activeSeasonExternalConfig?.base_competition_name ??
+              activeSeasonExternalConfig?.base_competition_code ??
+              "base league"
+            } gameweek`
         : null;
 
     return {
@@ -967,7 +1005,7 @@ export default async function AdminPage({
               baseCompetitionCode={
                 activeSeasonExternalConfig?.base_competition_code ?? null
               }
-              competitionOptions={seasonSettingsCompetitionOptions}
+              competitionOptions={adminCompetitionOptions}
               timingWindowText={adminTimingWindowText}
               timingWindow={adminTimingWindow}
               fixtures={adminExternalFixtureOptions}
@@ -1167,6 +1205,7 @@ export default async function AdminPage({
           externalResultSyncSummary={externalResultSyncSummary}
           recalculateAction={recalculateActiveSeasonLeaderboard}
           rescoreAction={rescoreActiveSeasonAndRecalculateLeaderboard}
+          testNotificationAction={createMaintenanceTestNotification}
         />
       ) : null}
     </>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactionSummary } from "@/components/predictions/types";
 import { useOptionalToast } from "@/components/toast/ToastProvider";
 
@@ -13,6 +14,14 @@ type EmojiReactionControlsProps = {
   compact?: boolean;
   placement?: "auto" | "top" | "bottom";
   ariaLabel: string;
+};
+
+type PopoverPosition = {
+  top: number;
+  left: number;
+  width: number;
+  side: "top" | "bottom";
+  arrowLeft: number;
 };
 
 function applyOptimisticReaction({
@@ -81,10 +90,8 @@ export default function EmojiReactionControls({
   const toast = useOptionalToast();
   const [isPending, setIsPending] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
-  const [popoverAlign, setPopoverAlign] = useState<"left" | "center" | "right">(
-    "right",
-  );
-  const [popoverSide, setPopoverSide] = useState<"top" | "bottom">("top");
+  const [popoverPosition, setPopoverPosition] =
+    useState<PopoverPosition | null>(null);
   const [optimisticReactions, setOptimisticReactions] = useState<
     ReactionSummary[] | null
   >(null);
@@ -155,39 +162,54 @@ export default function EmojiReactionControls({
     };
   }, [isOpen]);
 
-  function positionPopover() {
-    const wrapper = wrapperRef.current;
+  const calculatePopoverPosition = useCallback((): PopoverPosition | null => {
+    const trigger = triggerRef.current;
 
-    if (!wrapper || typeof window === "undefined") {
-      return;
+    if (!trigger || typeof window === "undefined") {
+      return null;
     }
 
-    const rect = wrapper.getBoundingClientRect();
+    const rect = trigger.getBoundingClientRect();
     const popoverWidth = compact ? 192 : 224;
+    const renderedHeight = popoverRef.current?.offsetHeight;
+    const popoverHeight = renderedHeight && renderedHeight > 0 ? renderedHeight : 44;
     const viewportPadding = 8;
-    const availableAbove = rect.top;
+    const gap = 4;
+    const triggerCenter = rect.left + rect.width / 2;
+    const canOpenAbove = rect.top >= popoverHeight + gap + viewportPadding;
+    const shouldOpenBelow =
+      placement === "bottom" || (!canOpenAbove && placement !== "top");
+    const side: "top" | "bottom" = shouldOpenBelow ? "bottom" : "top";
+    const unclampedLeft = triggerCenter - popoverWidth / 2;
+    const maxLeft = Math.max(
+      viewportPadding,
+      window.innerWidth - popoverWidth - viewportPadding,
+    );
+    const left = Math.min(Math.max(viewportPadding, unclampedLeft), maxLeft);
+    const top =
+      side === "top"
+        ? Math.max(viewportPadding, rect.top - popoverHeight - gap)
+        : Math.min(
+            window.innerHeight - popoverHeight - viewportPadding,
+            rect.bottom + gap,
+          );
+    const arrowLeft = Math.min(
+      Math.max(14, triggerCenter - left),
+      popoverWidth - 14,
+    );
 
-    if (
-      placement === "bottom" ||
-      (placement === "auto" && availableAbove < 52)
-    ) {
-      setPopoverSide("bottom");
-    } else {
-      setPopoverSide("top");
-    }
+    return {
+      top,
+      left,
+      width: popoverWidth,
+      side,
+      arrowLeft,
+    };
+  }, [compact, placement]);
 
-    if (rect.left + popoverWidth > window.innerWidth - viewportPadding) {
-      setPopoverAlign("right");
-      return;
-    }
-
-    if (rect.right - popoverWidth < viewportPadding) {
-      setPopoverAlign("left");
-      return;
-    }
-
-    setPopoverAlign("center");
-  }
+  const updatePopoverPosition = useCallback(() => {
+    setPopoverPosition(calculatePopoverPosition());
+  }, [calculatePopoverPosition]);
 
   function togglePopover() {
     if (isOpen) {
@@ -195,9 +217,29 @@ export default function EmojiReactionControls({
       return;
     }
 
-    positionPopover();
+    setPopoverPosition(calculatePopoverPosition());
     setIsOpen(true);
   }
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function handleViewportChange() {
+      updatePopoverPosition();
+    }
+
+    const frame = window.requestAnimationFrame(handleViewportChange);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [isOpen, updatePopoverPosition]);
 
   async function submitReaction(emoji: string) {
     const previousReactions = displayedReactions;
@@ -308,34 +350,25 @@ export default function EmojiReactionControls({
         </button>
       ) : null}
 
-      {isOpen ? (
-        <div
-          ref={popoverRef}
-          className={`absolute z-50 box-border flex items-center gap-0.5 rounded-xl border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl shadow-black/40 ring-1 ring-emerald-300/10 ${
-            compact ? "w-48" : "w-56"
-          } max-w-[calc(100vw-1rem)] ${
-            popoverSide === "top" ? "bottom-full mb-1" : "top-full mt-1"
-          } ${
-            popoverAlign === "left"
-              ? "left-0"
-              : popoverAlign === "center"
-                ? "left-1/2 -translate-x-1/2"
-                : "right-0"
-          }`}
-          aria-label={ariaLabel}
-        >
+      {isOpen && popoverPosition
+        ? createPortal(
+            <div
+              ref={popoverRef}
+              className="fixed z-[90] box-border flex max-w-[calc(100vw-1rem)] items-center gap-0.5 rounded-xl border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl shadow-black/50 ring-1 ring-emerald-300/10"
+              style={{
+                top: popoverPosition.top,
+                left: popoverPosition.left,
+                width: popoverPosition.width,
+              }}
+              aria-label={ariaLabel}
+            >
           <span
             className={`pointer-events-none absolute h-2.5 w-2.5 rotate-45 bg-slate-950/95 ${
-              popoverSide === "top"
+              popoverPosition.side === "top"
                 ? "-bottom-1 border-b border-r border-white/10"
                 : "-top-1 border-l border-t border-white/10"
-            } ${
-              popoverAlign === "left"
-                ? "left-3"
-                : popoverAlign === "center"
-                  ? "left-1/2 -translate-x-1/2"
-                  : "right-3"
             }`}
+            style={{ left: popoverPosition.arrowLeft - 5 }}
             aria-hidden="true"
           />
           {EMOJIS.map((emoji) => {
@@ -369,8 +402,10 @@ export default function EmojiReactionControls({
               </button>
             );
           })}
-        </div>
-      ) : null}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

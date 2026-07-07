@@ -68,8 +68,9 @@ export default async function AppLayout({ children }: AppLayoutProps) {
       "id, title, body, read_at, updated_at, notification_type, target_type, target_id, metadata",
     )
     .eq("user_id", user.id)
+    .order("read_at", { ascending: true, nullsFirst: true })
     .order("updated_at", { ascending: false })
-    .limit(20);
+    .limit(30);
   const { count: unreadNotificationCount } = await supabase
     .from("user_notifications")
     .select("id", { count: "exact", head: true })
