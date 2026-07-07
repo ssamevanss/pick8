@@ -626,28 +626,6 @@ export default async function HomePage({
         currentGameweekLabel={currentGameweekLabel}
       />
 
-      {hasLiveGameweekPoints ? (
-        <div className="brand-card mb-3 border-emerald-300/25 bg-emerald-300/10 p-4 sm:flex sm:items-center sm:justify-between sm:gap-4">
-          <div>
-            <p className="text-xs font-black uppercase tracking-wide text-emerald-200">
-              Live GW points
-            </p>
-            <p className="mt-1 text-sm text-slate-300">
-              {liveGameweekPoints} as it stands from {liveFixtureCount} live
-              fixture{liveFixtureCount === 1 ? "" : "s"}. Official points
-              update after full time.
-            </p>
-          </div>
-          <Link
-            href={latestGameweek ? `/predictions?gameweek=${latestGameweek.id}` : "/predictions"}
-            prefetch={false}
-            className="brand-button-secondary mt-3 shrink-0 sm:mt-0"
-          >
-            View live picks
-          </Link>
-        </div>
-      ) : null}
-
       <section className="space-y-3">
         {!activeSeason ? (
           <div className="brand-alert-warning">
@@ -682,7 +660,11 @@ export default async function HomePage({
                     ? `${formatGameweekName(
                         latestGameweek,
                       )} is complete. Check the results and see how everyone scored.`
-                    : "There are no open fixtures accepting predictions for this gameweek. You can review the locked fixtures and predictions."}
+                    : hasLiveGameweekPoints
+                      ? `${liveFixtureCount} fixture${
+                          liveFixtureCount === 1 ? " is" : "s are"
+                        } live. You have ${liveGameweekPoints} live GW points as it stands.`
+                      : "Predictions are locked. Review fixtures and league picks."}
                 </p>
               </div>
               <Link
@@ -690,7 +672,11 @@ export default async function HomePage({
                 prefetch={false}
                 className="brand-button-primary mt-4 shrink-0 sm:mt-0"
               >
-                {latestGameweekComplete ? "View results" : "Review predictions"}
+                {latestGameweekComplete
+                  ? "Review results"
+                  : hasLiveGameweekPoints
+                    ? "View live picks"
+                    : "Review predictions"}
               </Link>
             </div>
           ) : isPredictionComplete ? (

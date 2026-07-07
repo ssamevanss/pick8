@@ -24,7 +24,7 @@ function getPredictionOutcome(prediction: Prediction) {
 
   if (prediction.is_correct_result) {
     return {
-      label: "Result",
+      label: "Correct",
       icon: "✓",
       className: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
     };

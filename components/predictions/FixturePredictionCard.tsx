@@ -389,9 +389,7 @@ function GroupStatusBadge({
       }`}
     >
       {isCorrectGroup
-        ? isLive
-          ? "Live result"
-          : "Result"
+        ? "Result"
         : isLive
           ? "Off track"
           : "Incorrect"}
@@ -537,12 +535,20 @@ export default function FixturePredictionCard({
   const externalSyncedText = hasExternalDisplayScore
     ? formatLastSynced(externalScore?.last_synced_at ?? fixture.external_last_synced_at)
     : null;
-  const liveScoreLabel = hasExternalDisplayScore
-    ? "Live / provisional as it stands"
-    : null;
   const displayedResultType =
     displayedHomeScore !== null && displayedAwayScore !== null
       ? getScoreResult(displayedHomeScore, displayedAwayScore)
+      : null;
+  const ownLiveOutcome =
+    hasExternalDisplayScore && ownPrediction
+      ? calculateProvisionalPredictionScore({
+          predictionHome: ownPrediction.home_score,
+          predictionAway: ownPrediction.away_score,
+          actualHome: displayedHomeScore ?? 0,
+          actualAway: displayedAwayScore ?? 0,
+          usedJoker: !isDoubleGameweek && ownJokerFixtureIdSet.has(fixture.id),
+          isDoubleGameweek,
+        }).outcome
       : null;
 
   const hasJoker = !isDoubleGameweek && ownJokerFixtureIdSet.has(fixture.id);
@@ -634,25 +640,23 @@ export default function FixturePredictionCard({
 
                 <PredictionOutcomeBadge prediction={ownPrediction} />
                 {hasExternalDisplayScore ? (
-                  <span className="inline-flex min-w-24 items-center justify-center rounded-full bg-emerald-300/10 px-2 py-0.5 text-xs font-bold text-emerald-200 ring-1 ring-emerald-300/30">
-                    {
-                      calculateProvisionalPredictionScore({
-                        predictionHome: ownPrediction.home_score,
-                        predictionAway: ownPrediction.away_score,
-                        actualHome: displayedHomeScore ?? 0,
-                        actualAway: displayedAwayScore ?? 0,
-                        usedJoker: hasJoker,
-                        isDoubleGameweek,
-                      }).label
-                    }
+                  <span
+                    className={`inline-flex min-w-24 items-center justify-center rounded-full px-2 py-0.5 text-xs font-bold ring-1 ${
+                      ownLiveOutcome === "exact"
+                        ? "bg-amber-300/10 text-amber-200 ring-amber-300/30"
+                        : ownLiveOutcome === "result"
+                          ? "bg-emerald-300/10 text-emerald-200 ring-emerald-300/30"
+                          : "bg-red-300/10 text-red-200 ring-red-300/30"
+                    }`}
+                  >
+                    {ownLiveOutcome === "exact"
+                      ? "Exact"
+                      : ownLiveOutcome === "result"
+                        ? "Result"
+                        : "Off track"}
                   </span>
                 ) : null}
               </div>
-              {liveScoreLabel ? (
-                <p className="mt-2 text-xs text-slate-400">
-                  {liveScoreLabel}. Official points are applied after full time.
-                </p>
-              ) : null}
             </div>
           ) : (
             <div className="mt-3 border-t border-white/10 pt-3">
