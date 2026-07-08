@@ -17,6 +17,7 @@ type NotificationRow = {
   type: string;
   title: string | null;
   body: string | null;
+  event_key: string | null;
   created_at: string;
   metadata: Record<string, unknown> | null;
   reactions?: ReactionSummary[];
@@ -247,11 +248,6 @@ export default async function HomePage({
         !gameweek.hasPredictions &&
         !gameweek.isClosed &&
         gameweek.isSelectionComplete,
-    ) ?? null;
-
-  const lockedPickerGameweek =
-    pickerStatuses.find(
-      (gameweek) => gameweek.isUnlocked && gameweek.hasPredictions,
     ) ?? null;
 
   const candidateFuturePickerGameweek =
@@ -494,10 +490,9 @@ export default async function HomePage({
   const { data: notifications } = activeSeason
     ? await supabase
         .from("notifications")
-        .select("id, type, title, body, created_at, metadata")
+        .select("id, type, title, body, event_key, created_at, metadata")
         .eq("season_id", activeSeason.id)
         .order("created_at", { ascending: false })
-        .limit(10)
     : { data: [] };
 
   const notificationList = (notifications as NotificationRow[] | null) ?? [];
@@ -839,21 +834,6 @@ export default async function HomePage({
           </div>
         ) : null}
 
-        {!activePickerGameweek &&
-        !submittedPickerGameweek &&
-        !nextFuturePickerGameweek &&
-        lockedPickerGameweek ? (
-          <div className="brand-card p-4">
-            <p className="text-sm font-semibold text-slate-300">Fixtures locked</p>
-            <h2 className="mt-1 text-lg font-bold sm:text-xl">
-              {formatGameweekName(lockedPickerGameweek)} fixtures are locked
-            </h2>
-            <p className="mt-2 text-sm text-slate-400">
-              Predictions have been entered, so the fixture selection is now locked. Ask
-              an admin if anything needs to change.
-            </p>
-          </div>
-        ) : null}
       </section>
 
       {user ? (

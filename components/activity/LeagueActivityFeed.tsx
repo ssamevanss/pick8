@@ -14,6 +14,7 @@ type NotificationRow = {
   type: string;
   title: string | null;
   body: string | null;
+  event_key: string | null;
   created_at: string;
   metadata: ActivityMetadata | null;
   reactions?: ReactionSummary[];
@@ -110,11 +111,23 @@ function formatMovement(movement: number) {
 }
 
 function getActivityTab(notification: NotificationRow): ActivityTab {
+  const eventKey = notification.event_key ?? "";
+  const title = notification.title?.toLowerCase() ?? "";
+  const body = notification.body?.toLowerCase() ?? "";
+  const metadata = notification.metadata ?? {};
+
   if (
     notification.type === "fixtures_selected" ||
     notification.type === "picker_up_next" ||
+    eventKey.startsWith("fixtures_picked:") ||
+    eventKey.startsWith("next_picker:") ||
+    eventKey.startsWith("picker_up_next:") ||
+    Boolean(metadata.pickerName) ||
     notification.type.includes("picker") ||
-    notification.type.includes("fixture")
+    notification.type.includes("fixture") ||
+    title.includes("up next") ||
+    body.includes("pick fixtures") ||
+    body.includes("choose fixtures")
   ) {
     return "picks";
   }
