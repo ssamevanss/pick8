@@ -3,6 +3,7 @@ export type TeamAsset = {
   assetPath?: string;
   initials: string;
   tone: "country" | "club" | "fallback";
+  isRemote?: boolean;
 };
 
 const teamAssets: Record<string, TeamAsset> = {
@@ -28,6 +29,18 @@ const teamAssets: Record<string, TeamAsset> = {
     label: "England",
     assetPath: "/team-assets/flags/england.svg",
     initials: "ENG",
+    tone: "country",
+  },
+  france: {
+    label: "France",
+    assetPath: "/team-assets/flags/france.svg",
+    initials: "FRA",
+    tone: "country",
+  },
+  morocco: {
+    label: "Morocco",
+    assetPath: "/team-assets/flags/morocco.svg",
+    initials: "MAR",
     tone: "country",
   },
   colombia: {
@@ -159,7 +172,53 @@ const teamAssets: Record<string, TeamAsset> = {
   },
 };
 
-// To add a future team asset, place the SVG in public/team-assets/flags or
+const teamAliases: Record<string, string> = {
+  usa: "united states",
+  usmnt: "united states",
+  "u.s.a.": "united states",
+  "brighton and hove albion": "brighton & hove albion",
+  wolves: "wolverhampton wanderers",
+  spurs: "tottenham hotspur",
+  "west ham": "west ham united",
+  "newcastle": "newcastle united",
+};
+
+const teamCodeAliases: Record<string, string> = {
+  ARG: "argentina",
+  BEL: "belgium",
+  BRA: "brazil",
+  COL: "colombia",
+  EGY: "egypt",
+  ENG: "england",
+  ESP: "spain",
+  FRA: "france",
+  MAR: "morocco",
+  MEX: "mexico",
+  NOR: "norway",
+  POR: "portugal",
+  SUI: "switzerland",
+  USA: "united states",
+  BOU: "afc bournemouth",
+  AVL: "aston villa",
+  BHA: "brighton & hove albion",
+  BUR: "burnley",
+  FUL: "fulham",
+  LIV: "liverpool",
+  MCI: "manchester city",
+  NEW: "newcastle united",
+  SUN: "sunderland",
+  TOT: "tottenham hotspur",
+  WHU: "west ham united",
+  WOL: "wolverhampton wanderers",
+};
+
+type TeamAssetInput = {
+  teamName: string;
+  teamCode?: string | null;
+  crestUrl?: string | null;
+};
+
+// To add a future local team asset, place the SVG in public/team-assets/flags or
 // public/team-assets/crests, then add a normalized provider team-name key here.
 function normalizeTeamName(teamName: string) {
   return teamName
@@ -168,6 +227,19 @@ function normalizeTeamName(teamName: string) {
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isSafeProviderCrestUrl(value: string | null | undefined) {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.endsWith("football-data.org");
+  } catch {
+    return false;
+  }
 }
 
 function getInitials(teamName: string) {
@@ -186,12 +258,27 @@ function getInitials(teamName: string) {
     .join("");
 }
 
-export function getTeamAsset(teamName: string): TeamAsset {
+export function getTeamAsset(input: string | TeamAssetInput): TeamAsset {
+  const teamName = typeof input === "string" ? input : input.teamName;
+  const teamCode = typeof input === "string" ? null : input.teamCode;
+  const crestUrl = typeof input === "string" ? null : input.crestUrl;
   const normalized = normalizeTeamName(teamName);
-  const asset = teamAssets[normalized];
+  const aliasKey = teamAliases[normalized] ?? normalized;
+  const codeKey = teamCode ? teamCodeAliases[teamCode.toUpperCase()] : null;
+  const asset = teamAssets[aliasKey] ?? (codeKey ? teamAssets[codeKey] : null);
 
   if (asset) {
     return asset;
+  }
+
+  if (isSafeProviderCrestUrl(crestUrl)) {
+    return {
+      label: teamName,
+      assetPath: crestUrl ?? undefined,
+      initials: teamCode?.toUpperCase() ?? getInitials(teamName),
+      tone: "club",
+      isRemote: true,
+    };
   }
 
   return {

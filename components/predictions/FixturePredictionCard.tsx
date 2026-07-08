@@ -1,6 +1,7 @@
 import PredictionOutcomeBadge from "./PredictionOutcomeBadge";
 import TeamIdentity from "./TeamIdentity";
 import EmojiReactionControls from "@/components/social/EmojiReactionControls";
+import { getFixtureContextLabel } from "@/utils/fixture-context";
 import { togglePredictionReaction } from "@/utils/social-actions";
 import {
   calculateProvisionalPredictionScore,
@@ -265,7 +266,13 @@ function PredictionSplit({
           <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
             {segments.map((segment) => (
               <div key={segment.key} className="rounded-lg bg-slate-900/70 p-2">
-                <p className="font-bold text-white">{segment.label}</p>
+                <p className="flex items-center gap-1.5 font-bold text-white">
+                  <span
+                    className={`h-2 w-2 rounded-full ${segment.className}`}
+                    aria-hidden="true"
+                  />
+                  {segment.label}
+                </p>
                 <p className="mt-1 text-slate-400">
                   {segment.percentage}% · {segment.count}
                 </p>
@@ -579,6 +586,12 @@ export default function FixturePredictionCard({
       ),
     },
   ].filter((group) => group.predictions.length > 0);
+  const fixtureContextLabel = getFixtureContextLabel({
+    competitionCode: fixture.external_competition_code,
+    externalRound: fixture.external_round,
+    externalStage: fixture.external_stage,
+    externalMatchday: fixture.external_matchday,
+  });
 
   return (
     <div id={`fixture-${fixture.id}`} className="brand-card-soft scroll-mt-24 p-4">
@@ -586,6 +599,7 @@ export default function FixturePredictionCard({
 
       <p className="text-xs text-slate-500">
         {formatKickoff(fixture.kickoff_at)} · {fixture.competition}
+        {fixtureContextLabel ? ` · ${fixtureContextLabel}` : ""}
       </p>
 
       {isLocked ? (

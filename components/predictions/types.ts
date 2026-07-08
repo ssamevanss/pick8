@@ -10,6 +10,10 @@ export type Fixture = {
   away_score: number | null;
   external_provider?: string | null;
   external_fixture_id?: string | null;
+  external_competition_code?: string | null;
+  external_round?: string | null;
+  external_matchday?: number | null;
+  external_stage?: string | null;
   external_status?: string | null;
   external_last_synced_at?: string | null;
 };

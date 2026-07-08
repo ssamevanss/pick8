@@ -3,16 +3,20 @@ import { getTeamAsset, getTeamShortLabel } from "@/utils/team-assets";
 
 type TeamIdentityProps = {
   teamName: string;
+  teamCode?: string | null;
+  crestUrl?: string | null;
   align?: "left" | "right";
   compact?: boolean;
 };
 
 export default function TeamIdentity({
   teamName,
+  teamCode = null,
+  crestUrl = null,
   align = "left",
   compact = false,
 }: TeamIdentityProps) {
-  const asset = getTeamAsset(teamName);
+  const asset = getTeamAsset({ teamName, teamCode, crestUrl });
   const mobileLabel = getTeamShortLabel(teamName);
   const reverse = align === "right";
 
@@ -28,7 +32,17 @@ export default function TeamIdentity({
         }`}
         aria-hidden="true"
       >
-        {asset.assetPath ? (
+        {asset.assetPath && asset.isRemote ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={asset.assetPath}
+            alt=""
+            width={compact ? 28 : 36}
+            height={compact ? 28 : 36}
+            className="h-full w-full object-cover"
+            loading="lazy"
+          />
+        ) : asset.assetPath ? (
           <Image
             src={asset.assetPath}
             alt=""

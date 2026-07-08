@@ -24,6 +24,7 @@ import {
   isKickoffOutsideTimingWindow,
 } from "@/utils/fixture-timing-window";
 import { canBrowseOtherCompetitions } from "@/utils/football-competitions";
+import { getFixtureContextLabel } from "@/utils/fixture-context";
 import { saveExternalPickerFixtures, savePickerFixtures } from "./actions";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -566,25 +567,34 @@ export default async function PickFixturesPage({
             </div>
 
             <div className="mt-4 grid gap-2">
-              {fixtureList.map((fixture) => (
-                <div
-                  key={fixture.id}
-                  className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
-                >
-                  <TeamIdentity teamName={fixture.home_team} compact />
-                  <span className="rounded-full bg-slate-950 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-500">
-                    v
-                  </span>
-                  <TeamIdentity
-                    teamName={fixture.away_team}
-                    align="right"
-                    compact
-                  />
-                  <span className="col-span-3 text-xs text-slate-500">
-                    {formatKickoff(fixture.kickoff_at)} · {fixture.competition}
-                  </span>
-                </div>
-              ))}
+              {fixtureList.map((fixture) => {
+                const contextLabel = getFixtureContextLabel({
+                  competitionCode: fixture.external_competition_code,
+                  externalRound: fixture.external_round,
+                  externalMatchday: fixture.external_matchday,
+                });
+
+                return (
+                  <div
+                    key={fixture.id}
+                    className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
+                  >
+                    <TeamIdentity teamName={fixture.home_team} compact />
+                    <span className="rounded-full bg-slate-950 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-500">
+                      v
+                    </span>
+                    <TeamIdentity
+                      teamName={fixture.away_team}
+                      align="right"
+                      compact
+                    />
+                    <span className="col-span-3 text-xs text-slate-500">
+                      {formatKickoff(fixture.kickoff_at)} · {fixture.competition}
+                      {contextLabel ? ` · ${contextLabel}` : ""}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </section>
         ) : null}

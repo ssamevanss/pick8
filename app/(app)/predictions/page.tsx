@@ -132,7 +132,7 @@ export default async function DashboardPage({
     ? await supabase
         .from("fixtures")
         .select(
-          "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score, external_provider, external_fixture_id, external_status, external_last_synced_at",
+          "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score, external_provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_status, external_last_synced_at",
         )
         .eq("gameweek_id", selectedGameweek.id)
         .order("kickoff_at", { ascending: true })

@@ -59,6 +59,7 @@ components/activity/LeagueActivityFeed.tsx
 components/predictions/TeamIdentity.tsx
 components/admin/*
 public/team-assets/
+utils/fixture-context.ts
 utils/supabase/client.ts
 utils/supabase/server.ts
 utils/supabase/admin.ts
@@ -430,6 +431,31 @@ Important examples:
 - fixture results
 - weekly leaderboard mini-table
 - weekly winners
+
+The Dashboard activity feed is split into compact tabs:
+
+- `Results` for completed gameweek/result activity.
+- `Highlights` for generated league facts and notable moments.
+- `Picks` for fixture-picked and picker-related activity.
+
+Deep links to an activity item still open the correct tab automatically.
+
+## Team identity and fixture context
+
+Team visuals are mapped in `utils/team-assets.ts` and served from
+`public/team-assets/`. World Cup/national fixtures use local flag SVGs where
+available, including the current World Cup test teams such as France and
+Morocco. Premier League teams use local crest SVGs where available; the helper
+can also accept a trusted football-data.org crest URL from cached provider
+payloads for future cache-backed rendering. Missing assets fall back to compact
+initials, so unknown teams do not break cards.
+
+Fixture cards use cached fixture metadata only. Tournament/cup fixtures can show
+round/stage context such as Last 16, QF, SF, or Final. League-position context is
+not imported yet; the intended follow-up is a central standings cache populated
+from the provider standings endpoint after result sync/gameweek completion, then
+read by fixture cards from the local database. No prediction or dashboard page
+should call a provider API directly for standings.
 
 League facts/highlights:
 

@@ -1,3 +1,6 @@
+"use client";
+
+import { useMemo, useState } from "react";
 import ActivityCommentsSection from "@/components/activity/ActivityCommentsSection";
 import EmojiReactionControls from "@/components/social/EmojiReactionControls";
 import type { ReactionSummary } from "@/components/predictions/types";
@@ -37,6 +40,8 @@ type ActivityMetadata = {
   gameweekName?: string;
   pickerName?: string;
   kickoffText?: string;
+  factType?: string;
+  interestingness?: number;
   fixtures?: ActivityFixture[];
   weeklyLeaderboard?: WeeklyLeaderboardRow[];
   weeklyWinners?: WeeklyWinner[];
@@ -84,6 +89,8 @@ type LeagueActivityFeedProps = {
   openCommentsForActivityId?: string | null;
 };
 
+type ActivityTab = "results" | "highlights" | "picks";
+
 function formatCreatedAt(value: string) {
   return new Intl.DateTimeFormat("en-GB", {
     weekday: "short",
@@ -100,6 +107,79 @@ function formatMovement(movement: number) {
   }
 
   return String(movement);
+}
+
+function getActivityTab(notification: NotificationRow): ActivityTab {
+  if (
+    notification.type === "fixtures_selected" ||
+    notification.type === "picker_up_next" ||
+    notification.type.includes("picker") ||
+    notification.type.includes("fixture")
+  ) {
+    return "picks";
+  }
+
+  if (
+    notification.metadata?.highlights?.length ||
+    notification.metadata?.factType ||
+    notification.type.includes("highlight") ||
+    notification.type.includes("fact")
+  ) {
+    return "highlights";
+  }
+
+  return "results";
+}
+
+function renderActivityCard({
+  notification,
+  currentUserId,
+  canModerate,
+  highlightedActivityId,
+  openCommentsForActivityId,
+}: {
+  notification: NotificationRow;
+  currentUserId: string;
+  canModerate: boolean;
+  highlightedActivityId: string | null;
+  openCommentsForActivityId: string | null;
+}) {
+  if (notification.type === "fixtures_selected") {
+    return (
+      <FixturesSelectedActivity
+        key={notification.id}
+        notification={notification}
+        currentUserId={currentUserId}
+        canModerate={canModerate}
+        isHighlighted={notification.id === highlightedActivityId}
+        openComments={notification.id === openCommentsForActivityId}
+      />
+    );
+  }
+
+  if (notification.type === "results_available") {
+    return (
+      <ResultsAvailableActivity
+        key={notification.id}
+        notification={notification}
+        currentUserId={currentUserId}
+        canModerate={canModerate}
+        isHighlighted={notification.id === highlightedActivityId}
+        openComments={notification.id === openCommentsForActivityId}
+      />
+    );
+  }
+
+  return (
+    <SimpleActivity
+      key={notification.id}
+      notification={notification}
+      currentUserId={currentUserId}
+      canModerate={canModerate}
+      isHighlighted={notification.id === highlightedActivityId}
+      openComments={notification.id === openCommentsForActivityId}
+    />
+  );
 }
 
 function ActivityShell({
@@ -415,14 +495,57 @@ export default function LeagueActivityFeed({
   highlightedActivityId = null,
   openCommentsForActivityId = null,
 }: LeagueActivityFeedProps) {
+  const linkedTab = useMemo(() => {
+    const highlighted = notifications.find(
+      (notification) => notification.id === highlightedActivityId,
+    );
+
+    return highlighted ? getActivityTab(highlighted) : null;
+  }, [highlightedActivityId, notifications]);
+
+  const [selectedTab, setSelectedTab] = useState<ActivityTab>(
+    linkedTab ?? "results",
+  );
+
+  const filteredNotifications = notifications.filter(
+    (notification) => getActivityTab(notification) === selectedTab,
+  );
+  const tabs: { key: ActivityTab; label: string }[] = [
+    { key: "results", label: "Results" },
+    { key: "highlights", label: "Highlights" },
+    { key: "picks", label: "Picks" },
+  ];
+
   return (
     <section className="brand-card mt-8 p-4 sm:p-5">
-      <div className="brand-section-header">
-        <p className="brand-eyebrow">League room</p>
-        <h2 className="text-2xl font-black tracking-tight">Activity</h2>
-        <p className="brand-subtitle">
-          The latest picks, results, movers, and next-player nudges.
-        </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="brand-section-header">
+          <p className="brand-eyebrow">League room</p>
+          <h2 className="text-2xl font-black tracking-tight">Activity</h2>
+          <p className="brand-subtitle">
+            Results, highlights, and fixture-picking moments from the league.
+          </p>
+        </div>
+
+        {notifications.length > 0 ? (
+          <div className="inline-flex w-full rounded-full border border-white/10 bg-slate-950/70 p-1 sm:w-auto">
+            {tabs.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setSelectedTab(tab.key)}
+                className={`flex min-w-0 flex-1 items-center justify-center gap-1 rounded-full px-3 py-1.5 text-xs font-black uppercase tracking-wide transition sm:flex-none ${
+                  selectedTab === tab.key
+                    ? "bg-emerald-300 text-slate-950"
+                    : "text-slate-400 hover:bg-white/5 hover:text-white"
+                }`}
+                aria-pressed={selectedTab === tab.key}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {notifications.length === 0 ? (
@@ -432,44 +555,21 @@ export default function LeagueActivityFeed({
         </p>
       ) : (
         <div className="space-y-3">
-          {notifications.map((notification) => {
-            if (notification.type === "fixtures_selected") {
-              return (
-                <FixturesSelectedActivity
-                  key={notification.id}
-                  notification={notification}
-                  currentUserId={currentUserId}
-                  canModerate={canModerate}
-                  isHighlighted={notification.id === highlightedActivityId}
-                  openComments={notification.id === openCommentsForActivityId}
-                />
-              );
-            }
-
-            if (notification.type === "results_available") {
-              return (
-                <ResultsAvailableActivity
-                  key={notification.id}
-                  notification={notification}
-                  currentUserId={currentUserId}
-                  canModerate={canModerate}
-                  isHighlighted={notification.id === highlightedActivityId}
-                  openComments={notification.id === openCommentsForActivityId}
-                />
-              );
-            }
-
-            return (
-              <SimpleActivity
-                key={notification.id}
-                notification={notification}
-                currentUserId={currentUserId}
-                canModerate={canModerate}
-                isHighlighted={notification.id === highlightedActivityId}
-                openComments={notification.id === openCommentsForActivityId}
-              />
-            );
-          })}
+          {filteredNotifications.length === 0 ? (
+            <p className="brand-card-soft p-4 text-sm text-slate-400">
+              Nothing in this lane yet.
+            </p>
+          ) : (
+            filteredNotifications.map((notification) =>
+              renderActivityCard({
+                notification,
+                currentUserId,
+                canModerate,
+                highlightedActivityId,
+                openCommentsForActivityId,
+              }),
+            )
+          )}
         </div>
       )}
     </section>

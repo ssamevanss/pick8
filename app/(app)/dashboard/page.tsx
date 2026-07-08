@@ -254,7 +254,7 @@ export default async function HomePage({
       (gameweek) => gameweek.isUnlocked && gameweek.hasPredictions,
     ) ?? null;
 
-  const nextFuturePickerGameweek =
+  const candidateFuturePickerGameweek =
     pickerStatuses.find((gameweek) => !gameweek.isUnlocked) ?? null;
 
   const { count: activeGameweekCount } = activeSeason
@@ -286,6 +286,14 @@ export default async function HomePage({
 
   const latestGameweek =
     (latestGameweekWithFixtures as LatestGameweekRow | null) ?? null;
+  const nextFuturePickerGameweek =
+    candidateFuturePickerGameweek &&
+    latestGameweek &&
+    candidateFuturePickerGameweek.gameweek_number ===
+      latestGameweek.gameweek_number + 1 &&
+    !candidateFuturePickerGameweek.isSelectionComplete
+      ? candidateFuturePickerGameweek
+      : null;
 
   const { data: latestFixtures } = latestGameweek
     ? await supabase
@@ -819,13 +827,14 @@ export default async function HomePage({
         !submittedPickerGameweek &&
         nextFuturePickerGameweek ? (
           <div className="brand-card p-4">
-            <p className="text-sm font-semibold text-slate-300">Your next pick</p>
+            <p className="text-sm font-semibold text-slate-300">
+              You’re picking next gameweek
+            </p>
             <h2 className="mt-1 text-lg font-bold sm:text-xl">
-              You’re scheduled for {formatGameweekName(nextFuturePickerGameweek)}
+              You’ll choose fixtures for {formatGameweekName(nextFuturePickerGameweek)} soon
             </h2>
             <p className="mt-2 text-sm text-slate-400">
-              You’ll be able to pick fixtures once the previous gameweek has been
-              completed.
+              Once the current gameweek is wrapped up, fixture picking will open for you.
             </p>
           </div>
         ) : null}
