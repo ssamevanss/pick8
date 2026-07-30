@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 
 type CompetitionOption = {
   external_competition_code: string;
@@ -23,15 +23,25 @@ export default function CompetitionBrowseSelect({
 }: CompetitionBrowseSelectProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const selectedCompetition = options.find(
-    (option) => option.external_competition_code === selectedCompetitionCode,
+  const [pendingCompetitionCode, setPendingCompetitionCode] = useState<
+    string | null
+  >(null);
+  const activePendingCompetitionCode =
+    pendingCompetitionCode && pendingCompetitionCode !== selectedCompetitionCode
+      ? pendingCompetitionCode
+      : null;
+  const displayedCompetitionCode =
+    activePendingCompetitionCode ?? selectedCompetitionCode;
+  const displayedCompetition = options.find(
+    (option) => option.external_competition_code === displayedCompetitionCode,
   );
+  const isNavigating = isPending || activePendingCompetitionCode !== null;
 
   return (
     <label className="mt-4 block min-w-0 rounded-xl border border-white/10 bg-slate-950/35 p-3">
       <span className="flex items-center justify-between gap-3 text-sm font-semibold text-slate-300">
         <span>Browse competition</span>
-        {isPending ? (
+        {isNavigating ? (
           <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-300">
             <span
               className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-300/30 border-t-emerald-200"
@@ -42,13 +52,15 @@ export default function CompetitionBrowseSelect({
         ) : null}
       </span>
       <select
-        value={selectedCompetitionCode}
-        disabled={isPending}
-        aria-busy={isPending}
+        value={displayedCompetitionCode}
+        disabled={isNavigating}
+        aria-busy={isNavigating}
         onChange={(event) => {
+          const destinationCode = event.target.value;
+          setPendingCompetitionCode(destinationCode);
           const params = new URLSearchParams({
             gameweek: gameweekId,
-            competition: event.target.value,
+            competition: destinationCode,
           });
 
           if (isEditing) {
@@ -70,9 +82,9 @@ export default function CompetitionBrowseSelect({
           </option>
         ))}
       </select>
-      {isPending ? (
+      {isNavigating ? (
         <span className="mt-2 block text-xs font-semibold text-emerald-300">
-          Loading {selectedCompetition?.name ?? "competition"} fixtures...
+          Loading {displayedCompetition?.name ?? "competition"} fixtures...
         </span>
       ) : (
         <span className="mt-2 block text-xs text-slate-500">

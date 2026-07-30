@@ -24,7 +24,10 @@ import {
   formatTimingWindow,
   isKickoffOutsideTimingWindow,
 } from "@/utils/fixture-timing-window";
-import { canBrowseOtherCompetitions } from "@/utils/football-competitions";
+import {
+  canBrowseOtherCompetitions,
+  getSeasonCompetitionMode,
+} from "@/utils/football-competitions";
 import { getFixtureContextLabel } from "@/utils/fixture-context";
 import {
   buildTeamStandingLookup,
@@ -275,6 +278,14 @@ function StandingMiniSummary({ standing }: { standing: TeamStandingSummary }) {
   );
 }
 
+function FormGuideSectionTitle({ children }: { children: string }) {
+  return (
+    <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+      {children}
+    </p>
+  );
+}
+
 function MiniStandingComparison({
   homeTeam,
   awayTeam,
@@ -300,11 +311,12 @@ function MiniStandingComparison({
   );
 
   if (!hasStandings) {
-    return standingsUnavailableReason ? (
+    return (
       <p className="rounded-lg border border-white/10 bg-slate-950/60 p-2 text-xs text-slate-500">
-        {standingsUnavailableReason}
+        {standingsUnavailableReason ??
+          "Table available after matches are played"}
       </p>
-    ) : null;
+    );
   }
 
   return (
@@ -663,6 +675,9 @@ export default async function PickFixturesPage({
     );
   const standingsByCompetitionAndTeam =
     buildTeamStandingLookup(meaningfulStandingRows);
+  const meaningfulStandingCompetitionCodes = new Set(
+    meaningfulStandingRows.map((row) => row.external_competition_code),
+  );
   const addStandingPositions = (fixture: ExternalFixtureCacheRow) => {
     const homeIdentity = getProviderTeamIdentityFromRawPayload(
       fixture.raw_payload,
@@ -1092,6 +1107,20 @@ export default async function PickFixturesPage({
                           currentExternalFixtureIds.has(
                             fixture.external_fixture_id,
                           );
+                        const standingsUnavailableReason =
+                          hiddenPreseasonGroups.has(
+                            `${fixture.external_competition_code}:${
+                              activeSeasonConfig?.provider_season ?? ""
+                            }`,
+                          ) ||
+                          (getSeasonCompetitionMode(
+                            fixture.external_competition_code,
+                          ) === "league" &&
+                            !meaningfulStandingCompetitionCodes.has(
+                              fixture.external_competition_code,
+                            ))
+                            ? "Table available after matches are played"
+                            : null;
 
                         return (
                           <div
@@ -1145,21 +1174,23 @@ export default async function PickFixturesPage({
                                 Form guide
                               </summary>
                               <div className="mt-2 space-y-2 text-xs">
+                                <FormGuideSectionTitle>
+                                  League table
+                                </FormGuideSectionTitle>
                                 <MiniStandingComparison
                                   homeTeam={fixture.home_team}
                                   awayTeam={fixture.away_team}
                                   homeStanding={fixture.home_standing}
                                   awayStanding={fixture.away_standing}
                                   standingsUnavailableReason={
-                                    hiddenPreseasonGroups.has(
-                                      `${fixture.external_competition_code}:${
-                                        activeSeasonConfig?.provider_season ?? ""
-                                      }`,
-                                    )
-                                      ? "Table available after matches are played"
-                                      : null
+                                    standingsUnavailableReason
                                   }
                                 />
+                              </div>
+                              <div className="mt-3">
+                                <FormGuideSectionTitle>
+                                  Recent form
+                                </FormGuideSectionTitle>
                               </div>
                               <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
                                 <div>

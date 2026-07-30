@@ -219,6 +219,14 @@ function TeamFormList({
   );
 }
 
+function FormGuideSectionTitle({ children }: { children: string }) {
+  return (
+    <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">
+      {children}
+    </p>
+  );
+}
+
 function TeamFormComparison({
   fixture,
   teamForm,
@@ -246,15 +254,18 @@ function TeamFormComparison({
   ];
   const hasStandings = standings.every((row) => row.standing);
   const showGoalDifference = standings.some(
-    (row) => row.standing?.goalDifference !== null && row.standing?.goalDifference !== undefined,
+    (row) =>
+      row.standing?.goalDifference !== null &&
+      row.standing?.goalDifference !== undefined,
   );
 
   if (!hasStandings) {
-    return teamForm.standingsUnavailableReason ? (
+    return (
       <p className="rounded-xl border border-white/10 bg-slate-950/70 p-3 text-sm text-slate-400">
-        {teamForm.standingsUnavailableReason}
+        {teamForm.standingsUnavailableReason ??
+          "Table available after matches are played"}
       </p>
-    ) : null;
+    );
   }
 
   return (
@@ -911,7 +922,13 @@ export default function FixturePredictionCard({
           </summary>
           <div className="mt-3 grid gap-3 md:grid-cols-2">
             <div className="md:col-span-2">
+              <FormGuideSectionTitle>League table</FormGuideSectionTitle>
+              <div className="mt-2">
               <TeamFormComparison fixture={fixture} teamForm={teamForm} />
+              </div>
+            </div>
+            <div className="md:col-span-2">
+              <FormGuideSectionTitle>Recent form</FormGuideSectionTitle>
             </div>
             <TeamFormList
               title={fixture.home_team}

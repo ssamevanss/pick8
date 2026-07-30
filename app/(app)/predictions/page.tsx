@@ -26,6 +26,7 @@ import {
   type TeamStandingDisplayRow,
 } from "@/utils/team-standings-display";
 import { getProviderTeamIdentityFromRawPayload } from "@/utils/team-assets";
+import { getSeasonCompetitionMode } from "@/utils/football-competitions";
 import { savePredictions } from "./actions";
 
 type CompletedFixtureForForm = {
@@ -377,6 +378,9 @@ export default async function DashboardPage({
     );
   const standingsByCompetitionAndTeam =
     buildTeamStandingLookup(meaningfulStandingRows);
+  const meaningfulStandingCompetitionCodes = new Set(
+    meaningfulStandingRows.map((row) => row.external_competition_code),
+  );
 
   const fixtureListWithPositions = fixtureList.map((fixture) => {
     const externalPayload =
@@ -441,11 +445,16 @@ export default async function DashboardPage({
       awayStanding: fixture.away_standing,
       standingsUnavailableReason:
         fixture.external_competition_code &&
-        hiddenPreseasonGroups.has(
+        (hiddenPreseasonGroups.has(
           `${fixture.external_competition_code}:${
             activeSeasonConfig?.provider_season ?? ""
           }`,
-        )
+        ) ||
+          (getSeasonCompetitionMode(fixture.external_competition_code) ===
+            "league" &&
+            !meaningfulStandingCompetitionCodes.has(
+              fixture.external_competition_code,
+            )))
           ? "Table available after matches are played"
           : null,
     });
