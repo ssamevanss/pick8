@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import CompetitionBrowseSelect from "@/components/pick-fixtures/CompetitionBrowseSelect";
+import EditFixturesLink from "@/components/pick-fixtures/EditFixturesLink";
 import SubmitButton from "@/components/forms/SubmitButton";
 import ToastTrigger from "@/components/toast/ToastTrigger";
 import TeamIdentity from "@/components/predictions/TeamIdentity";
@@ -21,8 +22,6 @@ import {
   buildFixtureTimingWindow,
   buildLeagueFixtureTimingWindow,
   formatTimingWindow,
-  getSpecialFixtureCutoff,
-  isKickoffBeforeSpecialFixtureCutoff,
   isKickoffOutsideTimingWindow,
 } from "@/utils/fixture-timing-window";
 import { canBrowseOtherCompetitions } from "@/utils/football-competitions";
@@ -36,9 +35,7 @@ import {
 } from "@/utils/team-standings-display";
 import { getProviderTeamIdentityFromRawPayload } from "@/utils/team-assets";
 import { saveExternalPickerFixtures, savePickerFixtures } from "./actions";
-import Link from "next/link";
 import { redirect } from "next/navigation";
-import { formatInTimeZone } from "date-fns-tz";
 
 type PickerGameweek = PickerEligibleGameweek & Gameweek;
 
@@ -123,20 +120,37 @@ const slotNumbers = [1, 2, 3, 4];
 const selectableExternalStatuses = ["TIMED", "SCHEDULED"];
 
 function formatDateTimeLocal(value: string) {
-  return formatInTimeZone(value, "Europe/London", "yyyy-MM-dd'T'HH:mm");
+  const date = new Date(value);
+  const pad = (part: number) => String(part).padStart(2, "0");
+
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate(),
+  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function formatKickoff(value: string) {
-  return formatInTimeZone(value, "Europe/London", "EEE d MMM yyyy, HH:mm");
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 function formatKickoffDate(value: string) {
-  return formatInTimeZone(value, "Europe/London", "EEE d MMM yyyy");
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(value));
 }
 
 function formatLastImported(value: string | null) {
   return value
-    ? formatInTimeZone(value, "Europe/London", "EEE d MMM yyyy, HH:mm")
+    ? formatKickoff(value)
     : "Unknown";
 }
 
@@ -258,6 +272,97 @@ function StandingMiniSummary({ standing }: { standing: TeamStandingSummary }) {
       <span className="font-black text-amber-200">{standing.positionLabel}</span>{" "}
       · P{standing.played ?? 0} · {standing.points ?? 0} pts
     </p>
+  );
+}
+
+function MiniStandingComparison({
+  homeTeam,
+  awayTeam,
+  homeStanding,
+  awayStanding,
+  standingsUnavailableReason,
+}: {
+  homeTeam: string;
+  awayTeam: string;
+  homeStanding?: TeamStandingSummary | null;
+  awayStanding?: TeamStandingSummary | null;
+  standingsUnavailableReason?: string | null;
+}) {
+  const rows = [
+    { teamName: homeTeam, standing: homeStanding },
+    { teamName: awayTeam, standing: awayStanding },
+  ];
+  const hasStandings = rows.every((row) => row.standing);
+  const showGoalDifference = rows.some(
+    (row) =>
+      row.standing?.goalDifference !== null &&
+      row.standing?.goalDifference !== undefined,
+  );
+
+  if (!hasStandings) {
+    return standingsUnavailableReason ? (
+      <p className="rounded-lg border border-white/10 bg-slate-950/60 p-2 text-xs text-slate-500">
+        {standingsUnavailableReason}
+      </p>
+    ) : null;
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-white/10 bg-slate-950/60">
+      <div
+        className={`grid min-w-[28rem] ${
+          showGoalDifference
+            ? "grid-cols-[3rem_minmax(7rem,1fr)_2rem_2rem_2rem_2rem_2rem_2.5rem]"
+            : "grid-cols-[3rem_minmax(7rem,1fr)_2rem_2rem_2rem_2rem_2.5rem]"
+        } gap-1 border-b border-white/10 px-2 py-1.5 text-[10px] font-black uppercase tracking-wide text-slate-500`}
+      >
+        <span>Pos</span>
+        <span>Team</span>
+        <span className="text-center">P</span>
+        <span className="text-center">W</span>
+        <span className="text-center">D</span>
+        <span className="text-center">L</span>
+        {showGoalDifference ? <span className="text-center">GD</span> : null}
+        <span className="text-right">Pts</span>
+      </div>
+      {rows.map((row) => (
+        <div
+          key={row.teamName}
+          className={`grid min-w-[28rem] ${
+            showGoalDifference
+              ? "grid-cols-[3rem_minmax(7rem,1fr)_2rem_2rem_2rem_2rem_2rem_2.5rem]"
+              : "grid-cols-[3rem_minmax(7rem,1fr)_2rem_2rem_2rem_2rem_2.5rem]"
+          } items-center gap-1 border-b border-white/5 px-2 py-1.5 text-xs last:border-b-0`}
+        >
+          <span className="font-black text-amber-200">
+            {row.standing?.positionLabel}
+          </span>
+          <span className="min-w-0 truncate font-semibold text-slate-200">
+            {row.teamName}
+          </span>
+          <span className="text-center tabular-nums text-slate-300">
+            {row.standing?.played ?? 0}
+          </span>
+          <span className="text-center tabular-nums text-slate-300">
+            {row.standing?.won ?? 0}
+          </span>
+          <span className="text-center tabular-nums text-slate-300">
+            {row.standing?.drawn ?? 0}
+          </span>
+          <span className="text-center tabular-nums text-slate-300">
+            {row.standing?.lost ?? 0}
+          </span>
+          {showGoalDifference ? (
+            <span className="text-center tabular-nums text-slate-300">
+              {row.standing?.goalDifference ?? "-"}
+            </span>
+          ) : null}
+          <span className="text-right font-black tabular-nums text-white">
+            {row.standing?.points ?? 0}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -536,7 +641,7 @@ export default async function PickFixturesPage({
     let standingQuery = supabase
       .from("external_team_standings")
       .select(
-        "external_competition_code, provider_season, team_name, team_short_name, team_tla, crest_url, position, played, won, drawn, lost, points",
+        "external_competition_code, provider_season, team_name, team_short_name, team_tla, crest_url, position, played, won, drawn, lost, points, raw_payload",
       )
       .eq("provider", "football_data")
       .in("external_competition_code", standingCompetitionCodes);
@@ -655,25 +760,28 @@ export default async function PickFixturesPage({
     currentBaseGroupIndex >= 0
       ? baseGroupTimings[currentBaseGroupIndex + 1] ?? null
       : baseGroupTimings[1] ?? null;
-  const specialFixtureCutoff =
-    allowOtherCompetitions && !isBaseCompetition
-      ? getSpecialFixtureCutoff({
-          baseGroups: baseGroupTimings,
-          currentGroupKey: currentBaseGroupKey,
+  const leagueTimingWindow =
+    allowOtherCompetitions
+      ? buildLeagueFixtureTimingWindow({
+          currentBaseGroup: currentBaseTimingGroup,
+          nextBaseGroup: nextBaseTimingGroup,
+        }) ??
+        buildFixtureTimingWindow({
+          selectedFixtureKickoffs: [],
+          baseCompetitionKickoffs:
+            baseTimingGroup?.fixtures.map((fixture) => fixture.kickoff_at) ?? [],
         })
       : null;
   const crossCompetitionFilteredExternalFixtureRows =
     allowOtherCompetitions && !isBaseCompetition
-      ? allExternalFixtureRows.filter((fixture) =>
-          isKickoffBeforeSpecialFixtureCutoff({
+      ? allExternalFixtureRowsWithPositions.filter(
+          (fixture) =>
+            !isKickoffOutsideTimingWindow({
             kickoffAt: fixture.kickoff_at,
-            cutoff: specialFixtureCutoff,
+              timingWindow: leagueTimingWindow,
           }),
         )
       : allExternalFixtureRowsWithPositions;
-  const hiddenBySpecialFixtureCutoffCount =
-    allExternalFixtureRowsWithPositions.length -
-    crossCompetitionFilteredExternalFixtureRows.length;
   const selectableExternalFixtureRows =
     crossCompetitionFilteredExternalFixtureRows.filter(
       (fixture) =>
@@ -692,26 +800,8 @@ export default async function PickFixturesPage({
     ) ??
     externalFixtureGroups[0] ??
     null;
-  const timingWindow = allowOtherCompetitions
-    ? buildLeagueFixtureTimingWindow({
-        currentBaseGroup: currentBaseTimingGroup,
-        nextBaseGroup: nextBaseTimingGroup,
-      }) ??
-      buildFixtureTimingWindow({
-        selectedFixtureKickoffs: [],
-        baseCompetitionKickoffs:
-          baseTimingGroup?.fixtures.map((fixture) => fixture.kickoff_at) ?? [],
-      })
-    : null;
+  const timingWindow = leagueTimingWindow;
   const timingWindowText = timingWindow ? formatTimingWindow(timingWindow) : null;
-  const selectedGroupHasTimingWarnings = Boolean(
-    selectedExternalGroup?.fixtures.some((fixture) =>
-      isKickoffOutsideTimingWindow({
-        kickoffAt: fixture.kickoff_at,
-        timingWindow,
-      }),
-    ),
-  );
   const expectedExternalPickCount = selectedExternalGroup
     ? getExpectedExternalPickCount(selectedExternalGroup.fixtures.length)
     : 0;
@@ -732,6 +822,10 @@ export default async function PickFixturesPage({
   const activePickerIsComplete =
     activeExpectedFixtureCount > 0 &&
     activeSelectedFixtureCount === activeExpectedFixtureCount;
+  const availableFixtureSummaryCount =
+    allowOtherCompetitions && !isBaseCompetition
+      ? selectableExternalFixtureRows.length
+      : (selectedExternalGroup?.fixtures.length ?? selectableExternalFixtureRows.length);
   const isEditingFixtureSelection = params.edit === "1" || !activePickerIsComplete;
   const showFixtureEditor = isEditingFixtureSelection && !isLockedByPredictions;
   const gameweekHelperText =
@@ -826,17 +920,13 @@ export default async function PickFixturesPage({
               </div>
 
               {!isLockedByPredictions && !isEditingFixtureSelection ? (
-                <Link
+                <EditFixturesLink
                   href={`/pick-fixtures?gameweek=${selectedGameweek.id}&edit=1${
                     selectedCompetitionCode
                       ? `&competition=${selectedCompetitionCode}`
                       : ""
                   }`}
-                  prefetch={false}
-                  className="brand-button-primary w-fit shadow-lg shadow-emerald-950/20"
-                >
-                  Edit fixtures
-                </Link>
+                />
               ) : null}
             </div>
 
@@ -952,24 +1042,11 @@ export default async function PickFixturesPage({
               </p>
             ) : null}
 
-            {hiddenBySpecialFixtureCutoffCount > 0 ? (
-              <p className="brand-alert-warning mt-4">
-                {hiddenBySpecialFixtureCutoffCount} fixture
-                {hiddenBySpecialFixtureCutoffCount === 1 ? "" : "s"} hidden:
-                too close to the next{" "}
-                {activeSeasonConfig?.base_competition_name ??
-                  activeSeasonConfig?.base_competition_code ??
-                  "base league"}{" "}
-                gameweek.
-              </p>
-            ) : null}
-
             {!externalFixturesError &&
             allExternalFixtureRows.length > 0 &&
             selectableExternalFixtureRows.length === 0 ? (
               <p className="brand-alert-warning mt-4">
-                Fixtures exist, but all selectable matches have already
-                been used in another active-season gameweek.
+                No fixtures available in this gameweek window.
               </p>
             ) : null}
 
@@ -993,6 +1070,11 @@ export default async function PickFixturesPage({
 
                 <div className="space-y-5">
                   <div key={selectedExternalGroup.key}>
+                    <p className="mb-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2 text-xs font-semibold text-slate-300">
+                      {availableFixtureSummaryCount} fixture
+                      {availableFixtureSummaryCount === 1 ? "" : "s"} available
+                      in this gameweek window
+                    </p>
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <h4 className="text-sm font-semibold text-slate-200">
                         {selectedExternalGroup.label}
@@ -1010,20 +1092,11 @@ export default async function PickFixturesPage({
                           currentExternalFixtureIds.has(
                             fixture.external_fixture_id,
                           );
-                        const outsideTimingWindow =
-                          isKickoffOutsideTimingWindow({
-                            kickoffAt: fixture.kickoff_at,
-                            timingWindow,
-                          });
 
                         return (
                           <div
                             key={fixture.external_fixture_id}
-                            className={`rounded-xl border p-3 transition has-[:checked]:border-emerald-400/70 has-[:checked]:bg-emerald-400/10 hover:border-emerald-400/30 ${
-                              outsideTimingWindow
-                                ? "border-amber-300/25 bg-amber-300/10"
-                                : "border-white/10 bg-slate-900/70"
-                            }`}
+                            className="rounded-xl border border-white/10 bg-slate-900/70 p-3 transition has-[:checked]:border-emerald-400/70 has-[:checked]:bg-emerald-400/10 hover:border-emerald-400/30"
                           >
                             <label className="flex cursor-pointer items-start gap-3">
                               <input
@@ -1064,11 +1137,6 @@ export default async function PickFixturesPage({
                                       "Round TBC")}{" "}
                                   · {fixture.status}
                                 </span>
-                                {outsideTimingWindow && timingWindowText ? (
-                                  <span className="mt-1 block text-xs font-semibold text-amber-200">
-                                    Outside usual gameweek window ({timingWindowText})
-                                  </span>
-                                ) : null}
                               </span>
                             </label>
 
@@ -1076,6 +1144,23 @@ export default async function PickFixturesPage({
                               <summary className="cursor-pointer text-xs font-bold text-slate-400 hover:text-white">
                                 Form guide
                               </summary>
+                              <div className="mt-2 space-y-2 text-xs">
+                                <MiniStandingComparison
+                                  homeTeam={fixture.home_team}
+                                  awayTeam={fixture.away_team}
+                                  homeStanding={fixture.home_standing}
+                                  awayStanding={fixture.away_standing}
+                                  standingsUnavailableReason={
+                                    hiddenPreseasonGroups.has(
+                                      `${fixture.external_competition_code}:${
+                                        activeSeasonConfig?.provider_season ?? ""
+                                      }`,
+                                    )
+                                      ? "Table available after matches are played"
+                                      : null
+                                  }
+                                />
+                              </div>
                               <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
                                 <div>
                                   <p className="mb-1 font-semibold text-slate-300">
@@ -1090,17 +1175,6 @@ export default async function PickFixturesPage({
                                       completedFixtures:
                                         completedExternalFormFixtures,
                                     })}
-                                    standing={fixture.home_standing}
-                                    standingsUnavailableReason={
-                                      hiddenPreseasonGroups.has(
-                                        `${fixture.external_competition_code}:${
-                                          activeSeasonConfig?.provider_season ??
-                                          ""
-                                        }`,
-                                      )
-                                        ? "Table available after matches are played"
-                                        : null
-                                    }
                                   />
                                 </div>
                                 <div>
@@ -1116,17 +1190,6 @@ export default async function PickFixturesPage({
                                       completedFixtures:
                                         completedExternalFormFixtures,
                                     })}
-                                    standing={fixture.away_standing}
-                                    standingsUnavailableReason={
-                                      hiddenPreseasonGroups.has(
-                                        `${fixture.external_competition_code}:${
-                                          activeSeasonConfig?.provider_season ??
-                                          ""
-                                        }`,
-                                      )
-                                        ? "Table available after matches are played"
-                                        : null
-                                    }
                                   />
                                 </div>
                               </div>
@@ -1137,21 +1200,6 @@ export default async function PickFixturesPage({
                     </div>
                   </div>
                 </div>
-
-                {selectedGroupHasTimingWarnings && timingWindowText ? (
-                  <label className="mt-3 flex gap-3 rounded-xl border border-amber-300/25 bg-amber-300/10 p-3 text-sm text-amber-100">
-                    <input
-                      type="checkbox"
-                      name="confirm_timing_override"
-                      value="1"
-                      className="mt-1 h-4 w-4 accent-amber-300"
-                    />
-                    <span>
-                      This match is outside the usual gameweek window (
-                      {timingWindowText}). Add it anyway?
-                    </span>
-                  </label>
-                ) : null}
 
                 <p className="mt-3 rounded-xl border border-white/10 bg-slate-900/70 p-3 text-xs text-slate-400">
                   Select {expectedExternalPickCount} fixture

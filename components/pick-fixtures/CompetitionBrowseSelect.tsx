@@ -23,11 +23,23 @@ export default function CompetitionBrowseSelect({
 }: CompetitionBrowseSelectProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const selectedCompetition = options.find(
+    (option) => option.external_competition_code === selectedCompetitionCode,
+  );
 
   return (
-    <label className="mt-4 block min-w-0">
-      <span className="text-sm font-semibold text-slate-300">
-        Browse competition
+    <label className="mt-4 block min-w-0 rounded-xl border border-white/10 bg-slate-950/35 p-3">
+      <span className="flex items-center justify-between gap-3 text-sm font-semibold text-slate-300">
+        <span>Browse competition</span>
+        {isPending ? (
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-300">
+            <span
+              className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-300/30 border-t-emerald-200"
+              aria-hidden="true"
+            />
+            Loading
+          </span>
+        ) : null}
       </span>
       <select
         value={selectedCompetitionCode}
@@ -47,7 +59,7 @@ export default function CompetitionBrowseSelect({
             router.push(`/pick-fixtures?${params.toString()}`);
           });
         }}
-        className="brand-input mt-1"
+        className="brand-input mt-2 disabled:cursor-wait disabled:opacity-70"
       >
         {options.map((competition) => (
           <option
@@ -59,12 +71,13 @@ export default function CompetitionBrowseSelect({
         ))}
       </select>
       {isPending ? (
-        <span className="mt-1 block text-xs font-semibold text-emerald-300">
-          Loading fixtures...
+        <span className="mt-2 block text-xs font-semibold text-emerald-300">
+          Loading {selectedCompetition?.name ?? "competition"} fixtures...
         </span>
       ) : (
-        <span className="mt-1 block text-xs text-slate-500">
-          Changing competition keeps you in fixture-editing mode.
+        <span className="mt-2 block text-xs text-slate-500">
+          Changing competition keeps fixture editing open. Unsaved checkbox
+          selections are not kept when switching.
         </span>
       )}
     </label>

@@ -1,5 +1,3 @@
-import { formatInTimeZone } from "date-fns-tz";
-
 export type FixtureTimingWindow = {
   start: string;
   end: string;
@@ -111,16 +109,15 @@ export function isKickoffOutsideTimingWindow({
 }
 
 export function formatTimingWindow(timingWindow: FixtureTimingWindow) {
-  const start = formatInTimeZone(
-    timingWindow.start,
-    "Europe/London",
-    "EEE d MMM HH:mm",
-  );
-  const end = formatInTimeZone(
-    timingWindow.end,
-    "Europe/London",
-    "EEE d MMM HH:mm",
-  );
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const start = formatter.format(new Date(timingWindow.start));
+  const end = formatter.format(new Date(timingWindow.end));
 
   return `${start} to ${end}`;
 }

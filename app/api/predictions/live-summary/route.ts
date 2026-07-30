@@ -210,7 +210,7 @@ export async function GET(request: Request) {
     let standingQuery = supabase
       .from("external_team_standings")
       .select(
-        "external_competition_code, provider_season, team_name, team_short_name, team_tla, crest_url, position, played, won, drawn, lost, points",
+        "external_competition_code, provider_season, team_name, team_short_name, team_tla, crest_url, position, played, won, drawn, lost, points, raw_payload",
       )
       .eq("provider", "football_data")
       .in("external_competition_code", fixtureCompetitionCodes);

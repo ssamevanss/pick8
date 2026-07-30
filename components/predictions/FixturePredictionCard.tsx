@@ -3,7 +3,6 @@ import TeamIdentity from "./TeamIdentity";
 import EmojiReactionControls from "@/components/social/EmojiReactionControls";
 import { getFixtureContextLabel } from "@/utils/fixture-context";
 import { togglePredictionReaction } from "@/utils/social-actions";
-import { formatInTimeZone } from "date-fns-tz";
 import {
   calculateProvisionalPredictionScore,
   getScoreResult,
@@ -32,7 +31,13 @@ type FixturePredictionCardProps = {
 };
 
 function formatKickoff(kickoffAt: string) {
-  return formatInTimeZone(kickoffAt, "Europe/London", "EEE d MMM, HH:mm");
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(kickoffAt));
 }
 
 function getPredictionDisplayName(prediction: Prediction) {
@@ -103,7 +108,10 @@ function getSplitStats(predictions: Prediction[]) {
 }
 
 function formatFormDate(value: string) {
-  return formatInTimeZone(value, "Europe/London", "d MMM");
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+  }).format(new Date(value));
 }
 
 function formatExternalStatus(status: string | null | undefined) {
@@ -129,7 +137,10 @@ function formatLastSynced(value: string | null | undefined) {
     return null;
   }
 
-  return formatInTimeZone(value, "Europe/London", "HH:mm");
+  return new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 function FormResultPill({ result }: { result: TeamFormResult["result"] }) {
@@ -204,6 +215,120 @@ function TeamFormList({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function TeamFormComparison({
+  fixture,
+  teamForm,
+}: {
+  fixture: Fixture;
+  teamForm: FixtureTeamForm;
+}) {
+  const standings = [
+    {
+      key: "home",
+      teamName: fixture.home_team,
+      teamCode: fixture.home_team_code,
+      crestUrl: fixture.home_crest_url,
+      standing: teamForm.homeStanding,
+      results: teamForm.home,
+    },
+    {
+      key: "away",
+      teamName: fixture.away_team,
+      teamCode: fixture.away_team_code,
+      crestUrl: fixture.away_crest_url,
+      standing: teamForm.awayStanding,
+      results: teamForm.away,
+    },
+  ];
+  const hasStandings = standings.every((row) => row.standing);
+  const showGoalDifference = standings.some(
+    (row) => row.standing?.goalDifference !== null && row.standing?.goalDifference !== undefined,
+  );
+
+  if (!hasStandings) {
+    return teamForm.standingsUnavailableReason ? (
+      <p className="rounded-xl border border-white/10 bg-slate-950/70 p-3 text-sm text-slate-400">
+        {teamForm.standingsUnavailableReason}
+      </p>
+    ) : null;
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-white/10 bg-slate-950/70">
+      <div
+        className={`grid min-w-[34rem] ${
+          showGoalDifference
+            ? "grid-cols-[3rem_minmax(8rem,1fr)_2rem_2rem_2rem_2rem_2rem_2.5rem_4.5rem]"
+            : "grid-cols-[3rem_minmax(8rem,1fr)_2rem_2rem_2rem_2rem_2.5rem_4.5rem]"
+        } gap-1 border-b border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-slate-500`}
+      >
+        <span>Pos</span>
+        <span>Team</span>
+        <span className="text-center">P</span>
+        <span className="text-center">W</span>
+        <span className="text-center">D</span>
+        <span className="text-center">L</span>
+        {showGoalDifference ? <span className="text-center">GD</span> : null}
+        <span className="text-right">Pts</span>
+        <span className="text-right">Form</span>
+      </div>
+
+      {standings.map((row) => (
+        <div
+          key={row.key}
+          className={`grid min-w-[34rem] ${
+            showGoalDifference
+              ? "grid-cols-[3rem_minmax(8rem,1fr)_2rem_2rem_2rem_2rem_2rem_2.5rem_4.5rem]"
+              : "grid-cols-[3rem_minmax(8rem,1fr)_2rem_2rem_2rem_2rem_2.5rem_4.5rem]"
+          } items-center gap-1 border-b border-white/5 px-3 py-2 text-xs last:border-b-0`}
+        >
+          <span className="font-black text-amber-200">
+            {row.standing?.positionLabel}
+          </span>
+          <span className="min-w-0">
+            <TeamIdentity
+              teamName={row.teamName}
+              teamCode={row.teamCode}
+              crestUrl={row.crestUrl}
+              compact
+            />
+          </span>
+          <span className="text-center tabular-nums text-slate-300">
+            {row.standing?.played ?? 0}
+          </span>
+          <span className="text-center tabular-nums text-slate-300">
+            {row.standing?.won ?? 0}
+          </span>
+          <span className="text-center tabular-nums text-slate-300">
+            {row.standing?.drawn ?? 0}
+          </span>
+          <span className="text-center tabular-nums text-slate-300">
+            {row.standing?.lost ?? 0}
+          </span>
+          {showGoalDifference ? (
+            <span className="text-center tabular-nums text-slate-300">
+              {row.standing?.goalDifference ?? "-"}
+            </span>
+          ) : null}
+          <span className="text-right font-black tabular-nums text-white">
+            {row.standing?.points ?? 0}
+          </span>
+          <span className="flex justify-end gap-1">
+            {row.results.length > 0
+              ? row.results.slice(0, 5).map((result) => (
+                  <FormResultPill
+                    key={`${row.key}-${result.fixtureId}`}
+                    result={result.result}
+                  />
+                ))
+              : "-"}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -785,17 +910,18 @@ export default function FixturePredictionCard({
             View form
           </summary>
           <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <TeamFormComparison fixture={fixture} teamForm={teamForm} />
+            </div>
             <TeamFormList
               title={fixture.home_team}
               results={teamForm.home}
-              standing={teamForm.homeStanding}
-              standingsUnavailableReason={teamForm.standingsUnavailableReason}
+              standing={null}
             />
             <TeamFormList
               title={fixture.away_team}
               results={teamForm.away}
-              standing={teamForm.awayStanding}
-              standingsUnavailableReason={teamForm.standingsUnavailableReason}
+              standing={null}
             />
           </div>
         </details>

@@ -52,6 +52,7 @@ export type FixtureTeamForm = {
     drawn: number | null;
     lost: number | null;
     points: number | null;
+    goalDifference?: number | null;
   } | null;
   awayStanding?: {
     positionLabel: string;
@@ -60,6 +61,7 @@ export type FixtureTeamForm = {
     drawn: number | null;
     lost: number | null;
     points: number | null;
+    goalDifference?: number | null;
   } | null;
   standingsUnavailableReason?: string | null;
 };

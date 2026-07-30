@@ -619,8 +619,9 @@ shows "Table available after matches are played" instead.
 
 Provider-linked club cards use trusted cached football-data.org crest URLs from
 fixture `raw_payload` when available, with local team asset mappings and short
-codes as fallback. Fixture kickoffs shown to players use UK football time
-(`Europe/London`); stored `kickoff_at` values remain UTC instants.
+codes as fallback. Fixture kickoffs shown to players use the viewer's local
+timezone so prediction lock times are personally meaningful; stored
+`kickoff_at` values remain UTC instants.
 
 Admin Maintenance includes standings dry-run/run controls. The secured cron
 endpoint is:

@@ -476,8 +476,9 @@ The picker form guide also reads completed cached provider fixtures and shows a
 compact W/D/L/opponent/score summary plus meaningful table context when
 available; head-to-head remains deferred.
 
-Player-facing fixture kickoffs are formatted in UK football time
-(`Europe/London`) while database timestamps remain UTC instants.
+Player-facing fixture kickoffs are formatted in the viewer's local timezone so
+the displayed time matches when predictions lock for that user. Database
+timestamps remain UTC instants.
 
 League facts/highlights:
 

@@ -13,6 +13,7 @@ export type TeamStandingDisplayRow = {
   drawn: number | null;
   lost: number | null;
   points: number | null;
+  raw_payload?: unknown;
 };
 
 export type TeamStandingSummary = {
@@ -24,7 +25,16 @@ export type TeamStandingSummary = {
   lost: number | null;
   points: number | null;
   crestUrl?: string | null;
+  goalDifference?: number | null;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
 
 function normalizeTeamName(value: string) {
   return value
@@ -82,6 +92,9 @@ export function buildTeamStandingLookup(rows: TeamStandingDisplayRow[]) {
       lost: row.lost,
       points: row.points,
       crestUrl: row.crest_url ?? null,
+      goalDifference: isRecord(row.raw_payload)
+        ? getNumber(row.raw_payload.goalDifference)
+        : null,
     };
 
     for (const name of [row.team_name, row.team_short_name, row.team_tla]) {
