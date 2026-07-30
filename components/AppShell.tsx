@@ -188,7 +188,7 @@ export default function AppShell({
             : "scale-x-0 opacity-0"
         }`}
       />
-      <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 pb-[calc(6.5rem+env(safe-area-inset-bottom))] pt-4 sm:pb-28 sm:pt-6">
+      <div className="mx-auto flex min-h-0 max-w-6xl flex-col px-4 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4 sm:pb-[calc(5.5rem+env(safe-area-inset-bottom))] sm:pt-6">
         <header className="relative mb-6 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#0b1627]/80 px-3 py-3 shadow-xl shadow-black/20 backdrop-blur sm:gap-4 sm:px-4">
           <div className="min-w-0">
             <BrandMark />
@@ -271,7 +271,7 @@ export default function AppShell({
         </div>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl shadow-black/40 backdrop-blur-xl after:pointer-events-none after:fixed after:inset-x-0 after:bottom-[-32px] after:h-[calc(32px+env(safe-area-inset-bottom))] after:bg-slate-950/95 sm:px-4 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pt-3">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl shadow-black/40 backdrop-blur-xl sm:px-4 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pt-3">
         <div
           className="mx-auto grid max-w-5xl gap-1 sm:gap-2"
           style={{
