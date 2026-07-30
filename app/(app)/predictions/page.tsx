@@ -19,7 +19,13 @@ import {
   calculateProvisionalPredictionScore,
   isLiveExternalStatus,
 } from "@/utils/provisional-scoring";
-import { formatOrdinal } from "@/utils/ordinals";
+import {
+  buildTeamStandingLookup,
+  getMeaningfulStandingRows,
+  getStandingForTeam,
+  type TeamStandingDisplayRow,
+} from "@/utils/team-standings-display";
+import { getProviderTeamIdentityFromRawPayload } from "@/utils/team-assets";
 import { savePredictions } from "./actions";
 
 type CompletedFixtureForForm = {
@@ -33,14 +39,12 @@ type CompletedFixtureForForm = {
 
 type ExternalCompletedFixtureForForm = CompletedFixtureForForm & {
   external_competition_code: string;
+  provider_season?: string | null;
 };
 
-type TeamStandingRow = {
-  external_competition_code: string;
-  team_name: string;
-  team_short_name: string | null;
-  team_tla: string | null;
-  position: number;
+type ActiveSeasonForPredictions = {
+  id: string;
+  provider_season: string | null;
 };
 
 function getTeamFormResult({
@@ -108,7 +112,11 @@ export default async function DashboardPage({
     data: { user },
   } = await supabase.auth.getUser();
 
-  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+  const { data: activeSeason } = await getActiveSeason(
+    supabase,
+    "id, provider_season",
+  );
+  const activeSeasonConfig = activeSeason as ActiveSeasonForPredictions | null;
 
   const { data: gameweeks } = activeSeason
     ? await supabase
@@ -150,7 +158,7 @@ export default async function DashboardPage({
     ? await supabase
         .from("fixtures")
         .select(
-          "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score, external_provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_status, external_last_synced_at",
+          "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score, external_provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_status, external_last_synced_at, external_raw_payload",
         )
         .eq("gameweek_id", selectedGameweek.id)
         .order("kickoff_at", { ascending: true })
@@ -169,7 +177,7 @@ export default async function DashboardPage({
       ? await supabase
           .from("external_fixtures")
           .select(
-            "external_fixture_id, status, home_score, away_score, last_synced_at",
+            "external_fixture_id, status, home_score, away_score, last_synced_at, raw_payload, provider_season",
           )
           .eq("provider", "football_data")
           .in("external_fixture_id", externalFixtureIds)
@@ -186,6 +194,21 @@ export default async function DashboardPage({
         home_score: row.home_score,
         away_score: row.away_score,
         last_synced_at: row.last_synced_at,
+      },
+    ]),
+  );
+  const externalFixturePayloadById = new Map(
+    (((externalScoreRows as
+      | {
+          external_fixture_id: string;
+          raw_payload?: unknown;
+          provider_season?: string | null;
+        }[]
+      | null) ?? [])).map((row) => [
+      row.external_fixture_id,
+      {
+        rawPayload: row.raw_payload,
+        providerSeason: row.provider_season ?? null,
       },
     ]),
   );
@@ -263,21 +286,32 @@ export default async function DashboardPage({
         .filter((value): value is string => Boolean(value)),
     ),
   ];
-  const { data: completedExternalFormFixtures } =
-    latestFixtureKickoff && fixtureCompetitionCodes.length > 0
-      ? await supabase
-          .from("external_fixtures")
-          .select(
-            "external_fixture_id, external_competition_code, home_team, away_team, kickoff_at, home_score, away_score",
-          )
-          .eq("provider", "football_data")
-          .in("external_competition_code", fixtureCompetitionCodes)
-          .eq("status", "FINISHED")
-          .not("home_score", "is", null)
-          .not("away_score", "is", null)
-          .lt("kickoff_at", latestFixtureKickoff)
-          .order("kickoff_at", { ascending: false })
-      : { data: [] };
+  let completedExternalFormFixtures: unknown[] | null = [];
+
+  if (latestFixtureKickoff && fixtureCompetitionCodes.length > 0) {
+    let completedExternalFormQuery = supabase
+      .from("external_fixtures")
+      .select(
+        "external_fixture_id, external_competition_code, provider_season, home_team, away_team, kickoff_at, home_score, away_score",
+      )
+      .eq("provider", "football_data")
+      .in("external_competition_code", fixtureCompetitionCodes)
+      .eq("status", "FINISHED")
+      .not("home_score", "is", null)
+      .not("away_score", "is", null)
+      .lt("kickoff_at", latestFixtureKickoff)
+      .order("kickoff_at", { ascending: false });
+
+    if (activeSeasonConfig?.provider_season) {
+      completedExternalFormQuery = completedExternalFormQuery.eq(
+        "provider_season",
+        activeSeasonConfig.provider_season,
+      );
+    }
+
+    const { data } = await completedExternalFormQuery;
+    completedExternalFormFixtures = data;
+  }
   const { data: completedLocalFormFixtures } =
     activeSeason && latestFixtureKickoff && fixtureCompetitionCodes.length === 0
       ? await supabase
@@ -316,50 +350,77 @@ export default async function DashboardPage({
           away_score: fixture.away_score,
         }))
       : ((completedLocalFormFixtures as CompletedFixtureForForm[] | null) ?? []);
-  const { data: standingRows } =
-    fixtureCompetitionCodes.length > 0
-      ? await supabase
-          .from("external_team_standings")
-          .select("external_competition_code, team_name, team_short_name, team_tla, position")
-          .eq("provider", "football_data")
-          .in("external_competition_code", fixtureCompetitionCodes)
-      : { data: [] };
-  const standingsByCompetitionAndTeam = new Map<string, string>();
+  let standingRows: unknown[] | null = [];
 
-  for (const standing of (standingRows as TeamStandingRow[] | null) ?? []) {
-    const label = formatOrdinal(standing.position);
+  if (fixtureCompetitionCodes.length > 0) {
+    let standingQuery = supabase
+      .from("external_team_standings")
+      .select(
+        "external_competition_code, provider_season, team_name, team_short_name, team_tla, crest_url, position, played, won, drawn, lost, points",
+      )
+      .eq("provider", "football_data")
+      .in("external_competition_code", fixtureCompetitionCodes);
 
-    if (!label) {
-      continue;
+    if (activeSeasonConfig?.provider_season) {
+      standingQuery = standingQuery.eq(
+        "provider_season",
+        activeSeasonConfig.provider_season,
+      );
     }
 
-    for (const name of [
-      standing.team_name,
-      standing.team_short_name,
-      standing.team_tla,
-    ]) {
-      if (name) {
-        standingsByCompetitionAndTeam.set(
-          `${standing.external_competition_code}:${name}`,
-          label,
-        );
-      }
-    }
+    const { data } = await standingQuery;
+    standingRows = data;
   }
+  const { meaningfulRows: meaningfulStandingRows, hiddenPreseasonGroups } =
+    getMeaningfulStandingRows(
+      (standingRows as TeamStandingDisplayRow[] | null) ?? [],
+    );
+  const standingsByCompetitionAndTeam =
+    buildTeamStandingLookup(meaningfulStandingRows);
 
-  const fixtureListWithPositions = fixtureList.map((fixture) => ({
-    ...fixture,
-    home_position_label: fixture.external_competition_code
-      ? standingsByCompetitionAndTeam.get(
-          `${fixture.external_competition_code}:${fixture.home_team}`,
-        ) ?? null
-      : null,
-    away_position_label: fixture.external_competition_code
-      ? standingsByCompetitionAndTeam.get(
-          `${fixture.external_competition_code}:${fixture.away_team}`,
-        ) ?? null
-      : null,
-  }));
+  const fixtureListWithPositions = fixtureList.map((fixture) => {
+    const externalPayload =
+      fixture.external_raw_payload ??
+      (fixture.external_fixture_id
+        ? externalFixturePayloadById.get(fixture.external_fixture_id)?.rawPayload
+        : null);
+    const homeIdentity = getProviderTeamIdentityFromRawPayload(
+      externalPayload,
+      "home",
+    );
+    const awayIdentity = getProviderTeamIdentityFromRawPayload(
+      externalPayload,
+      "away",
+    );
+    const homeStanding = getStandingForTeam({
+      lookup: standingsByCompetitionAndTeam,
+      competitionCode: fixture.external_competition_code,
+      teamName:
+        homeIdentity.displayName ??
+        homeIdentity.shortName ??
+        fixture.home_team,
+    });
+    const awayStanding = getStandingForTeam({
+      lookup: standingsByCompetitionAndTeam,
+      competitionCode: fixture.external_competition_code,
+      teamName:
+        awayIdentity.displayName ??
+        awayIdentity.shortName ??
+        fixture.away_team,
+    });
+
+    return {
+      ...fixture,
+      home_team_code: homeIdentity.teamCode,
+      away_team_code: awayIdentity.teamCode,
+      home_crest_url: homeIdentity.crestUrl ?? homeStanding?.crestUrl ?? null,
+      away_crest_url: awayIdentity.crestUrl ?? awayStanding?.crestUrl ?? null,
+      home_position_label: homeStanding?.positionLabel ?? null,
+      away_position_label: awayStanding?.positionLabel ?? null,
+      home_standing: homeStanding,
+      away_standing: awayStanding,
+    };
+  });
   const formByFixture = new Map<string, FixtureTeamForm>();
 
   for (const fixture of fixtureListWithPositions) {
@@ -376,6 +437,17 @@ export default async function DashboardPage({
         completedFixtures: completedFixtureRows,
         competitionCode: fixture.external_competition_code,
       }),
+      homeStanding: fixture.home_standing,
+      awayStanding: fixture.away_standing,
+      standingsUnavailableReason:
+        fixture.external_competition_code &&
+        hiddenPreseasonGroups.has(
+          `${fixture.external_competition_code}:${
+            activeSeasonConfig?.provider_season ?? ""
+          }`,
+        )
+          ? "Table available after matches are played"
+          : null,
     });
   }
 

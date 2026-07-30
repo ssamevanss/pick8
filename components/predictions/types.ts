@@ -16,6 +16,11 @@ export type Fixture = {
   external_stage?: string | null;
   external_status?: string | null;
   external_last_synced_at?: string | null;
+  external_raw_payload?: unknown;
+  home_team_code?: string | null;
+  away_team_code?: string | null;
+  home_crest_url?: string | null;
+  away_crest_url?: string | null;
   home_position_label?: string | null;
   away_position_label?: string | null;
 };
@@ -40,6 +45,23 @@ export type TeamFormResult = {
 export type FixtureTeamForm = {
   home: TeamFormResult[];
   away: TeamFormResult[];
+  homeStanding?: {
+    positionLabel: string;
+    played: number | null;
+    won: number | null;
+    drawn: number | null;
+    lost: number | null;
+    points: number | null;
+  } | null;
+  awayStanding?: {
+    positionLabel: string;
+    played: number | null;
+    won: number | null;
+    drawn: number | null;
+    lost: number | null;
+    points: number | null;
+  } | null;
+  standingsUnavailableReason?: string | null;
 };
 
 export type ReactionSummary = {

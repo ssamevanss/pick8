@@ -612,6 +612,16 @@ Run `docs/2026-07-30-external-team-standings.sql` before enabling standings
 display. Standings are cached in `external_team_standings` and read by pages
 locally; page render never calls football-data.org.
 
+Prediction and picker cards hide all-zero pre-season tables so users do not see
+misleading positions before a league has started. If all cached rows for a
+provider season have played/won/drawn/lost/points equal to zero, the form guide
+shows "Table available after matches are played" instead.
+
+Provider-linked club cards use trusted cached football-data.org crest URLs from
+fixture `raw_payload` when available, with local team asset mappings and short
+codes as fallback. Fixture kickoffs shown to players use UK football time
+(`Europe/London`); stored `kickoff_at` values remain UTC instants.
+
 Admin Maintenance includes standings dry-run/run controls. The secured cron
 endpoint is:
 

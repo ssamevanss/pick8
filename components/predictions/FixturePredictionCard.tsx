@@ -3,6 +3,7 @@ import TeamIdentity from "./TeamIdentity";
 import EmojiReactionControls from "@/components/social/EmojiReactionControls";
 import { getFixtureContextLabel } from "@/utils/fixture-context";
 import { togglePredictionReaction } from "@/utils/social-actions";
+import { formatInTimeZone } from "date-fns-tz";
 import {
   calculateProvisionalPredictionScore,
   getScoreResult,
@@ -31,13 +32,7 @@ type FixturePredictionCardProps = {
 };
 
 function formatKickoff(kickoffAt: string) {
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(kickoffAt));
+  return formatInTimeZone(kickoffAt, "Europe/London", "EEE d MMM, HH:mm");
 }
 
 function getPredictionDisplayName(prediction: Prediction) {
@@ -108,10 +103,7 @@ function getSplitStats(predictions: Prediction[]) {
 }
 
 function formatFormDate(value: string) {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-  }).format(new Date(value));
+  return formatInTimeZone(value, "Europe/London", "d MMM");
 }
 
 function formatExternalStatus(status: string | null | undefined) {
@@ -137,10 +129,7 @@ function formatLastSynced(value: string | null | undefined) {
     return null;
   }
 
-  return new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
+  return formatInTimeZone(value, "Europe/London", "HH:mm");
 }
 
 function FormResultPill({ result }: { result: TeamFormResult["result"] }) {
@@ -163,15 +152,37 @@ function FormResultPill({ result }: { result: TeamFormResult["result"] }) {
 function TeamFormList({
   title,
   results,
+  standing,
+  standingsUnavailableReason,
 }: {
   title: string;
   results: TeamFormResult[];
+  standing: FixtureTeamForm["homeStanding"];
+  standingsUnavailableReason?: string | null;
 }) {
   return (
     <div className="rounded-xl border border-white/10 bg-slate-950/70 p-3">
-      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-        {title}
-      </p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="min-w-0 truncate text-xs font-bold uppercase tracking-wide text-slate-500">
+          {title}
+        </p>
+        {standing ? (
+          <span className="shrink-0 rounded-full border border-amber-300/25 bg-amber-300/10 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-200">
+            {standing.positionLabel}
+          </span>
+        ) : null}
+      </div>
+      {standing ? (
+        <p className="mt-2 text-xs text-slate-400">
+          P{standing.played ?? 0} · W{standing.won ?? 0} D
+          {standing.drawn ?? 0} L{standing.lost ?? 0} ·{" "}
+          {standing.points ?? 0} pts
+        </p>
+      ) : standingsUnavailableReason ? (
+        <p className="mt-2 text-xs text-slate-500">
+          {standingsUnavailableReason}
+        </p>
+      ) : null}
       {results.length === 0 ? (
         <p className="mt-3 text-sm text-slate-400">No recent form yet</p>
       ) : (
@@ -611,6 +622,8 @@ export default function FixturePredictionCard({
           <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
             <TeamIdentity
               teamName={fixture.home_team}
+              teamCode={fixture.home_team_code}
+              crestUrl={fixture.home_crest_url}
               positionLabel={fixture.home_position_label}
             />
             <div className="text-center">
@@ -632,6 +645,8 @@ export default function FixturePredictionCard({
             </div>
             <TeamIdentity
               teamName={fixture.away_team}
+              teamCode={fixture.away_team_code}
+              crestUrl={fixture.away_crest_url}
               positionLabel={fixture.away_position_label}
               align="right"
             />
@@ -697,6 +712,8 @@ export default function FixturePredictionCard({
           <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]">
             <TeamIdentity
               teamName={fixture.home_team}
+              teamCode={fixture.home_team_code}
+              crestUrl={fixture.home_crest_url}
               positionLabel={fixture.home_position_label}
               compact
             />
@@ -731,6 +748,8 @@ export default function FixturePredictionCard({
 
             <TeamIdentity
               teamName={fixture.away_team}
+              teamCode={fixture.away_team_code}
+              crestUrl={fixture.away_crest_url}
               positionLabel={fixture.away_position_label}
               align="right"
               compact
@@ -766,8 +785,18 @@ export default function FixturePredictionCard({
             View form
           </summary>
           <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <TeamFormList title={fixture.home_team} results={teamForm.home} />
-            <TeamFormList title={fixture.away_team} results={teamForm.away} />
+            <TeamFormList
+              title={fixture.home_team}
+              results={teamForm.home}
+              standing={teamForm.homeStanding}
+              standingsUnavailableReason={teamForm.standingsUnavailableReason}
+            />
+            <TeamFormList
+              title={fixture.away_team}
+              results={teamForm.away}
+              standing={teamForm.awayStanding}
+              standingsUnavailableReason={teamForm.standingsUnavailableReason}
+            />
           </div>
         </details>
       ) : null}

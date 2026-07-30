@@ -104,10 +104,26 @@ const teamAssets: Record<string, TeamAsset> = {
     initials: "BOU",
     tone: "club",
   },
+  arsenal: {
+    label: "Arsenal",
+    initials: "ARS",
+    tone: "club",
+  },
   "aston villa": {
     label: "Aston Villa",
     assetPath: "/team-assets/crests/aston-villa.svg",
     initials: "AVL",
+    tone: "club",
+  },
+  bournemouth: {
+    label: "AFC Bournemouth",
+    assetPath: "/team-assets/crests/afc-bournemouth.svg",
+    initials: "BOU",
+    tone: "club",
+  },
+  brentford: {
+    label: "Brentford",
+    initials: "BRE",
     tone: "club",
   },
   "brighton & hove albion": {
@@ -122,10 +138,45 @@ const teamAssets: Record<string, TeamAsset> = {
     initials: "BUR",
     tone: "club",
   },
+  chelsea: {
+    label: "Chelsea",
+    initials: "CHE",
+    tone: "club",
+  },
+  "coventry city": {
+    label: "Coventry City",
+    initials: "COV",
+    tone: "club",
+  },
+  "crystal palace": {
+    label: "Crystal Palace",
+    initials: "CRY",
+    tone: "club",
+  },
+  everton: {
+    label: "Everton",
+    initials: "EVE",
+    tone: "club",
+  },
   fulham: {
     label: "Fulham",
     assetPath: "/team-assets/crests/fulham.svg",
     initials: "FUL",
+    tone: "club",
+  },
+  "hull city": {
+    label: "Hull City",
+    initials: "HUL",
+    tone: "club",
+  },
+  "ipswich town": {
+    label: "Ipswich Town",
+    initials: "IPS",
+    tone: "club",
+  },
+  "leeds united": {
+    label: "Leeds United",
+    initials: "LEE",
     tone: "club",
   },
   liverpool: {
@@ -140,10 +191,20 @@ const teamAssets: Record<string, TeamAsset> = {
     initials: "MCI",
     tone: "club",
   },
+  "manchester united": {
+    label: "Manchester United",
+    initials: "MUN",
+    tone: "club",
+  },
   "newcastle united": {
     label: "Newcastle United",
     assetPath: "/team-assets/crests/newcastle-united.svg",
     initials: "NEW",
+    tone: "club",
+  },
+  "nottingham forest": {
+    label: "Nottingham Forest",
+    initials: "NFO",
     tone: "club",
   },
   sunderland: {
@@ -173,10 +234,20 @@ const teamAssets: Record<string, TeamAsset> = {
 };
 
 const teamAliases: Record<string, string> = {
+  "a.f.c. bournemouth": "afc bournemouth",
+  "bournemouth": "afc bournemouth",
   usa: "united states",
   usmnt: "united states",
   "u.s.a.": "united states",
   "brighton and hove albion": "brighton & hove albion",
+  brighton: "brighton & hove albion",
+  "crystal palace": "crystal palace",
+  "crystal palace eagles": "crystal palace",
+  "man city": "manchester city",
+  "man united": "manchester united",
+  "man utd": "manchester united",
+  "nott'm forest": "nottingham forest",
+  "nottingham": "nottingham forest",
   wolves: "wolverhampton wanderers",
   spurs: "tottenham hotspur",
   "west ham": "west ham united",
@@ -198,14 +269,26 @@ const teamCodeAliases: Record<string, string> = {
   POR: "portugal",
   SUI: "switzerland",
   USA: "united states",
+  ARS: "arsenal",
   BOU: "afc bournemouth",
   AVL: "aston villa",
   BHA: "brighton & hove albion",
+  BRE: "brentford",
   BUR: "burnley",
+  CHE: "chelsea",
+  COV: "coventry city",
+  CRP: "crystal palace",
+  CRY: "crystal palace",
+  EVE: "everton",
   FUL: "fulham",
+  HUL: "hull city",
+  IPS: "ipswich town",
+  LEE: "leeds united",
   LIV: "liverpool",
   MCI: "manchester city",
+  MUN: "manchester united",
   NEW: "newcastle united",
+  NFO: "nottingham forest",
   SUN: "sunderland",
   TOT: "tottenham hotspur",
   WHU: "west ham united",
@@ -217,6 +300,65 @@ type TeamAssetInput = {
   teamCode?: string | null;
   crestUrl?: string | null;
 };
+
+type ProviderTeamPayload = {
+  name?: unknown;
+  shortName?: unknown;
+  tla?: unknown;
+  crest?: unknown;
+};
+
+type ProviderMatchPayload = {
+  homeTeam?: ProviderTeamPayload;
+  awayTeam?: ProviderTeamPayload;
+};
+
+export type ProviderTeamIdentity = {
+  teamCode: string | null;
+  crestUrl: string | null;
+  displayName: string | null;
+  shortName: string | null;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function getProviderTeamIdentityFromRawPayload(
+  rawPayload: unknown,
+  side: "home" | "away",
+): ProviderTeamIdentity {
+  const empty = {
+    teamCode: null,
+    crestUrl: null,
+    displayName: null,
+    shortName: null,
+  };
+
+  if (!isRecord(rawPayload)) {
+    return empty;
+  }
+
+  const payload = rawPayload as ProviderMatchPayload;
+  const team = side === "home" ? payload.homeTeam : payload.awayTeam;
+
+  if (!team || !isRecord(team)) {
+    return empty;
+  }
+
+  const crestUrl = getString(team.crest);
+
+  return {
+    teamCode: getString(team.tla),
+    crestUrl: isSafeProviderCrestUrl(crestUrl) ? crestUrl : null,
+    displayName: getString(team.name),
+    shortName: getString(team.shortName),
+  };
+}
 
 // To add a future local team asset, place the SVG in public/team-assets/flags or
 // public/team-assets/crests, then add a normalized provider team-name key here.
@@ -267,7 +409,7 @@ export function getTeamAsset(input: string | TeamAssetInput): TeamAsset {
   const codeKey = teamCode ? teamCodeAliases[teamCode.toUpperCase()] : null;
   const asset = teamAssets[aliasKey] ?? (codeKey ? teamAssets[codeKey] : null);
 
-  if (asset) {
+  if (asset?.tone === "country") {
     return asset;
   }
 
@@ -279,6 +421,10 @@ export function getTeamAsset(input: string | TeamAssetInput): TeamAsset {
       tone: "club",
       isRemote: true,
     };
+  }
+
+  if (asset) {
+    return asset;
   }
 
   return {

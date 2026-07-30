@@ -382,6 +382,9 @@ Rules:
 - Unique by `(provider, external_competition_code, provider_season, external_team_id)`.
 - `provider_season` uses an empty string when the provider season is unknown, so upserts remain idempotent.
 - Pages read this local cache only; they never call the provider standings endpoint.
+- Pages hide a provider-season table when every cached row still has
+  played/won/drawn/lost/points as zero, because those pre-season positions are
+  not useful for prediction context.
 - If no row exists for a team, the UI shows no position rather than guessing.
 - Tournament/cup fixtures should not show league-table positions.
 

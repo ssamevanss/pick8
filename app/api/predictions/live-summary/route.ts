@@ -6,12 +6,24 @@ import {
   calculateProvisionalPredictionScore,
   isLiveExternalStatus,
 } from "@/utils/provisional-scoring";
+import {
+  buildTeamStandingLookup,
+  getMeaningfulStandingRows,
+  getStandingForTeam,
+  type TeamStandingDisplayRow,
+} from "@/utils/team-standings-display";
+import { getProviderTeamIdentityFromRawPayload } from "@/utils/team-assets";
 import type {
   ExternalFixtureScore,
   Fixture,
   LeaderboardSummary,
   Prediction,
 } from "@/components/predictions/types";
+
+type ActiveSeasonForLiveSummary = {
+  id: string;
+  provider_season: string | null;
+};
 
 function isTerminalFixture(fixture: Fixture) {
   return ["completed", "postponed", "void"].includes(fixture.status);
@@ -112,11 +124,15 @@ export async function GET(request: Request) {
     return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+  const { data: activeSeason } = await getActiveSeason(
+    supabase,
+    "id, provider_season",
+  );
 
   if (!activeSeason) {
     return Response.json({ error: "No active season" }, { status: 404 });
   }
+  const activeSeasonConfig = activeSeason as ActiveSeasonForLiveSummary;
 
   const { data: gameweek, error: gameweekError } = await supabase
     .from("gameweeks")
@@ -137,7 +153,7 @@ export async function GET(request: Request) {
   const { data: fixtures } = await supabase
     .from("fixtures")
     .select(
-      "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score, external_provider, external_fixture_id, external_status, external_last_synced_at",
+      "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score, external_provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_status, external_last_synced_at, external_raw_payload",
     )
     .eq("gameweek_id", gameweekId)
     .order("kickoff_at", { ascending: true });
@@ -153,7 +169,7 @@ export async function GET(request: Request) {
       ? await supabase
           .from("external_fixtures")
           .select(
-            "external_fixture_id, status, home_score, away_score, last_synced_at",
+            "external_fixture_id, status, home_score, away_score, last_synced_at, raw_payload",
           )
           .eq("provider", "football_data")
           .in("external_fixture_id", externalFixtureIds)
@@ -174,6 +190,88 @@ export async function GET(request: Request) {
       },
     ]),
   );
+  const externalFixturePayloadById = new Map(
+    (
+      (externalScoreRows as
+        | { external_fixture_id: string; raw_payload?: unknown }[]
+        | null) ?? []
+    ).map((row) => [row.external_fixture_id, row.raw_payload]),
+  );
+  const fixtureCompetitionCodes = [
+    ...new Set(
+      fixtureList
+        .map((fixture) => fixture.external_competition_code)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  let standingRows: unknown[] | null = [];
+
+  if (fixtureCompetitionCodes.length > 0) {
+    let standingQuery = supabase
+      .from("external_team_standings")
+      .select(
+        "external_competition_code, provider_season, team_name, team_short_name, team_tla, crest_url, position, played, won, drawn, lost, points",
+      )
+      .eq("provider", "football_data")
+      .in("external_competition_code", fixtureCompetitionCodes);
+
+    if (activeSeasonConfig.provider_season) {
+      standingQuery = standingQuery.eq(
+        "provider_season",
+        activeSeasonConfig.provider_season,
+      );
+    }
+
+    const { data } = await standingQuery;
+    standingRows = data;
+  }
+
+  const { meaningfulRows: meaningfulStandingRows } = getMeaningfulStandingRows(
+    (standingRows as TeamStandingDisplayRow[] | null) ?? [],
+  );
+  const standingsByCompetitionAndTeam =
+    buildTeamStandingLookup(meaningfulStandingRows);
+  const fixtureListWithIdentity = fixtureList.map((fixture) => {
+    const rawPayload =
+      fixture.external_raw_payload ??
+      (fixture.external_fixture_id
+        ? externalFixturePayloadById.get(fixture.external_fixture_id)
+        : null);
+    const homeIdentity = getProviderTeamIdentityFromRawPayload(
+      rawPayload,
+      "home",
+    );
+    const awayIdentity = getProviderTeamIdentityFromRawPayload(
+      rawPayload,
+      "away",
+    );
+    const homeStanding = getStandingForTeam({
+      lookup: standingsByCompetitionAndTeam,
+      competitionCode: fixture.external_competition_code,
+      teamName:
+        homeIdentity.displayName ??
+        homeIdentity.shortName ??
+        fixture.home_team,
+    });
+    const awayStanding = getStandingForTeam({
+      lookup: standingsByCompetitionAndTeam,
+      competitionCode: fixture.external_competition_code,
+      teamName:
+        awayIdentity.displayName ??
+        awayIdentity.shortName ??
+        fixture.away_team,
+    });
+
+    return {
+      ...fixture,
+      home_team_code: homeIdentity.teamCode,
+      away_team_code: awayIdentity.teamCode,
+      home_crest_url: homeIdentity.crestUrl ?? homeStanding?.crestUrl ?? null,
+      away_crest_url: awayIdentity.crestUrl ?? awayStanding?.crestUrl ?? null,
+      home_position_label: homeStanding?.positionLabel ?? null,
+      away_position_label: awayStanding?.positionLabel ?? null,
+    };
+  });
 
   const { data: predictions } =
     fixtureIds.length > 0
@@ -304,7 +402,7 @@ export async function GET(request: Request) {
       should_poll: poll.shouldPoll,
       next_interval_ms: poll.intervalMs,
       last_updated_at: new Date().toISOString(),
-      fixtures: fixtureList,
+      fixtures: fixtureListWithIdentity,
       external_scores: externalScores,
       predictions_by_fixture: predictionRecord,
       leaderboard_entry: (leaderboardEntry as LeaderboardSummary) ?? null,

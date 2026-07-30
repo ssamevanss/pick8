@@ -27,7 +27,14 @@ import {
 } from "@/utils/fixture-timing-window";
 import { canBrowseOtherCompetitions } from "@/utils/football-competitions";
 import { getFixtureContextLabel } from "@/utils/fixture-context";
-import { formatOrdinal } from "@/utils/ordinals";
+import {
+  buildTeamStandingLookup,
+  getMeaningfulStandingRows,
+  getStandingForTeam,
+  type TeamStandingDisplayRow,
+  type TeamStandingSummary,
+} from "@/utils/team-standings-display";
+import { getProviderTeamIdentityFromRawPayload } from "@/utils/team-assets";
 import { saveExternalPickerFixtures, savePickerFixtures } from "./actions";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -40,6 +47,7 @@ type ActiveSeasonPickerConfig = {
   base_provider: string | null;
   base_competition_code: string | null;
   base_competition_name: string | null;
+  provider_season: string | null;
 };
 
 type ExternalCompetitionOption = {
@@ -69,21 +77,21 @@ type ExternalFixtureCacheRow = {
   external_matchday: number | null;
   external_stage: string | null;
   external_group: string | null;
+  provider_season: string | null;
   home_team: string;
   away_team: string;
   kickoff_at: string;
   status: string;
   last_synced_at: string | null;
+  raw_payload?: unknown;
+  home_team_code?: string | null;
+  away_team_code?: string | null;
+  home_crest_url?: string | null;
+  away_crest_url?: string | null;
   home_position_label?: string | null;
   away_position_label?: string | null;
-};
-
-type TeamStandingRow = {
-  external_competition_code: string;
-  team_name: string;
-  team_short_name: string | null;
-  team_tla: string | null;
-  position: number;
+  home_standing?: TeamStandingSummary | null;
+  away_standing?: TeamStandingSummary | null;
 };
 
 type CompletedExternalFixtureForForm = {
@@ -102,6 +110,7 @@ type CompactFormResult = {
   kickoffAt: string;
   score: string;
   result: "W" | "D" | "L";
+  venue: "H" | "A";
 };
 
 type UsedExternalFixtureRow = {
@@ -176,35 +185,79 @@ function getCompactForm({
         opponent: isHome ? fixture.away_team : fixture.home_team,
         kickoffAt: fixture.kickoff_at,
         score: `${goalsFor}-${goalsAgainst}`,
+        venue: isHome ? "H" : "A",
         result:
           goalsFor > goalsAgainst ? "W" : goalsFor === goalsAgainst ? "D" : "L",
       };
     });
 }
 
-function CompactFormChips({ results }: { results: CompactFormResult[] }) {
+function CompactFormChips({
+  results,
+  standing,
+  standingsUnavailableReason,
+}: {
+  results: CompactFormResult[];
+  standing?: TeamStandingSummary | null;
+  standingsUnavailableReason?: string | null;
+}) {
   if (results.length === 0) {
-    return <p className="text-xs text-slate-500">No recent form yet</p>;
+    return (
+      <div className="space-y-1.5">
+        {standing ? (
+          <StandingMiniSummary standing={standing} />
+        ) : standingsUnavailableReason ? (
+          <p className="text-xs text-slate-500">{standingsUnavailableReason}</p>
+        ) : null}
+        <p className="text-xs text-slate-500">No recent form yet</p>
+      </div>
+    );
   }
 
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {results.map((result) => (
-        <span
-          key={result.fixtureId}
-          title={`${result.opponent} ${result.score}`}
-          className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-black ${
-            result.result === "W"
-              ? "bg-emerald-300/15 text-emerald-200"
-              : result.result === "D"
-                ? "bg-amber-300/15 text-amber-200"
-                : "bg-red-300/15 text-red-200"
-          }`}
-        >
-          {result.result}
-        </span>
-      ))}
+    <div className="space-y-2">
+      {standing ? (
+        <StandingMiniSummary standing={standing} />
+      ) : standingsUnavailableReason ? (
+        <p className="text-xs text-slate-500">{standingsUnavailableReason}</p>
+      ) : null}
+
+      <div className="space-y-1">
+        {results.slice(0, 4).map((result) => (
+          <div
+            key={result.fixtureId}
+            className="grid grid-cols-[auto_1fr_auto] items-center gap-1.5 text-xs"
+          >
+            <span
+              className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-black ${
+                result.result === "W"
+                  ? "bg-emerald-300/15 text-emerald-200"
+                  : result.result === "D"
+                    ? "bg-amber-300/15 text-amber-200"
+                    : "bg-red-300/15 text-red-200"
+              }`}
+            >
+              {result.result}
+            </span>
+            <span className="min-w-0 truncate text-slate-400">
+              {result.venue} v {result.opponent}
+            </span>
+            <span className="font-semibold tabular-nums text-slate-300">
+              {result.score}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
+  );
+}
+
+function StandingMiniSummary({ standing }: { standing: TeamStandingSummary }) {
+  return (
+    <p className="text-xs text-slate-400">
+      <span className="font-black text-amber-200">{standing.positionLabel}</span>{" "}
+      · P{standing.played ?? 0} · {standing.points ?? 0} pts
+    </p>
   );
 }
 
@@ -258,7 +311,7 @@ export default async function PickFixturesPage({
 
   const { data: activeSeason } = await getActiveSeason(
     supabase,
-    "id, base_provider, base_competition_code, base_competition_name",
+    "id, base_provider, base_competition_code, base_competition_name, provider_season",
   );
   const activeSeasonConfig = activeSeason as ActiveSeasonPickerConfig | null;
 
@@ -326,7 +379,7 @@ export default async function PickFixturesPage({
     ? await supabase
         .from("fixtures")
         .select(
-          "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score, external_provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_status, external_last_synced_at",
+          "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score, external_provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_status, external_last_synced_at, external_raw_payload",
         )
         .eq("gameweek_id", selectedGameweek.id)
         .order("kickoff_at", { ascending: true })
@@ -443,7 +496,7 @@ export default async function PickFixturesPage({
       ? await supabase
           .from("external_fixtures")
           .select(
-            "id, provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, home_team, away_team, kickoff_at, status, last_synced_at",
+            "id, provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, provider_season, home_team, away_team, kickoff_at, status, last_synced_at, raw_payload",
           )
           .eq("provider", activeSeasonConfig!.base_provider!)
           .eq("external_competition_code", selectedCompetitionCode)
@@ -457,7 +510,7 @@ export default async function PickFixturesPage({
       ? await supabase
           .from("external_fixtures")
           .select(
-            "id, provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, home_team, away_team, kickoff_at, status, last_synced_at",
+            "id, provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, provider_season, home_team, away_team, kickoff_at, status, last_synced_at, raw_payload",
           )
           .eq("provider", activeSeasonConfig.base_provider!)
           .eq("external_competition_code", activeSeasonConfig.base_competition_code)
@@ -477,66 +530,102 @@ export default async function PickFixturesPage({
       ),
     ),
   ];
-  const { data: standingRows } =
-    standingCompetitionCodes.length > 0
-      ? await supabase
-          .from("external_team_standings")
-          .select("external_competition_code, team_name, team_short_name, team_tla, position")
-          .eq("provider", "football_data")
-          .in("external_competition_code", standingCompetitionCodes)
-      : { data: [] };
-  const standingsByCompetitionAndTeam = new Map<string, string>();
+  let standingRows: unknown[] | null = [];
 
-  for (const standing of (standingRows as TeamStandingRow[] | null) ?? []) {
-    const label = formatOrdinal(standing.position);
+  if (standingCompetitionCodes.length > 0) {
+    let standingQuery = supabase
+      .from("external_team_standings")
+      .select(
+        "external_competition_code, provider_season, team_name, team_short_name, team_tla, crest_url, position, played, won, drawn, lost, points",
+      )
+      .eq("provider", "football_data")
+      .in("external_competition_code", standingCompetitionCodes);
 
-    if (!label) {
-      continue;
+    if (activeSeasonConfig?.provider_season) {
+      standingQuery = standingQuery.eq(
+        "provider_season",
+        activeSeasonConfig.provider_season,
+      );
     }
 
-    for (const name of [
-      standing.team_name,
-      standing.team_short_name,
-      standing.team_tla,
-    ]) {
-      if (name) {
-        standingsByCompetitionAndTeam.set(
-          `${standing.external_competition_code}:${name}`,
-          label,
-        );
-      }
-    }
+    const { data } = await standingQuery;
+    standingRows = data;
   }
-  const addStandingPositions = (fixture: ExternalFixtureCacheRow) => ({
-    ...fixture,
-    home_position_label:
-      standingsByCompetitionAndTeam.get(
-        `${fixture.external_competition_code}:${fixture.home_team}`,
-      ) ?? null,
-    away_position_label:
-      standingsByCompetitionAndTeam.get(
-        `${fixture.external_competition_code}:${fixture.away_team}`,
-      ) ?? null,
-  });
+
+  const { meaningfulRows: meaningfulStandingRows, hiddenPreseasonGroups } =
+    getMeaningfulStandingRows(
+      (standingRows as TeamStandingDisplayRow[] | null) ?? [],
+    );
+  const standingsByCompetitionAndTeam =
+    buildTeamStandingLookup(meaningfulStandingRows);
+  const addStandingPositions = (fixture: ExternalFixtureCacheRow) => {
+    const homeIdentity = getProviderTeamIdentityFromRawPayload(
+      fixture.raw_payload,
+      "home",
+    );
+    const awayIdentity = getProviderTeamIdentityFromRawPayload(
+      fixture.raw_payload,
+      "away",
+    );
+    const homeStanding = getStandingForTeam({
+      lookup: standingsByCompetitionAndTeam,
+      competitionCode: fixture.external_competition_code,
+      teamName:
+        homeIdentity.displayName ??
+        homeIdentity.shortName ??
+        fixture.home_team,
+    });
+    const awayStanding = getStandingForTeam({
+      lookup: standingsByCompetitionAndTeam,
+      competitionCode: fixture.external_competition_code,
+      teamName:
+        awayIdentity.displayName ??
+        awayIdentity.shortName ??
+        fixture.away_team,
+    });
+
+    return {
+      ...fixture,
+      home_team_code: homeIdentity.teamCode,
+      away_team_code: awayIdentity.teamCode,
+      home_crest_url: homeIdentity.crestUrl ?? homeStanding?.crestUrl ?? null,
+      away_crest_url: awayIdentity.crestUrl ?? awayStanding?.crestUrl ?? null,
+      home_position_label: homeStanding?.positionLabel ?? null,
+      away_position_label: awayStanding?.positionLabel ?? null,
+      home_standing: homeStanding,
+      away_standing: awayStanding,
+    };
+  };
   const allExternalFixtureRowsWithPositions =
     allExternalFixtureRows.map(addStandingPositions);
   const baseExternalFixtureRowsWithPositions =
     baseExternalFixtureRows.map(addStandingPositions);
-  const { data: completedExternalFormRows } =
-    standingCompetitionCodes.length > 0
-      ? await supabase
-          .from("external_fixtures")
-          .select(
-            "external_fixture_id, external_competition_code, home_team, away_team, kickoff_at, home_score, away_score",
-          )
-          .eq("provider", "football_data")
-          .in("external_competition_code", standingCompetitionCodes)
-          .eq("status", "FINISHED")
-          .not("home_score", "is", null)
-          .not("away_score", "is", null)
-          .order("kickoff_at", { ascending: false })
-          .limit(500)
-      : { data: [] };
+  let completedExternalFormRows: unknown[] | null = [];
+
+  if (standingCompetitionCodes.length > 0) {
+    let completedExternalFormQuery = supabase
+      .from("external_fixtures")
+      .select(
+        "external_fixture_id, external_competition_code, home_team, away_team, kickoff_at, home_score, away_score",
+      )
+      .eq("provider", "football_data")
+      .in("external_competition_code", standingCompetitionCodes)
+      .eq("status", "FINISHED")
+      .not("home_score", "is", null)
+      .not("away_score", "is", null)
+      .order("kickoff_at", { ascending: false })
+      .limit(500);
+
+    if (activeSeasonConfig?.provider_season) {
+      completedExternalFormQuery = completedExternalFormQuery.eq(
+        "provider_season",
+        activeSeasonConfig.provider_season,
+      );
+    }
+
+    const { data } = await completedExternalFormQuery;
+    completedExternalFormRows = data;
+  }
   const completedExternalFormFixtures =
     (completedExternalFormRows as CompletedExternalFixtureForForm[] | null) ?? [];
   const baseExternalGroups = groupExternalFixtures(
@@ -758,18 +847,33 @@ export default async function PickFixturesPage({
                   externalRound: fixture.external_round,
                   externalMatchday: fixture.external_matchday,
                 });
+                const homeIdentity = getProviderTeamIdentityFromRawPayload(
+                  fixture.external_raw_payload,
+                  "home",
+                );
+                const awayIdentity = getProviderTeamIdentityFromRawPayload(
+                  fixture.external_raw_payload,
+                  "away",
+                );
 
                 return (
                   <div
                     key={fixture.id}
                     className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-sm"
                   >
-                    <TeamIdentity teamName={fixture.home_team} compact />
+                    <TeamIdentity
+                      teamName={fixture.home_team}
+                      teamCode={homeIdentity.teamCode}
+                      crestUrl={homeIdentity.crestUrl}
+                      compact
+                    />
                     <span className="rounded-full bg-slate-950 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-500">
                       v
                     </span>
                     <TeamIdentity
                       teamName={fixture.away_team}
+                      teamCode={awayIdentity.teamCode}
+                      crestUrl={awayIdentity.crestUrl}
                       align="right"
                       compact
                     />
@@ -934,6 +1038,8 @@ export default async function PickFixturesPage({
                                 <span className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
                                   <TeamIdentity
                                     teamName={fixture.home_team || "Unknown home team"}
+                                    teamCode={fixture.home_team_code}
+                                    crestUrl={fixture.home_crest_url}
                                     positionLabel={fixture.home_position_label}
                                     compact
                                   />
@@ -942,6 +1048,8 @@ export default async function PickFixturesPage({
                                   </span>
                                   <TeamIdentity
                                     teamName={fixture.away_team || "Unknown away team"}
+                                    teamCode={fixture.away_team_code}
+                                    crestUrl={fixture.away_crest_url}
                                     positionLabel={fixture.away_position_label}
                                     align="right"
                                     compact
@@ -982,6 +1090,17 @@ export default async function PickFixturesPage({
                                       completedFixtures:
                                         completedExternalFormFixtures,
                                     })}
+                                    standing={fixture.home_standing}
+                                    standingsUnavailableReason={
+                                      hiddenPreseasonGroups.has(
+                                        `${fixture.external_competition_code}:${
+                                          activeSeasonConfig?.provider_season ??
+                                          ""
+                                        }`,
+                                      )
+                                        ? "Table available after matches are played"
+                                        : null
+                                    }
                                   />
                                 </div>
                                 <div>
@@ -997,6 +1116,17 @@ export default async function PickFixturesPage({
                                       completedFixtures:
                                         completedExternalFormFixtures,
                                     })}
+                                    standing={fixture.away_standing}
+                                    standingsUnavailableReason={
+                                      hiddenPreseasonGroups.has(
+                                        `${fixture.external_competition_code}:${
+                                          activeSeasonConfig?.provider_season ??
+                                          ""
+                                        }`,
+                                      )
+                                        ? "Table available after matches are played"
+                                        : null
+                                    }
                                   />
                                 </div>
                               </div>

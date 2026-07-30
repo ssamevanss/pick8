@@ -453,25 +453,31 @@ Deep links to an activity item still open the correct tab automatically.
 Team visuals are mapped in `utils/team-assets.ts` and served from
 `public/team-assets/`. World Cup/national fixtures use local flag SVGs where
 available, including the current World Cup test teams such as France and
-Morocco. Premier League teams use local crest SVGs where available; the helper
-can also accept a trusted football-data.org crest URL from cached provider
-payloads for future cache-backed rendering. Missing assets fall back to compact
-initials, so unknown teams do not break cards.
+Morocco. Provider-linked club fixtures prefer trusted football-data.org crest
+URLs from cached `raw_payload` when available, then local crest mappings, then
+known club short codes such as `ARS`, `MUN`, `EVE`, or `IPS`. Missing assets
+fall back to compact initials, so unknown teams do not break cards.
 
 Fixture cards use cached fixture metadata only. Tournament/cup fixtures can show
 round/stage context such as Last 16, QF, SF, or Final. League-position context is
 cached in `external_team_standings` after running
 `docs/2026-07-30-external-team-standings.sql` and the standings refresh route.
 Prediction and picker cards show compact ordinal positions such as `1st` only
-when a local cached row exists. No prediction, picker, or dashboard page should
-call a provider API directly for standings.
+when a meaningful local cached row exists. Pre-season all-zero standings are
+hidden with "Table available after matches are played" rather than showing
+misleading positions. No prediction, picker, or dashboard page should call a
+provider API directly for standings.
 
 Prediction form guide now reads completed cached `external_fixtures` for linked
 fixture competitions when available, so non-picked PL or special-competition
 matches can contribute to recent form after the cache has been imported or
 backfilled. It falls back to selected local fixtures for manual-only seasons.
 The picker form guide also reads completed cached provider fixtures and shows a
-compact W/D/L strip; head-to-head remains deferred.
+compact W/D/L/opponent/score summary plus meaningful table context when
+available; head-to-head remains deferred.
+
+Player-facing fixture kickoffs are formatted in UK football time
+(`Europe/London`) while database timestamps remain UTC instants.
 
 League facts/highlights:
 

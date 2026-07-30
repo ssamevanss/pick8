@@ -19,7 +19,10 @@ export default function TeamIdentity({
   compact = false,
 }: TeamIdentityProps) {
   const asset = getTeamAsset({ teamName, teamCode, crestUrl });
-  const mobileLabel = getTeamShortLabel(teamName);
+  const mobileLabel =
+    asset.tone !== "fallback" && asset.initials
+      ? asset.initials
+      : getTeamShortLabel(teamName);
   const reverse = align === "right";
 
   return (
