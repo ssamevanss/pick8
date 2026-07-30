@@ -179,7 +179,7 @@ export default function AppShell({
   ];
 
   return (
-    <main className="app-surface min-h-dvh text-white">
+    <main className="app-surface min-h-dvh overflow-x-clip text-white">
       <div
         aria-hidden="true"
         className={`fixed inset-x-0 top-0 z-50 h-1 origin-left bg-emerald-400 transition-all duration-500 ${
@@ -188,7 +188,7 @@ export default function AppShell({
             : "scale-x-0 opacity-0"
         }`}
       />
-      <div className="mx-auto flex min-h-0 max-w-6xl flex-col px-4 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-4 sm:pb-[calc(5.5rem+env(safe-area-inset-bottom))] sm:pt-6">
+      <div className="mx-auto flex min-h-0 max-w-6xl flex-col px-4 pb-[var(--app-mobile-nav-offset)] pt-4 sm:pb-[var(--app-mobile-nav-offset-sm)] sm:pt-6">
         <header className="relative mb-6 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#0b1627]/80 px-3 py-3 shadow-xl shadow-black/20 backdrop-blur sm:gap-4 sm:px-4">
           <div className="min-w-0">
             <BrandMark />
@@ -271,7 +271,7 @@ export default function AppShell({
         </div>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl shadow-black/40 backdrop-blur-xl sm:px-4 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pt-3">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-2 pb-[calc(0.5rem+var(--app-safe-area-bottom))] pt-2 shadow-2xl shadow-black/40 backdrop-blur-xl sm:px-4 sm:pb-[calc(0.75rem+var(--app-safe-area-bottom))] sm:pt-3">
         <div
           className="mx-auto grid max-w-5xl gap-1 sm:gap-2"
           style={{
