@@ -14,7 +14,7 @@ export default async function TestSupabasePage() {
     .order("kickoff_at", { ascending: true });
 
   return (
-    <main className="min-h-dvh bg-slate-950 p-6 text-white">
+    <main className="min-h-screen bg-slate-950 p-6 text-white">
       <h1 className="text-3xl font-bold">Supabase Test</h1>
 
       <section className="mt-6 rounded-2xl bg-slate-900 p-4">

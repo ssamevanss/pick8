@@ -18,7 +18,7 @@ export default async function ResetPasswordPage({
   const canReset = Boolean(user);
 
   return (
-    <main className="app-surface flex min-h-dvh items-center justify-center px-4 py-8 text-white">
+    <main className="app-surface flex min-h-screen items-center justify-center px-4 py-8 text-white">
       <div className="brand-card w-full max-w-md p-6 sm:p-8">
         <BrandMark />
 
