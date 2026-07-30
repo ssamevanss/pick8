@@ -128,6 +128,11 @@ Rules:
   competitions exist, the picker/admin can intentionally browse another
   competition for special fixtures such as cup ties or European games.
 - Cached external fixtures are grouped by provider matchday first, then stage or kickoff date. Provider matchday is not treated as app gameweek number.
+- For regular league seasons, the usual gameweek window is based on cached
+  provider base-competition groups: current base matchday first kickoff through
+  next base matchday first kickoff minus 24 hours. This supports Friday through
+  Monday Premier League rounds without a hardcoded weekend guess. Tournament
+  and cup seasons do not apply this next-gameweek cutoff.
 - Selected cached fixtures are copied into the existing `fixtures` table with external provenance fields.
 - When a selected cached or manual fixture falls outside the inferred usual
   gameweek timing window, the UI shows a warning and requires explicit
@@ -151,6 +156,9 @@ Rules:
   is true.
 - Does not call football-data.org when no eligible active season/provider is
   configured.
+- Fetches the active base competition and any already-selected linked fixture
+  competitions for the active season, so special fixtures from another cached
+  competition can receive safe team/kickoff/status refreshes too.
 - Preserves manually assigned World Cup `external_matchday` values when the
   provider still returns `matchday = null`.
 - For selected linked fixtures, kickoff changes can apply to non-terminal
@@ -452,10 +460,18 @@ initials, so unknown teams do not break cards.
 
 Fixture cards use cached fixture metadata only. Tournament/cup fixtures can show
 round/stage context such as Last 16, QF, SF, or Final. League-position context is
-not imported yet; the intended follow-up is a central standings cache populated
-from the provider standings endpoint after result sync/gameweek completion, then
-read by fixture cards from the local database. No prediction or dashboard page
-should call a provider API directly for standings.
+cached in `external_team_standings` after running
+`docs/2026-07-30-external-team-standings.sql` and the standings refresh route.
+Prediction and picker cards show compact ordinal positions such as `1st` only
+when a local cached row exists. No prediction, picker, or dashboard page should
+call a provider API directly for standings.
+
+Prediction form guide now reads completed cached `external_fixtures` for linked
+fixture competitions when available, so non-picked PL or special-competition
+matches can contribute to recent form after the cache has been imported or
+backfilled. It falls back to selected local fixtures for manual-only seasons.
+The picker form guide also reads completed cached provider fixtures and shows a
+compact W/D/L strip; head-to-head remains deferred.
 
 League facts/highlights:
 
@@ -599,6 +615,7 @@ Scheduled prediction reminders also require:
 ```env
 RESEND_API_KEY=...
 REMINDER_EMAIL_FROM=...
+BUG_REPORT_EMAIL_TO=...
 CRON_SECRET=...
 ```
 
@@ -624,6 +641,12 @@ only affect email delivery:
 
 Email footers link to `/settings` for preference management. In-app dashboard
 activity is still shown even when a user opts out of an email type.
+
+Bug reports are submitted from `/settings`. The server action inserts into
+`bug_reports` first, then attempts a Resend email to `BUG_REPORT_EMAIL_TO`.
+If email fails or the recipient env var is missing, the report remains stored
+and the user sees a softer saved-but-email-failed toast. Client code never sees
+Resend keys or service-role secrets.
 
 `/api/cron/send-prediction-reminders` remains separate from result sync. It
 sends missed picker-up-next emails and less-than-24-hours prediction reminders.

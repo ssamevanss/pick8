@@ -1,13 +1,15 @@
 export const dynamic = "force-dynamic";
 
 import SubmitButton from "@/components/forms/SubmitButton";
+import BugReportForm from "@/components/settings/BugReportForm";
 import ToastTrigger from "@/components/toast/ToastTrigger";
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
-import { saveEmailPreferences } from "./actions";
+import { saveEmailPreferences, submitBugReport } from "./actions";
 
 type SearchParams = Promise<{
   saved?: string;
+  reported?: string;
   error?: string;
 }>;
 
@@ -90,6 +92,22 @@ export default async function SettingsPage({
         <ToastTrigger title="Settings saved" triggerKey="settings:saved" />
       ) : null}
 
+      {params.reported === "sent" ? (
+        <ToastTrigger
+          title="Bug report sent — thanks!"
+          triggerKey="bug-report:sent"
+        />
+      ) : null}
+
+      {params.reported === "email_failed" ? (
+        <ToastTrigger
+          title="Bug report saved"
+          description="Email notification failed, but the report is in the database."
+          tone="info"
+          triggerKey="bug-report:email-failed"
+        />
+      ) : null}
+
       {params.error ? (
         <p className="brand-alert-danger mb-4">{params.error}</p>
       ) : null}
@@ -145,6 +163,19 @@ export default async function SettingsPage({
             className="brand-button-primary w-full"
           />
         </form>
+      </section>
+
+      <section className="brand-card mt-6 p-4 sm:p-5">
+        <div className="brand-section-header">
+          <p className="brand-eyebrow">Help</p>
+          <h2 className="text-2xl font-black tracking-tight">Report a bug</h2>
+          <p className="brand-subtitle">
+            Spotted something weird? Send a quick note with the page and browser
+            details attached automatically.
+          </p>
+        </div>
+
+        <BugReportForm action={submitBugReport} />
       </section>
     </>
   );

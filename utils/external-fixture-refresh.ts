@@ -265,15 +265,56 @@ export async function refreshExternalFixtures({
   const syncedAt = now.toISOString();
   const dateFrom = formatDateOnly(addDays(now, -2));
   const dateTo = formatDateOnly(addDays(now, 60));
-  const { matches, request } = await fetchCompetitionMatches({
-    competitionCode: season.base_competition_code,
-    dateFrom,
-    dateTo,
-    season: season.provider_season ?? undefined,
-  });
-  const fixtures = matches.map((match) =>
-    normalizeFootballDataMatch(match, season.base_competition_code ?? undefined),
-  );
+  const { data: selectedCompetitionRows, error: selectedCompetitionError } =
+    await supabase
+      .from("fixtures")
+      .select(
+        `
+        external_competition_code,
+        gameweeks!inner (
+          season_id
+        )
+      `,
+      )
+      .eq("gameweeks.season_id", season.id)
+      .eq("external_provider", "football_data")
+      .not("external_fixture_id", "is", null)
+      .not("external_competition_code", "is", null);
+
+  if (selectedCompetitionError) {
+    throw new Error(selectedCompetitionError.message);
+  }
+
+  const competitionCodes = [
+    ...new Set([
+      season.base_competition_code,
+      ...(((selectedCompetitionRows as
+        | { external_competition_code: string | null }[]
+        | null) ?? [])
+        .map((row) => row.external_competition_code)
+        .filter((code): code is string => Boolean(code))),
+    ]),
+  ].filter((code): code is string => Boolean(code));
+
+  const providerRequests: unknown[] = [];
+  const fixtures: NormalizedFootballDataFixture[] = [];
+
+  for (const competitionCode of competitionCodes) {
+    const { matches, request } = await fetchCompetitionMatches({
+      competitionCode,
+      dateFrom,
+      dateTo,
+      season:
+        competitionCode === season.base_competition_code
+          ? season.provider_season ?? undefined
+          : undefined,
+    });
+
+    providerRequests.push(request);
+    fixtures.push(
+      ...matches.map((match) => normalizeFootballDataMatch(match, competitionCode)),
+    );
+  }
   const externalFixtureIds = fixtures
     .map((fixture) => fixture.external_fixture_id)
     .filter(Boolean);
@@ -537,8 +578,9 @@ export async function refreshExternalFixtures({
     skipped_run: false,
     season,
     window: { date_from: dateFrom, date_to: dateTo },
-    provider_request: request,
-    provider_calls_made: 1,
+    provider_request: providerRequests[0] ?? null,
+    provider_requests: providerRequests,
+    provider_calls_made: providerRequests.length,
     external_fixtures_checked: fixtures.length,
     external_fixtures_updated: plannedUpdates.filter(
       (update) => update.scope === "external_cache",

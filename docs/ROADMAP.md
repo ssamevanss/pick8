@@ -139,7 +139,7 @@ Minimum useful reminder scope:
 
 Likely stack:
 
-- Vercel Cron
+- cron-job.org calling secured `/api/cron/*` endpoints with `CRON_SECRET`
 - Resend
 - Supabase queries for incomplete predictions
 
@@ -160,6 +160,8 @@ Could summarise:
 - Import/restore from JSON
 - Notification cleanup
 - Better audit messages
+- Future mid-season cup design is captured in
+  `docs/FUTURE_CUP_FEATURE.md`; do not implement it until PL basics are stable.
 
 ## 1.2 / 2.0 candidates
 

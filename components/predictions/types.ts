@@ -16,6 +16,8 @@ export type Fixture = {
   external_stage?: string | null;
   external_status?: string | null;
   external_last_synced_at?: string | null;
+  home_position_label?: string | null;
+  away_position_label?: string | null;
 };
 
 export type ExternalFixtureScore = {

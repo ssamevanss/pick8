@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import GameweekSelector from "@/components/gameweeks/GameweekSelector";
+import CompetitionBrowseSelect from "@/components/pick-fixtures/CompetitionBrowseSelect";
 import SubmitButton from "@/components/forms/SubmitButton";
 import ToastTrigger from "@/components/toast/ToastTrigger";
 import TeamIdentity from "@/components/predictions/TeamIdentity";
@@ -18,6 +19,7 @@ import {
 import {
   buildFixtureGroupTimings,
   buildFixtureTimingWindow,
+  buildLeagueFixtureTimingWindow,
   formatTimingWindow,
   getSpecialFixtureCutoff,
   isKickoffBeforeSpecialFixtureCutoff,
@@ -25,6 +27,7 @@ import {
 } from "@/utils/fixture-timing-window";
 import { canBrowseOtherCompetitions } from "@/utils/football-competitions";
 import { getFixtureContextLabel } from "@/utils/fixture-context";
+import { formatOrdinal } from "@/utils/ordinals";
 import { saveExternalPickerFixtures, savePickerFixtures } from "./actions";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -71,6 +74,34 @@ type ExternalFixtureCacheRow = {
   kickoff_at: string;
   status: string;
   last_synced_at: string | null;
+  home_position_label?: string | null;
+  away_position_label?: string | null;
+};
+
+type TeamStandingRow = {
+  external_competition_code: string;
+  team_name: string;
+  team_short_name: string | null;
+  team_tla: string | null;
+  position: number;
+};
+
+type CompletedExternalFixtureForForm = {
+  external_fixture_id: string;
+  external_competition_code: string;
+  home_team: string;
+  away_team: string;
+  kickoff_at: string;
+  home_score: number;
+  away_score: number;
+};
+
+type CompactFormResult = {
+  fixtureId: string;
+  opponent: string;
+  kickoffAt: string;
+  score: string;
+  result: "W" | "D" | "L";
 };
 
 type UsedExternalFixtureRow = {
@@ -110,6 +141,71 @@ function getExternalGroupLabel(fixture: ExternalFixtureCacheRow) {
   }
 
   return formatKickoffDate(fixture.kickoff_at);
+}
+
+function getCompactForm({
+  teamName,
+  fixtureKickoffAt,
+  competitionCode,
+  completedFixtures,
+}: {
+  teamName: string;
+  fixtureKickoffAt: string;
+  competitionCode: string;
+  completedFixtures: CompletedExternalFixtureForForm[];
+}): CompactFormResult[] {
+  return completedFixtures
+    .filter(
+      (fixture) =>
+        fixture.external_competition_code === competitionCode &&
+        fixture.kickoff_at < fixtureKickoffAt &&
+        (fixture.home_team === teamName || fixture.away_team === teamName),
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.kickoff_at).getTime() - new Date(a.kickoff_at).getTime(),
+    )
+    .slice(0, 6)
+    .map((fixture) => {
+      const isHome = fixture.home_team === teamName;
+      const goalsFor = isHome ? fixture.home_score : fixture.away_score;
+      const goalsAgainst = isHome ? fixture.away_score : fixture.home_score;
+
+      return {
+        fixtureId: fixture.external_fixture_id,
+        opponent: isHome ? fixture.away_team : fixture.home_team,
+        kickoffAt: fixture.kickoff_at,
+        score: `${goalsFor}-${goalsAgainst}`,
+        result:
+          goalsFor > goalsAgainst ? "W" : goalsFor === goalsAgainst ? "D" : "L",
+      };
+    });
+}
+
+function CompactFormChips({ results }: { results: CompactFormResult[] }) {
+  if (results.length === 0) {
+    return <p className="text-xs text-slate-500">No recent form yet</p>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {results.map((result) => (
+        <span
+          key={result.fixtureId}
+          title={`${result.opponent} ${result.score}`}
+          className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-black ${
+            result.result === "W"
+              ? "bg-emerald-300/15 text-emerald-200"
+              : result.result === "D"
+                ? "bg-amber-300/15 text-amber-200"
+                : "bg-red-300/15 text-red-200"
+          }`}
+        >
+          {result.result}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function groupExternalFixtures(fixtures: ExternalFixtureCacheRow[]) {
@@ -374,7 +470,78 @@ export default async function PickFixturesPage({
     (externalFixtures as ExternalFixtureCacheRow[] | null) ?? [];
   const baseExternalFixtureRows =
     (baseCompetitionFixtureRows as ExternalFixtureCacheRow[] | null) ?? [];
-  const baseExternalGroups = groupExternalFixtures(baseExternalFixtureRows);
+  const standingCompetitionCodes = [
+    ...new Set(
+      [selectedCompetitionCode, activeSeasonConfig?.base_competition_code].filter(
+        (value): value is string => Boolean(value),
+      ),
+    ),
+  ];
+  const { data: standingRows } =
+    standingCompetitionCodes.length > 0
+      ? await supabase
+          .from("external_team_standings")
+          .select("external_competition_code, team_name, team_short_name, team_tla, position")
+          .eq("provider", "football_data")
+          .in("external_competition_code", standingCompetitionCodes)
+      : { data: [] };
+  const standingsByCompetitionAndTeam = new Map<string, string>();
+
+  for (const standing of (standingRows as TeamStandingRow[] | null) ?? []) {
+    const label = formatOrdinal(standing.position);
+
+    if (!label) {
+      continue;
+    }
+
+    for (const name of [
+      standing.team_name,
+      standing.team_short_name,
+      standing.team_tla,
+    ]) {
+      if (name) {
+        standingsByCompetitionAndTeam.set(
+          `${standing.external_competition_code}:${name}`,
+          label,
+        );
+      }
+    }
+  }
+  const addStandingPositions = (fixture: ExternalFixtureCacheRow) => ({
+    ...fixture,
+    home_position_label:
+      standingsByCompetitionAndTeam.get(
+        `${fixture.external_competition_code}:${fixture.home_team}`,
+      ) ?? null,
+    away_position_label:
+      standingsByCompetitionAndTeam.get(
+        `${fixture.external_competition_code}:${fixture.away_team}`,
+      ) ?? null,
+  });
+  const allExternalFixtureRowsWithPositions =
+    allExternalFixtureRows.map(addStandingPositions);
+  const baseExternalFixtureRowsWithPositions =
+    baseExternalFixtureRows.map(addStandingPositions);
+  const { data: completedExternalFormRows } =
+    standingCompetitionCodes.length > 0
+      ? await supabase
+          .from("external_fixtures")
+          .select(
+            "external_fixture_id, external_competition_code, home_team, away_team, kickoff_at, home_score, away_score",
+          )
+          .eq("provider", "football_data")
+          .in("external_competition_code", standingCompetitionCodes)
+          .eq("status", "FINISHED")
+          .not("home_score", "is", null)
+          .not("away_score", "is", null)
+          .order("kickoff_at", { ascending: false })
+          .limit(500)
+      : { data: [] };
+  const completedExternalFormFixtures =
+    (completedExternalFormRows as CompletedExternalFixtureForForm[] | null) ?? [];
+  const baseExternalGroups = groupExternalFixtures(
+    baseExternalFixtureRowsWithPositions,
+  );
   const baseTimingGroup =
     baseExternalGroups.find((group) =>
       group.fixtures.some((fixture) =>
@@ -383,10 +550,22 @@ export default async function PickFixturesPage({
     ) ??
     baseExternalGroups[0] ??
     null;
-  const baseGroupTimings = buildFixtureGroupTimings(baseExternalFixtureRows);
+  const baseGroupTimings = buildFixtureGroupTimings(
+    baseExternalFixtureRowsWithPositions,
+  );
   const currentBaseGroupKey = baseTimingGroup
     ? getExternalFixtureGroupKey(baseTimingGroup.fixtures[0])
     : null;
+  const currentBaseGroupIndex = currentBaseGroupKey
+    ? baseGroupTimings.findIndex((group) => group.key === currentBaseGroupKey)
+    : 0;
+  const currentBaseTimingGroup =
+    baseGroupTimings[currentBaseGroupIndex >= 0 ? currentBaseGroupIndex : 0] ??
+    null;
+  const nextBaseTimingGroup =
+    currentBaseGroupIndex >= 0
+      ? baseGroupTimings[currentBaseGroupIndex + 1] ?? null
+      : baseGroupTimings[1] ?? null;
   const specialFixtureCutoff =
     allowOtherCompetitions && !isBaseCompetition
       ? getSpecialFixtureCutoff({
@@ -402,9 +581,9 @@ export default async function PickFixturesPage({
             cutoff: specialFixtureCutoff,
           }),
         )
-      : allExternalFixtureRows;
+      : allExternalFixtureRowsWithPositions;
   const hiddenBySpecialFixtureCutoffCount =
-    allExternalFixtureRows.length -
+    allExternalFixtureRowsWithPositions.length -
     crossCompetitionFilteredExternalFixtureRows.length;
   const selectableExternalFixtureRows =
     crossCompetitionFilteredExternalFixtureRows.filter(
@@ -424,11 +603,17 @@ export default async function PickFixturesPage({
     ) ??
     externalFixtureGroups[0] ??
     null;
-  const timingWindow = buildFixtureTimingWindow({
-    selectedFixtureKickoffs: fixtureList.map((fixture) => fixture.kickoff_at),
-    baseCompetitionKickoffs:
-      baseTimingGroup?.fixtures.map((fixture) => fixture.kickoff_at) ?? [],
-  });
+  const timingWindow = allowOtherCompetitions
+    ? buildLeagueFixtureTimingWindow({
+        currentBaseGroup: currentBaseTimingGroup,
+        nextBaseGroup: nextBaseTimingGroup,
+      }) ??
+      buildFixtureTimingWindow({
+        selectedFixtureKickoffs: [],
+        baseCompetitionKickoffs:
+          baseTimingGroup?.fixtures.map((fixture) => fixture.kickoff_at) ?? [],
+      })
+    : null;
   const timingWindowText = timingWindow ? formatTimingWindow(timingWindow) : null;
   const selectedGroupHasTimingWarnings = Boolean(
     selectedExternalGroup?.fixtures.some((fixture) =>
@@ -559,7 +744,7 @@ export default async function PickFixturesPage({
                       : ""
                   }`}
                   prefetch={false}
-                  className="brand-button-secondary w-fit"
+                  className="brand-button-primary w-fit shadow-lg shadow-emerald-950/20"
                 >
                   Edit fixtures
                 </Link>
@@ -643,31 +828,12 @@ export default async function PickFixturesPage({
             </div>
 
             {allowOtherCompetitions && competitionOptions.length > 1 ? (
-              <form className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]" action="/pick-fixtures">
-                <input type="hidden" name="gameweek" value={selectedGameweek.id} />
-                <label className="min-w-0">
-                  <span className="text-sm font-semibold text-slate-300">
-                    Browse competition
-                  </span>
-                  <select
-                    name="competition"
-                    defaultValue={selectedCompetitionCode ?? ""}
-                    className="brand-input mt-1"
-                  >
-                    {competitionOptions.map((competition) => (
-                      <option
-                        key={competition.external_competition_code}
-                        value={competition.external_competition_code}
-                      >
-                        {competition.name} ({competition.external_competition_code})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button type="submit" className="brand-button-secondary sm:self-end">
-                  Browse
-                </button>
-              </form>
+              <CompetitionBrowseSelect
+                gameweekId={selectedGameweek.id}
+                selectedCompetitionCode={selectedCompetitionCode ?? ""}
+                options={competitionOptions}
+                isEditing={isEditingFixtureSelection}
+              />
             ) : null}
 
             {externalFixturesError ? (
@@ -747,43 +913,95 @@ export default async function PickFixturesPage({
                           });
 
                         return (
-                          <label
+                          <div
                             key={fixture.external_fixture_id}
-                            className={`flex cursor-pointer gap-3 rounded-xl border p-3 transition has-[:checked]:border-emerald-400/70 has-[:checked]:bg-emerald-400/10 hover:border-emerald-400/30 ${
+                            className={`rounded-xl border p-3 transition has-[:checked]:border-emerald-400/70 has-[:checked]:bg-emerald-400/10 hover:border-emerald-400/30 ${
                               outsideTimingWindow
                                 ? "border-amber-300/25 bg-amber-300/10"
                                 : "border-white/10 bg-slate-900/70"
                             }`}
                           >
-                            <input
-                              type="checkbox"
-                              name="external_fixture_id"
-                              value={fixture.external_fixture_id}
-                              defaultChecked={isAlreadySelected}
-                              className="mt-1 h-4 w-4 accent-emerald-500"
-                            />
+                            <label className="flex cursor-pointer items-start gap-3">
+                              <input
+                                type="checkbox"
+                                name="external_fixture_id"
+                                value={fixture.external_fixture_id}
+                                defaultChecked={isAlreadySelected}
+                                className="mt-2 h-4 w-4 accent-emerald-500"
+                              />
 
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-sm font-semibold text-white">
-                                {fixture.home_team || "Unknown home team"} vs{" "}
-                                {fixture.away_team || "Unknown away team"}
-                              </span>
-                              <span className="mt-1 block text-xs text-slate-400">
-                                {formatKickoff(fixture.kickoff_at)} ·{" "}
-                                {fixture.external_matchday !== null
-                                  ? `Matchday ${fixture.external_matchday}`
-                                  : (fixture.external_stage ??
-                                    fixture.external_round ??
-                                    "Round TBC")}{" "}
-                                · {fixture.status}
-                              </span>
-                              {outsideTimingWindow && timingWindowText ? (
-                                <span className="mt-1 block text-xs font-semibold text-amber-200">
-                                  Outside usual gameweek window ({timingWindowText})
+                              <span className="min-w-0 flex-1">
+                                <span className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+                                  <TeamIdentity
+                                    teamName={fixture.home_team || "Unknown home team"}
+                                    positionLabel={fixture.home_position_label}
+                                    compact
+                                  />
+                                  <span className="rounded-full bg-slate-950 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-slate-500">
+                                    v
+                                  </span>
+                                  <TeamIdentity
+                                    teamName={fixture.away_team || "Unknown away team"}
+                                    positionLabel={fixture.away_position_label}
+                                    align="right"
+                                    compact
+                                  />
                                 </span>
-                              ) : null}
-                            </span>
-                          </label>
+                                <span className="mt-2 block text-xs text-slate-400">
+                                  {formatKickoff(fixture.kickoff_at)} ·{" "}
+                                  {fixture.external_matchday !== null
+                                    ? `Matchday ${fixture.external_matchday}`
+                                    : (fixture.external_stage ??
+                                      fixture.external_round ??
+                                      "Round TBC")}{" "}
+                                  · {fixture.status}
+                                </span>
+                                {outsideTimingWindow && timingWindowText ? (
+                                  <span className="mt-1 block text-xs font-semibold text-amber-200">
+                                    Outside usual gameweek window ({timingWindowText})
+                                  </span>
+                                ) : null}
+                              </span>
+                            </label>
+
+                            <details className="mt-3 border-t border-white/10 pt-2">
+                              <summary className="cursor-pointer text-xs font-bold text-slate-400 hover:text-white">
+                                Form guide
+                              </summary>
+                              <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+                                <div>
+                                  <p className="mb-1 font-semibold text-slate-300">
+                                    {fixture.home_team}
+                                  </p>
+                                  <CompactFormChips
+                                    results={getCompactForm({
+                                      teamName: fixture.home_team,
+                                      fixtureKickoffAt: fixture.kickoff_at,
+                                      competitionCode:
+                                        fixture.external_competition_code,
+                                      completedFixtures:
+                                        completedExternalFormFixtures,
+                                    })}
+                                  />
+                                </div>
+                                <div>
+                                  <p className="mb-1 font-semibold text-slate-300">
+                                    {fixture.away_team}
+                                  </p>
+                                  <CompactFormChips
+                                    results={getCompactForm({
+                                      teamName: fixture.away_team,
+                                      fixtureKickoffAt: fixture.kickoff_at,
+                                      competitionCode:
+                                        fixture.external_competition_code,
+                                      completedFixtures:
+                                        completedExternalFormFixtures,
+                                    })}
+                                  />
+                                </div>
+                              </div>
+                            </details>
+                          </div>
                         );
                       })}
                     </div>

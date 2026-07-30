@@ -1,9 +1,11 @@
 import SubmitButton from "@/components/forms/SubmitButton";
-import PendingLink from "@/components/navigation/PendingLink";
+import AutoPickFixturesCard from "@/components/admin/AutoPickFixturesCard";
+import ExternalFixtureImportCard from "@/components/admin/ExternalFixtureImportCard";
 import ExternalResultSyncCard, {
   type ExternalResultSyncSummary,
 } from "@/components/admin/ExternalResultSyncCard";
 import ExternalFixtureRefreshCard from "@/components/admin/ExternalFixtureRefreshCard";
+import StandingsRefreshCard from "@/components/admin/StandingsRefreshCard";
 
 export type MaintenanceSeasonOption = {
   id: string;
@@ -37,6 +39,7 @@ export type ExternalFixtureReadinessRow = {
 type AdminMaintenanceCardsProps = {
   activeSeasonId: string | null;
   activeSeasonName: string | null;
+  activeSeasonBaseCompetitionCode?: string | null;
   seasons: MaintenanceSeasonOption[];
   healthChecks: HealthCheckRow[];
   reminderReadiness: ReminderReadinessRow[];
@@ -74,6 +77,7 @@ function getDotClass(severity: HealthSeverity) {
 export default function AdminMaintenanceCards({
   activeSeasonId,
   activeSeasonName,
+  activeSeasonBaseCompetitionCode = null,
   seasons,
   healthChecks,
   reminderReadiness,
@@ -204,43 +208,29 @@ export default function AdminMaintenanceCards({
           ))}
         </div>
 
-        {activeSeasonId ? (
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <PendingLink
-              href={`/api/admin/external-fixtures/import?season_id=${activeSeasonId}&dry_run=1`}
-              className="rounded-lg border border-emerald-500/40 px-4 py-3 text-center text-sm font-semibold text-emerald-300"
-              pendingChildren="Loading dry-run..."
-            >
-              Dry-run external import
-            </PendingLink>
-
-            <form
-              action="/api/admin/external-fixtures/import"
-              method="post"
-            >
-              <input type="hidden" name="season_id" value={activeSeasonId} />
-              <input type="hidden" name="dry_run" value="0" />
-              <SubmitButton
-                idleLabel="Import external fixtures"
-                pendingLabel="Importing fixtures..."
-                className="w-full rounded-lg bg-amber-400 px-4 py-3 text-sm font-semibold text-slate-950"
-              />
-            </form>
-          </div>
-        ) : null}
+        <ExternalFixtureImportCard
+          activeSeasonId={activeSeasonId}
+          activeSeasonName={activeSeasonName}
+          baseCompetitionCode={activeSeasonBaseCompetitionCode}
+        />
+        <StandingsRefreshCard
+          baseCompetitionCode={activeSeasonBaseCompetitionCode}
+        />
       </div>
 
       <ExternalFixtureRefreshCard />
+
+      <AutoPickFixturesCard />
 
       <ExternalResultSyncCard summary={externalResultSyncSummary} />
 
       <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
         <h2 className="text-xl font-semibold">Email reminders</h2>
         <p className="mt-2 text-sm text-slate-400">
-          Vercel Cron runs daily to send matchday prediction reminders and
-          fixture picker nudges when action is still needed. Environment
-          checks show this current runtime only, so local development can differ
-          from Vercel Production.
+          cron-job.org calls the secured cron endpoints to send matchday
+          prediction reminders and fixture picker nudges when action is still
+          needed. Environment checks show this current runtime only, so local
+          development can differ from Production.
         </p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2">

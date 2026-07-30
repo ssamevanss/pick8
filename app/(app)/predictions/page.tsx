@@ -19,6 +19,7 @@ import {
   calculateProvisionalPredictionScore,
   isLiveExternalStatus,
 } from "@/utils/provisional-scoring";
+import { formatOrdinal } from "@/utils/ordinals";
 import { savePredictions } from "./actions";
 
 type CompletedFixtureForForm = {
@@ -28,6 +29,18 @@ type CompletedFixtureForForm = {
   kickoff_at: string;
   home_score: number;
   away_score: number;
+};
+
+type ExternalCompletedFixtureForForm = CompletedFixtureForForm & {
+  external_competition_code: string;
+};
+
+type TeamStandingRow = {
+  external_competition_code: string;
+  team_name: string;
+  team_short_name: string | null;
+  team_tla: string | null;
+  position: number;
 };
 
 function getTeamFormResult({
@@ -59,15 +72,20 @@ function getRecentTeamForm({
   teamName,
   fixtureKickoffAt,
   completedFixtures,
+  competitionCode,
 }: {
   teamName: string;
   fixtureKickoffAt: string;
-  completedFixtures: CompletedFixtureForForm[];
+  completedFixtures: (CompletedFixtureForForm | ExternalCompletedFixtureForForm)[];
+  competitionCode?: string | null;
 }) {
   return completedFixtures
     .filter(
       (fixture) =>
         fixture.kickoff_at < fixtureKickoffAt &&
+        (!competitionCode ||
+          !("external_competition_code" in fixture) ||
+          fixture.external_competition_code === competitionCode) &&
         (fixture.home_team === teamName || fixture.away_team === teamName),
     )
     .sort(
@@ -238,8 +256,30 @@ export default async function DashboardPage({
       .sort()
       .at(-1) ?? null;
 
-  const { data: completedFormFixtures } =
-    activeSeason && latestFixtureKickoff
+  const fixtureCompetitionCodes = [
+    ...new Set(
+      fixtureList
+        .map((fixture) => fixture.external_competition_code)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  const { data: completedExternalFormFixtures } =
+    latestFixtureKickoff && fixtureCompetitionCodes.length > 0
+      ? await supabase
+          .from("external_fixtures")
+          .select(
+            "external_fixture_id, external_competition_code, home_team, away_team, kickoff_at, home_score, away_score",
+          )
+          .eq("provider", "football_data")
+          .in("external_competition_code", fixtureCompetitionCodes)
+          .eq("status", "FINISHED")
+          .not("home_score", "is", null)
+          .not("away_score", "is", null)
+          .lt("kickoff_at", latestFixtureKickoff)
+          .order("kickoff_at", { ascending: false })
+      : { data: [] };
+  const { data: completedLocalFormFixtures } =
+    activeSeason && latestFixtureKickoff && fixtureCompetitionCodes.length === 0
       ? await supabase
           .from("fixtures")
           .select(
@@ -263,20 +303,78 @@ export default async function DashboardPage({
           .order("kickoff_at", { ascending: false })
       : { data: [] };
   const completedFixtureRows =
-    (completedFormFixtures as CompletedFixtureForForm[] | null) ?? [];
+    fixtureCompetitionCodes.length > 0
+      ? ((completedExternalFormFixtures as
+          | (ExternalCompletedFixtureForForm & { external_fixture_id: string })[]
+          | null) ?? []).map((fixture) => ({
+          id: fixture.external_fixture_id,
+          external_competition_code: fixture.external_competition_code,
+          home_team: fixture.home_team,
+          away_team: fixture.away_team,
+          kickoff_at: fixture.kickoff_at,
+          home_score: fixture.home_score,
+          away_score: fixture.away_score,
+        }))
+      : ((completedLocalFormFixtures as CompletedFixtureForForm[] | null) ?? []);
+  const { data: standingRows } =
+    fixtureCompetitionCodes.length > 0
+      ? await supabase
+          .from("external_team_standings")
+          .select("external_competition_code, team_name, team_short_name, team_tla, position")
+          .eq("provider", "football_data")
+          .in("external_competition_code", fixtureCompetitionCodes)
+      : { data: [] };
+  const standingsByCompetitionAndTeam = new Map<string, string>();
+
+  for (const standing of (standingRows as TeamStandingRow[] | null) ?? []) {
+    const label = formatOrdinal(standing.position);
+
+    if (!label) {
+      continue;
+    }
+
+    for (const name of [
+      standing.team_name,
+      standing.team_short_name,
+      standing.team_tla,
+    ]) {
+      if (name) {
+        standingsByCompetitionAndTeam.set(
+          `${standing.external_competition_code}:${name}`,
+          label,
+        );
+      }
+    }
+  }
+
+  const fixtureListWithPositions = fixtureList.map((fixture) => ({
+    ...fixture,
+    home_position_label: fixture.external_competition_code
+      ? standingsByCompetitionAndTeam.get(
+          `${fixture.external_competition_code}:${fixture.home_team}`,
+        ) ?? null
+      : null,
+    away_position_label: fixture.external_competition_code
+      ? standingsByCompetitionAndTeam.get(
+          `${fixture.external_competition_code}:${fixture.away_team}`,
+        ) ?? null
+      : null,
+  }));
   const formByFixture = new Map<string, FixtureTeamForm>();
 
-  for (const fixture of fixtureList) {
+  for (const fixture of fixtureListWithPositions) {
     formByFixture.set(fixture.id, {
       home: getRecentTeamForm({
         teamName: fixture.home_team,
         fixtureKickoffAt: fixture.kickoff_at,
         completedFixtures: completedFixtureRows,
+        competitionCode: fixture.external_competition_code,
       }),
       away: getRecentTeamForm({
         teamName: fixture.away_team,
         fixtureKickoffAt: fixture.kickoff_at,
         completedFixtures: completedFixtureRows,
+        competitionCode: fixture.external_competition_code,
       }),
     });
   }
@@ -490,7 +588,7 @@ export default async function DashboardPage({
         hasOpenPredictionFixtures={hasOpenPredictionFixtures}
         initialSaved={userHasSavedOpenPredictions}
         showSavedToast={Boolean(params.saved)}
-        fixtures={fixtureList}
+        fixtures={fixtureListWithPositions}
         externalScores={Object.fromEntries(externalScoreByFixtureId)}
         predictionsByFixture={Object.fromEntries(predictionsByFixture)}
         jokerPredictionKeys={[...jokerPredictionKeys]}

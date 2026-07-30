@@ -1,36 +1,25 @@
 import { NextRequest } from "next/server";
 import {
-  fetchCompetitionMatches,
   FootballDataError,
-  normalizeFootballDataMatch,
-  type NormalizedFootballDataFixture,
 } from "@/utils/football-data/client";
-import { getActiveSeason } from "@/utils/seasons";
+import {
+  addDays,
+  formatDateOnly,
+  importExternalFixturesForSeason,
+  loadExternalFixtureImportSeason,
+  validateDateWindow,
+} from "@/utils/external-fixture-import";
 import { createAdminClient } from "@/utils/supabase/admin";
 import { createClient } from "@/utils/supabase/server";
 
 export const dynamic = "force-dynamic";
 
-type ExternalFixtureImportSeason = {
-  id: string;
-  name: string;
-  status: string | null;
-  base_provider: string | null;
-  base_competition_code: string | null;
-  provider_season: string | null;
-  fixture_import_enabled: boolean | null;
-};
-
 type ImportRequestParams = {
   seasonId: string | null;
+  competitionCode: string | null;
   dateFrom: string | null;
   dateTo: string | null;
   dryRun: boolean;
-};
-
-type ExistingExternalFixtureMatchdayRow = {
-  external_fixture_id: string;
-  external_matchday: number | null;
 };
 
 async function requireAdmin() {
@@ -55,20 +44,6 @@ async function requireAdmin() {
   }
 
   return { error: null };
-}
-
-function formatDateOnly(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function addDays(date: Date, days: number) {
-  const next = new Date(date);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
-}
-
-function isDateOnly(value: string) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 async function parseImportRequest(request: NextRequest): Promise<ImportRequestParams> {
@@ -104,103 +79,10 @@ async function parseImportRequest(request: NextRequest): Promise<ImportRequestPa
 
   return {
     seasonId: readParam("season_id"),
+    competitionCode: readParam("competition_code"),
     dateFrom: readParam("date_from"),
     dateTo: readParam("date_to"),
     dryRun: dryRunValue !== "0" && dryRunValue !== "false",
-  };
-}
-
-function validateDateWindow(dateFrom: string, dateTo: string) {
-  if (!isDateOnly(dateFrom) || !isDateOnly(dateTo)) {
-    return "date_from and date_to must use YYYY-MM-DD.";
-  }
-
-  if (dateFrom > dateTo) {
-    return "date_from must be before or equal to date_to.";
-  }
-
-  return null;
-}
-
-function toUpsertRow(fixture: NormalizedFootballDataFixture, syncedAt: string) {
-  return {
-    ...fixture,
-    last_synced_at: syncedAt,
-    updated_at: syncedAt,
-  };
-}
-
-async function getExistingExternalMatchdays({
-  supabase,
-  provider,
-  externalFixtureIds,
-}: {
-  supabase: ReturnType<typeof createAdminClient>;
-  provider: string;
-  externalFixtureIds: string[];
-}) {
-  if (externalFixtureIds.length === 0) {
-    return new Map<string, number>();
-  }
-
-  const { data, error } = await supabase
-    .from("external_fixtures")
-    .select("external_fixture_id, external_matchday")
-    .eq("provider", provider)
-    .in("external_fixture_id", externalFixtureIds);
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return new Map(
-    ((data as ExistingExternalFixtureMatchdayRow[] | null) ?? [])
-      .filter((row) => row.external_matchday !== null)
-      .map((row) => [row.external_fixture_id, row.external_matchday!]),
-  );
-}
-
-async function loadSeason(seasonId: string | null) {
-  const adminSupabase = createAdminClient();
-  const resolvedSeasonId =
-    seasonId ??
-    (await getActiveSeason(adminSupabase, "id")).data?.id ??
-    null;
-
-  if (!resolvedSeasonId) {
-    return {
-      adminSupabase,
-      season: null,
-      error: Response.json(
-        { error: "No season_id provided and no active season found." },
-        { status: 400 },
-      ),
-    };
-  }
-
-  const { data: season, error } = await adminSupabase
-    .from("seasons")
-    .select(
-      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled",
-    )
-    .eq("id", resolvedSeasonId)
-    .single();
-
-  if (error || !season) {
-    return {
-      adminSupabase,
-      season: null,
-      error: Response.json(
-        { error: error?.message ?? "Season not found." },
-        { status: 404 },
-      ),
-    };
-  }
-
-  return {
-    adminSupabase,
-    season: season as ExternalFixtureImportSeason,
-    error: null,
   };
 }
 
@@ -229,10 +111,10 @@ async function handleImport(request: NextRequest) {
     return Response.json({ error: dateError }, { status: 400 });
   }
 
-  let loadedSeason: Awaited<ReturnType<typeof loadSeason>>;
+  let adminSupabase: ReturnType<typeof createAdminClient>;
 
   try {
-    loadedSeason = await loadSeason(params.seasonId);
+    adminSupabase = createAdminClient();
   } catch (error) {
     return Response.json(
       {
@@ -245,11 +127,19 @@ async function handleImport(request: NextRequest) {
     );
   }
 
+  const loadedSeason = await loadExternalFixtureImportSeason({
+    supabase: adminSupabase,
+    seasonId: params.seasonId,
+  });
+
   if (loadedSeason.error || !loadedSeason.season) {
-    return loadedSeason.error;
+    return Response.json(
+      { error: loadedSeason.error },
+      { status: loadedSeason.error.includes("not found") ? 404 : 400 },
+    );
   }
 
-  const { adminSupabase, season } = loadedSeason;
+  const { season } = loadedSeason;
 
   if (season.base_provider !== "football_data") {
     return Response.json(
@@ -258,9 +148,16 @@ async function handleImport(request: NextRequest) {
     );
   }
 
-  if (!season.base_competition_code) {
+  const importCompetitionCode =
+    params.competitionCode?.trim().toUpperCase() ??
+    season.base_competition_code;
+
+  if (!importCompetitionCode) {
     return Response.json(
-      { error: "Season base_competition_code is required before importing fixtures." },
+      {
+        error:
+          "A competition_code or season base_competition_code is required before importing fixtures.",
+      },
       { status: 400 },
     );
   }
@@ -276,85 +173,17 @@ async function handleImport(request: NextRequest) {
   }
 
   try {
-    const { matches, request: providerRequest } = await fetchCompetitionMatches({
-      competitionCode: season.base_competition_code,
+    const result = await importExternalFixturesForSeason({
+      supabase: adminSupabase,
+      season,
+      competitionCode: importCompetitionCode,
       dateFrom,
       dateTo,
-      season: season.provider_season ?? undefined,
+      dryRun: params.dryRun,
+      syncedAt,
     });
-    const fixtureMatches = matches as Record<string, unknown>[];
-    const fixtures = fixtureMatches.map((match) =>
-      normalizeFootballDataMatch(match, season.base_competition_code ?? undefined),
-    );
 
-    if (params.dryRun) {
-      return Response.json({
-        dry_run: true,
-        season: {
-          id: season.id,
-          name: season.name,
-          status: season.status,
-          base_provider: season.base_provider,
-          base_competition_code: season.base_competition_code,
-          provider_season: season.provider_season,
-          fixture_import_enabled: season.fixture_import_enabled,
-        },
-        window: { date_from: dateFrom, date_to: dateTo },
-        provider_request: providerRequest,
-        fetched_count: fixtures.length,
-        sample: fixtures.slice(0, 10),
-      });
-    }
-
-    const existingMatchdays = await getExistingExternalMatchdays({
-      supabase: adminSupabase,
-      provider: "football_data",
-      externalFixtureIds: fixtures.map((fixture) => fixture.external_fixture_id),
-    });
-    const rows = fixtures.map((fixture) => ({
-      ...toUpsertRow(fixture, syncedAt),
-      external_matchday:
-        fixture.external_matchday ??
-        existingMatchdays.get(fixture.external_fixture_id) ??
-        null,
-    }));
-    if (rows.length === 0) {
-      return Response.json({
-        dry_run: false,
-        season: {
-          id: season.id,
-          name: season.name,
-          base_provider: season.base_provider,
-          base_competition_code: season.base_competition_code,
-        },
-        window: { date_from: dateFrom, date_to: dateTo },
-        provider_request: providerRequest,
-        upserted_count: 0,
-        last_synced_at: syncedAt,
-      });
-    }
-
-    const { error: upsertError } = await adminSupabase
-      .from("external_fixtures")
-      .upsert(rows, { onConflict: "provider,external_fixture_id" });
-
-    if (upsertError) {
-      return Response.json({ error: upsertError.message }, { status: 500 });
-    }
-
-    return Response.json({
-      dry_run: false,
-      season: {
-        id: season.id,
-        name: season.name,
-        base_provider: season.base_provider,
-        base_competition_code: season.base_competition_code,
-      },
-      window: { date_from: dateFrom, date_to: dateTo },
-      provider_request: providerRequest,
-      upserted_count: rows.length,
-      last_synced_at: syncedAt,
-    });
+    return Response.json(result);
   } catch (error) {
     if (error instanceof FootballDataError) {
       return Response.json(

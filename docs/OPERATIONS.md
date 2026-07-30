@@ -66,10 +66,12 @@ Required for scheduled email notifications:
 ```env
 RESEND_API_KEY=...
 REMINDER_EMAIL_FROM="Football Predictor <reminders@example.com>"
+BUG_REPORT_EMAIL_TO="Sam <sam@example.com>"
 CRON_SECRET=...
 ```
 
-Never expose `RESEND_API_KEY` client-side.
+Never expose `RESEND_API_KEY` client-side. `BUG_REPORT_EMAIL_TO` is read only
+by the server action that notifies the app owner after a bug report is stored.
 
 Admin -> Maintenance environment checks report only the runtime currently
 serving the page. A local development server can show reminder env vars as
@@ -98,9 +100,21 @@ tested for the season. Dry-run result sync remains available while disabled;
 real manual and cron sync require `result_sync_enabled = true`.
 
 football-data.org free tier is limited to 10 requests/minute. Import routes
-make one provider request per import and return a clear 429 error with
+make one provider request per selected competition and return a clear 429 error with
 `x_requestcounter_reset` if the provider limit is reached. Avoid repeated manual
 imports inside the same minute.
+
+Admin -> Maintenance includes an in-page external fixture import card. Use the
+competition dropdown to import the active season base competition or another
+enabled football-data.org competition such as La Liga, Serie A, Bundesliga, or
+Ligue 1 into the shared cache. Dry-run output stays in the page and shows
+provider calls, fetched count, sample fixtures, planned rows, skipped rows, and
+errors/warnings.
+
+Fixture import is currently admin/manual only through this card or the
+admin-only import API below. Scheduled import is also available through
+cron-job.org at `/api/cron/import-external-fixtures`; use it once the active
+season provider/competition settings have been checked.
 
 Dry-run locally while logged in as an admin:
 
@@ -108,14 +122,14 @@ Dry-run locally while logged in as an admin:
 curl -X POST \
   -H "Content-Type: application/json" \
   -b cookies.txt \
-  -d '{"season_id":"<season_id>","dry_run":1}' \
+  -d '{"season_id":"<season_id>","competition_code":"PL","dry_run":1}' \
   "http://localhost:3000/api/admin/external-fixtures/import"
 ```
 
 Browser-based dry-run is also available when already signed in as admin:
 
 ```text
-http://localhost:3000/api/admin/external-fixtures/import?season_id=<season_id>&dry_run=1
+http://localhost:3000/api/admin/external-fixtures/import?season_id=<season_id>&competition_code=PL&dry_run=1
 ```
 
 A real import requires `fixture_import_enabled = true` for the target season.
@@ -126,9 +140,28 @@ output:
 curl -X POST \
   -H "Content-Type: application/json" \
   -b cookies.txt \
-  -d '{"season_id":"<season_id>","dry_run":0}' \
+  -d '{"season_id":"<season_id>","competition_code":"PL","dry_run":0}' \
   "http://localhost:3000/api/admin/external-fixtures/import"
 ```
+
+cron-job.org production pattern for importing the active season base
+competition:
+
+```text
+GET https://<production-domain>/api/cron/import-external-fixtures
+Authorization: Bearer <CRON_SECRET>
+```
+
+Useful query params:
+
+- `dry_run=1`: fetch provider rows but do not write.
+- `include_enabled=1`: import every enabled football-data.org competition in
+  `external_competitions`; this costs one provider call per competition.
+- `date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`: override the default rolling
+  import window.
+
+Recommended PL schedule: daily during the season, or weekly before each PL
+round if provider-call budget is tight.
 
 The import writes only `external_fixtures`. It does not create gameplay
 fixtures, update results, score predictions, or recalculate leaderboards.
@@ -189,12 +222,45 @@ Special fixtures from another competition:
   competition is not the season base competition.
 - If a selected cached or manual fixture is outside the usual gameweek timing
   window, the app shows a warning and requires an "add it anyway" confirmation.
-- The timing window is inferred from already selected fixtures for the
-  gameweek. If none exist yet, it falls back to the next base-competition
-  external group. A 12-hour buffer is applied on either side to avoid noisy
-  warnings for normal weekend spread.
+- For league-mode seasons, the timing window comes from provider base-league
+  groups: the current base matchday's first kickoff through the next base
+  matchday's first kickoff minus 24 hours. This keeps Friday/Monday league
+  fixtures valid while preventing special fixtures from crossing into the next
+  base-league prediction cycle.
+- Tournament/cup-style seasons do not apply the league cutoff; close-together
+  knockout fixtures are valid and expected.
 - The warning is not a hard block; it is there to catch accidental wrong-week
   selections while still allowing cup ties and moved fixtures.
+
+Useful cache checks before Premier League picking:
+
+```sql
+select
+  external_competition_code,
+  count(*) as fixtures,
+  min(kickoff_at) as first_kickoff,
+  max(kickoff_at) as last_kickoff
+from public.external_fixtures
+group by external_competition_code
+order by external_competition_code;
+```
+
+```sql
+select
+  id,
+  external_competition_code,
+  home_team,
+  away_team,
+  kickoff_at,
+  external_matchday,
+  status
+from public.external_fixtures
+where home_team ilike '%Arsenal%'
+   or away_team ilike '%Arsenal%'
+   or home_team ilike '%Coventry%'
+   or away_team ilike '%Coventry%'
+order by kickoff_at;
+```
 
 ## External result sync
 
@@ -336,7 +402,8 @@ fixture_import_enabled = true
 
 If no eligible active season is configured, it returns a skipped response and
 does not call football-data.org. Refresh keeps provider calls low by fetching
-the active competition window once, then updating local cache rows and selected
+the active base competition plus any already-selected linked fixture
+competitions for the active season, then updating local cache rows and selected
 linked fixtures safely.
 
 Safe selected-fixture propagation:
@@ -355,6 +422,13 @@ Recommended scheduler frequency:
 - every 1 to 3 hours during cup/tournament knockout periods if teams are
   resolving quickly
 - keep result sync separate at every 5 to 15 minutes around live match windows
+
+cron-job.org production pattern:
+
+```text
+GET https://<production-domain>/api/cron/refresh-external-fixtures
+Authorization: Bearer <CRON_SECRET>
+```
 
 2.0E adds a protected cron-compatible route:
 
@@ -411,6 +485,13 @@ every 5 minutes. Vercel Hobby cron is daily only, so it is not suitable for
 frequent result polling. Keep the scheduler disabled outside active match
 windows unless you specifically want the endpoint's DB-window skip response.
 
+cron-job.org production pattern:
+
+```text
+GET https://<production-domain>/api/cron/sync-external-results
+Authorization: Bearer <CRON_SECRET>
+```
+
 Production scheduler checklist:
 
 1. Confirm `CRON_SECRET` is set in Vercel Production and matches the external
@@ -423,8 +504,9 @@ Production scheduler checklist:
 4. Keep `/api/cron/sync-external-results` separate from
    `/api/cron/send-prediction-reminders`; result sync never sends emails, and
    reminder cron never syncs scores.
-5. Review Vercel logs after the first live match window for provider errors,
-   scoring updates, and duplicate-notification warnings.
+5. Review hosting logs and cron-job.org job history after the first live match
+   window for provider errors, scoring updates, and duplicate-notification
+   warnings.
 
 ## Deployment
 
@@ -446,27 +528,121 @@ After deploying:
 - Check Leaderboard
 - Check Admin -> Season
 - Check Admin -> Gameweeks
-- Check Vercel logs for errors
+- Check hosting/scheduler logs for errors
 
 ## Scheduled prediction reminders
 
-Vercel Cron calls:
+cron-job.org calls:
 
 ```text
 /api/cron/send-prediction-reminders
 ```
 
-On Vercel Hobby, cron runs once daily. The configured schedule is:
+The route requires `CRON_SECRET` with either:
 
 ```text
-0 8 * * *
+Authorization: Bearer <CRON_SECRET>
 ```
 
-Vercel cron schedules use UTC, so this runs at 08:00 UTC. During UK/Ireland
-summer time that is 09:00 local time.
+or `?token=<CRON_SECRET>` for simple scheduler configuration. During testing,
+run it every 5 to 15 minutes around prediction deadlines; in normal operation,
+hourly or daily is usually enough depending on how many close-to-kickoff
+fixtures are expected.
 
 The route is now the scheduled email-notification route. It remains separate
 from `/api/cron/sync-external-results` and never syncs scores.
+
+cron-job.org production pattern:
+
+```text
+GET https://<production-domain>/api/cron/send-prediction-reminders
+Authorization: Bearer <CRON_SECRET>
+```
+
+## Pre-PL follow-ups
+
+- Backfill enough completed `external_fixtures` before PL starts so recent form
+  has meaningful non-picked match data.
+- Extend crest/alias coverage for selectable European leagues if provider crest
+  URLs are unavailable or blocked.
+- Add smarter fixture auto-pick ranking later; the first implementation is
+  intentionally random among eligible base-competition fixtures.
+
+## Auto-pick missed fixture selections
+
+Auto-pick fills missing fixture selections when the assigned picker has not
+completed a due gameweek. It uses only the active season base competition and
+never calls provider APIs from player-facing pages.
+
+Admin Maintenance includes dry-run and run buttons. The secured cron endpoint
+is:
+
+```text
+/api/cron/auto-pick-fixtures
+```
+
+cron-job.org production pattern:
+
+```text
+GET https://<production-domain>/api/cron/auto-pick-fixtures
+Authorization: Bearer <CRON_SECRET>
+```
+
+Use `dry_run=1` to inspect candidate gameweeks without writing.
+
+Rules:
+
+- only active football-data seasons are considered
+- the active season must have a base competition code
+- a gameweek is due 12 hours before the first eligible base-competition kickoff
+- existing completed/void/postponed selections are never overwritten
+- gameweeks with predictions are skipped
+- partial safe selections are filled from the same base fixture group where
+  possible
+- duplicate external fixtures across the active season are avoided
+- when auto-pick completes a fixture set, normal Picks activity and
+  predictions-open email de-dupe run
+
+Recommended schedule: hourly on cron-job.org during PL weeks, or several times
+per day if you want fewer invocations.
+
+## Standings Refresh
+
+Run `docs/2026-07-30-external-team-standings.sql` before enabling standings
+display. Standings are cached in `external_team_standings` and read by pages
+locally; page render never calls football-data.org.
+
+Admin Maintenance includes standings dry-run/run controls. The secured cron
+endpoint is:
+
+```text
+/api/cron/refresh-standings
+```
+
+cron-job.org production pattern:
+
+```text
+GET https://<production-domain>/api/cron/refresh-standings
+Authorization: Bearer <CRON_SECRET>
+```
+
+Recommended schedule: daily after result sync windows, plus one manual refresh
+after importing a new PL round.
+
+Inspect cached standings:
+
+```sql
+select
+  external_competition_code,
+  provider_season,
+  position,
+  team_name,
+  played,
+  points,
+  updated_at
+from public.external_team_standings
+order by external_competition_code, position;
+```
 
 Before enabling it, run:
 
@@ -510,10 +686,10 @@ Prediction-open and reminder emails mention Double Gameweek when the selected
 gameweek is marked as double.
 
 Gmail tab placement is controlled by Gmail and can vary by user. The app keeps
-24-hour reminder emails plain and transactional, with a text link instead of a
-promotional-style button, to improve the chance of Primary or Updates placement.
-Users can move a reminder to Primary or mark it as important to train Gmail for
-future league emails.
+24-hour reminder emails short, branded, and transactional, using the same email
+shell as predictions-open while avoiding marketing-heavy copy. Users can move a
+reminder to Primary or mark it as important to train Gmail for future league
+emails.
 
 Email preferences:
 
@@ -525,6 +701,33 @@ Email preferences:
 - Email footers include a Manage email preferences link.
 - Opting out affects email only; dashboard activity and app access are
   unchanged.
+
+Bug reports:
+
+- Run `docs/2026-07-30-bug-reports.sql` before enabling user bug reports.
+- Users submit bug reports from `/settings`.
+- The server action stores the report in `bug_reports` before attempting email.
+- Email notification goes to `BUG_REPORT_EMAIL_TO` using Resend.
+- If the database insert succeeds but email fails or `BUG_REPORT_EMAIL_TO` is
+  missing, the user sees a softer saved-but-email-failed toast and the report
+  remains available in the database.
+- Normal users cannot read the shared report table. Approved admins and
+  service-role/admin tooling can read/update reports.
+
+Inspect recent reports:
+
+```sql
+select
+  created_at,
+  status,
+  user_name,
+  user_email,
+  page_url,
+  left(message, 160) as message_preview
+from public.bug_reports
+order by created_at desc
+limit 20;
+```
 
 Social notification inbox:
 
@@ -894,7 +1097,8 @@ Only update dependencies if there is a clear reason, such as security fixes or n
 
 Current lightweight monitoring:
 
-- Vercel runtime logs
+- Hosting runtime logs
+- cron-job.org job history
 - Supabase dashboard/logs
 - Manual smoke tests
 

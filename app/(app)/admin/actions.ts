@@ -27,6 +27,7 @@ import {
 import {
   buildFixtureGroupTimings,
   buildFixtureTimingWindow,
+  buildLeagueFixtureTimingWindow,
   getSpecialFixtureCutoff,
   isKickoffBeforeSpecialFixtureCutoff,
   isKickoffOutsideTimingWindow,
@@ -118,22 +119,40 @@ async function getAdminGameweekTimingWindow({
           kickoff_at: string;
         }[]
       | null) ?? [];
-  const firstBaseGroupKey = baseFixtureRows[0]
-    ? getExternalFixtureGroupKey(baseFixtureRows[0])
-    : null;
-  const baseCompetitionKickoffs = firstBaseGroupKey
-    ? baseFixtureRows
-        .filter(
-          (fixture) =>
-            getExternalFixtureGroupKey(fixture) === firstBaseGroupKey,
-        )
-        .map((fixture) => fixture.kickoff_at)
-    : [];
-
-  return buildFixtureTimingWindow({
-    selectedFixtureKickoffs,
-    baseCompetitionKickoffs,
+  const baseGroupTimings = buildFixtureGroupTimings(baseFixtureRows);
+  const selectedBaseFixture = baseFixtureRows.find((fixture) =>
+    selectedFixtureKickoffs.includes(fixture.kickoff_at),
+  );
+  const currentGroupKey = selectedBaseFixture
+    ? getExternalFixtureGroupKey(selectedBaseFixture)
+    : baseGroupTimings[0]?.key ?? null;
+  const currentGroupIndex = currentGroupKey
+    ? baseGroupTimings.findIndex((group) => group.key === currentGroupKey)
+    : 0;
+  const currentGroup =
+    baseGroupTimings[currentGroupIndex >= 0 ? currentGroupIndex : 0] ?? null;
+  const nextGroup =
+    currentGroupIndex >= 0
+      ? baseGroupTimings[currentGroupIndex + 1] ?? null
+      : baseGroupTimings[1] ?? null;
+  const leagueWindow = buildLeagueFixtureTimingWindow({
+    currentBaseGroup: currentGroup,
+    nextBaseGroup: nextGroup,
   });
+
+  return (
+    leagueWindow ??
+    buildFixtureTimingWindow({
+      selectedFixtureKickoffs: [],
+      baseCompetitionKickoffs: currentGroup
+        ? baseFixtureRows
+            .filter(
+              (fixture) => getExternalFixtureGroupKey(fixture) === currentGroup.key,
+            )
+            .map((fixture) => fixture.kickoff_at)
+        : [],
+    })
+  );
 }
 
 type ActivityGameweekRow = {

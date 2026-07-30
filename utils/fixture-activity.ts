@@ -34,6 +34,11 @@ type GameweekWithPickerRow = {
     | null;
 };
 
+type ActioningProfileRow = {
+  display_name: string;
+  role: string | null;
+};
+
 function getPickerDisplayName(gameweek: GameweekWithPickerRow) {
   if (Array.isArray(gameweek.profiles)) {
     return gameweek.profiles[0]?.display_name ?? "Someone";
@@ -64,10 +69,12 @@ export async function upsertFixturesPickedActivity({
   supabase,
   gameweekId,
   actioningUserId,
+  source = "manual",
 }: {
   supabase: SupabaseLikeClient;
   gameweekId: string;
   actioningUserId?: string | null;
+  source?: "manual" | "auto";
 }) {
   const { data: gameweek } = await supabase
     .from("gameweeks")
@@ -134,16 +141,42 @@ export async function upsertFixturesPickedActivity({
   const doubleGameweekText = typedGameweek.is_double_gameweek
     ? " It is a Double Gameweek, so all points count 2x."
     : "";
+  const { data: actioningProfile } = actioningUserId
+    ? await supabase
+        .from("profiles")
+        .select("display_name, role")
+        .eq("id", actioningUserId)
+        .maybeSingle()
+    : { data: null };
+  const typedActioningProfile = actioningProfile as ActioningProfileRow | null;
+  const adminPickedOnBehalf =
+    typedActioningProfile?.role === "admin" &&
+    actioningUserId !== typedGameweek.fixture_picker_id;
+  const activityTitle =
+    source === "auto"
+      ? `Fixtures were auto-picked for ${pickerName} for ${gameweekName}`
+      : adminPickedOnBehalf
+        ? `Admin picked fixtures on ${pickerName}’s behalf for ${gameweekName}`
+        : `${pickerName} picked fixtures for ${gameweekName}`;
+  const activityBody =
+    source === "auto"
+      ? `Fixtures were auto-picked for ${pickerName} for ${gameweekName}. ${gameweekName} starts at ${kickoffText}.${doubleGameweekText}`
+      : adminPickedOnBehalf
+        ? `Admin picked the ${gameweekName} fixtures on ${pickerName}’s behalf. ${gameweekName} starts at ${kickoffText}.${doubleGameweekText}`
+        : `${pickerName} picked the ${gameweekName} fixtures. ${gameweekName} starts at ${kickoffText}.${doubleGameweekText}`;
 
   await upsertActivityNotification({
     eventKey,
     type: "fixtures_selected",
-    title: `${pickerName} picked fixtures for ${gameweekName}`,
-    body: `${pickerName} picked the ${gameweekName} fixtures. ${gameweekName} starts at ${kickoffText}.${doubleGameweekText}`,
+    title: activityTitle,
+    body: activityBody,
     seasonId: typedGameweek.season_id,
     gameweekId,
     metadata: {
       pickerName,
+      actioningUserName: typedActioningProfile?.display_name ?? null,
+      pickedByAdminOnBehalf: adminPickedOnBehalf,
+      pickedAutomatically: source === "auto",
       gameweekId,
       gameweekName,
       fixtureCount: fixtureList.length,

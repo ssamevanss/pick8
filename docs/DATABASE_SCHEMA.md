@@ -349,6 +349,42 @@ Rules:
 - Importing external fixtures must not create gameplay fixtures automatically.
 - Result sync updates the cache row for linked selected fixtures but does not overwrite manually assigned `external_matchday` values.
 
+## `external_team_standings`
+
+Caches provider league-table rows for local display of compact ordinal team
+positions on fixture cards.
+
+Migration:
+
+- `docs/2026-07-30-external-team-standings.sql`
+
+Important columns:
+
+- `provider`
+- `external_competition_code`
+- `provider_season`
+- `external_team_id`
+- `team_name`
+- `team_short_name`
+- `team_tla`
+- `crest_url`
+- `position`
+- `played`
+- `won`
+- `drawn`
+- `lost`
+- `points`
+- `raw_payload`
+- `updated_at`
+
+Rules:
+
+- Unique by `(provider, external_competition_code, provider_season, external_team_id)`.
+- `provider_season` uses an empty string when the provider season is unknown, so upserts remain idempotent.
+- Pages read this local cache only; they never call the provider standings endpoint.
+- If no row exists for a team, the UI shows no position rather than guessing.
+- Tournament/cup fixtures should not show league-table positions.
+
 ## `predictions`
 
 Represents a user's predicted score for a fixture.
@@ -697,6 +733,38 @@ Migration:
 
 ```text
 docs/2026-07-06-user-email-preferences.sql
+```
+
+## `bug_reports`
+
+Stores simple user-submitted issue reports from `/settings`.
+
+Important columns:
+
+- `user_id`
+- `user_email`
+- `user_name`
+- `page_url`
+- `user_agent`
+- `message`
+- `status`
+- `created_at`
+- `reviewed_at`
+- `reviewed_by`
+
+Rules:
+
+- Authenticated users can insert reports for themselves.
+- Normal users cannot browse the shared report table.
+- Approved admins can read/update reports.
+- Service-role/admin tooling can read, insert, update, and delete.
+- The app stores the report before attempting the Resend email notification, so
+  email failure does not lose the report.
+
+Migration:
+
+```text
+docs/2026-07-30-bug-reports.sql
 ```
 
 ## `user_notifications`

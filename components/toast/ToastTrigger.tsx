@@ -38,7 +38,7 @@ export default function ToastTrigger({
     const url = new URL(window.location.href);
     let changed = false;
 
-    for (const param of ["saved", "updated", "requested"]) {
+    for (const param of ["saved", "updated", "requested", "reported"]) {
       if (url.searchParams.has(param)) {
         url.searchParams.delete(param);
         changed = true;

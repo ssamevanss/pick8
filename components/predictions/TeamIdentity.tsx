@@ -5,6 +5,7 @@ type TeamIdentityProps = {
   teamName: string;
   teamCode?: string | null;
   crestUrl?: string | null;
+  positionLabel?: string | null;
   align?: "left" | "right";
   compact?: boolean;
 };
@@ -13,6 +14,7 @@ export default function TeamIdentity({
   teamName,
   teamCode = null,
   crestUrl = null,
+  positionLabel = null,
   align = "left",
   compact = false,
 }: TeamIdentityProps) {
@@ -61,16 +63,20 @@ export default function TeamIdentity({
           </span>
         )}
       </span>
-      <span
-        className={`min-w-0 font-semibold leading-tight ${
-          compact
-            ? "text-xs min-[380px]:text-sm"
-            : "truncate"
-        }`}
-        title={teamName}
-      >
-        <span className="sm:hidden">{mobileLabel}</span>
-        <span className="hidden sm:inline">{teamName}</span>
+      <span className="min-w-0" title={teamName}>
+        <span
+          className={`block font-semibold leading-tight ${
+            compact ? "text-xs min-[380px]:text-sm" : "truncate"
+          }`}
+        >
+          <span className="sm:hidden">{mobileLabel}</span>
+          <span className="hidden sm:inline">{teamName}</span>
+        </span>
+        {positionLabel ? (
+          <span className="mt-0.5 block text-[10px] font-black uppercase tracking-wide text-amber-200">
+            {positionLabel}
+          </span>
+        ) : null}
       </span>
     </span>
   );

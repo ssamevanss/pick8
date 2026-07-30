@@ -5,7 +5,7 @@ export type FixtureTimingWindow = {
   end: string;
   warningStart: string;
   warningEnd: string;
-  source: "selected-fixtures" | "base-competition";
+  source: "selected-fixtures" | "base-competition" | "base-matchday-cycle";
 };
 
 const warningBufferMs = 12 * 60 * 60 * 1000;
@@ -60,6 +60,34 @@ export function buildFixtureTimingWindow({
     warningStart: new Date(baseWindow.start - warningBufferMs).toISOString(),
     warningEnd: new Date(baseWindow.end + warningBufferMs).toISOString(),
     source: "base-competition",
+  };
+}
+
+export function buildLeagueFixtureTimingWindow({
+  currentBaseGroup,
+  nextBaseGroup,
+}: {
+  currentBaseGroup: FixtureGroupTiming | null;
+  nextBaseGroup: FixtureGroupTiming | null;
+}): FixtureTimingWindow | null {
+  if (!currentBaseGroup) {
+    return null;
+  }
+
+  const start = currentBaseGroup.firstKickoffAt;
+  const end = nextBaseGroup
+    ? new Date(
+        new Date(nextBaseGroup.firstKickoffAt).getTime() -
+          24 * 60 * 60 * 1000,
+      ).toISOString()
+    : currentBaseGroup.lastKickoffAt;
+
+  return {
+    start,
+    end,
+    warningStart: start,
+    warningEnd: end,
+    source: "base-matchday-cycle",
   };
 }
 

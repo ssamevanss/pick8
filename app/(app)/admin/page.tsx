@@ -1201,6 +1201,9 @@ export default async function AdminPage({
         <AdminMaintenanceCards
           activeSeasonId={activeSeason?.id ?? null}
           activeSeasonName={activeSeason?.name ?? null}
+          activeSeasonBaseCompetitionCode={
+            activeSeasonExternalConfig?.base_competition_code ?? null
+          }
           seasons={maintenanceSeasonOptions}
           healthChecks={healthChecks}
           reminderReadiness={reminderReadiness}

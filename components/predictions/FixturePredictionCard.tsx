@@ -609,7 +609,10 @@ export default function FixturePredictionCard({
           </p>
 
           <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-            <TeamIdentity teamName={fixture.home_team} />
+            <TeamIdentity
+              teamName={fixture.home_team}
+              positionLabel={fixture.home_position_label}
+            />
             <div className="text-center">
               <span
                 className={`rounded-xl px-3 py-2 text-lg font-black tabular-nums text-white ${
@@ -627,7 +630,11 @@ export default function FixturePredictionCard({
                 </p>
               ) : null}
             </div>
-            <TeamIdentity teamName={fixture.away_team} align="right" />
+            <TeamIdentity
+              teamName={fixture.away_team}
+              positionLabel={fixture.away_position_label}
+              align="right"
+            />
           </div>
 
           {ownPrediction ? (
@@ -688,7 +695,11 @@ export default function FixturePredictionCard({
       ) : (
         <div className="mt-3 rounded-2xl border border-white/10 bg-slate-900/55 p-3">
           <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]">
-            <TeamIdentity teamName={fixture.home_team} compact />
+            <TeamIdentity
+              teamName={fixture.home_team}
+              positionLabel={fixture.home_position_label}
+              compact
+            />
 
             <div className="flex shrink-0 items-center gap-1.5 rounded-2xl bg-slate-950/60 p-1.5">
               <input
@@ -718,7 +729,12 @@ export default function FixturePredictionCard({
               />
             </div>
 
-            <TeamIdentity teamName={fixture.away_team} align="right" compact />
+            <TeamIdentity
+              teamName={fixture.away_team}
+              positionLabel={fixture.away_position_label}
+              align="right"
+              compact
+            />
 
             {isDoubleGameweek ? (
               <div className="col-span-3 flex justify-center pt-1 sm:col-span-1 sm:justify-end sm:pt-0">

@@ -243,6 +243,37 @@ export async function fetchMatchesByIds(matchIds: string[]): Promise<{
   };
 }
 
+export async function fetchCompetitionStandings({
+  competitionCode,
+  season,
+}: {
+  competitionCode: string;
+  season?: string;
+}) {
+  const params = new URLSearchParams();
+
+  if (season) {
+    params.set("season", season);
+  }
+
+  const query = params.toString();
+  const result = await footballDataFetch(
+    `/competitions/${encodeURIComponent(competitionCode)}/standings${
+      query ? `?${query}` : ""
+    }`,
+  );
+
+  requireFootballDataSuccess(result);
+
+  return {
+    data: result.data,
+    request: {
+      status: result.status,
+      resetSeconds: result.resetSeconds,
+    },
+  };
+}
+
 export function normalizeFootballDataMatch(
   match: FootballDataMatch,
   fallbackCompetitionCode?: string,
