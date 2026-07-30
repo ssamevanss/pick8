@@ -3,7 +3,7 @@ import BrandMark from "@/components/brand/BrandMark";
 
 export default function PendingPage() {
   return (
-    <main className="app-surface flex min-h-screen items-center justify-center px-4 py-8 text-white">
+    <main className="app-surface flex min-h-dvh items-center justify-center px-4 py-8 text-white">
       <div className="brand-card w-full max-w-md p-6 text-center shadow-xl sm:p-8">
         <BrandMark centered />
 
