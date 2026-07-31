@@ -1,16 +1,19 @@
 export const dynamic = "force-dynamic";
 
 import Link from "next/link";
-import { createClient } from "@/utils/supabase/server";
-import { getActiveSeason } from "@/utils/seasons";
 import LeagueActivityFeed from "@/components/activity/LeagueActivityFeed";
 import DashboardSummary from "@/components/dashboard/DashboardSummary";
 import type { ReactionSummary } from "@/components/predictions/types";
-import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
 import {
   calculateProvisionalPredictionScore,
   isLiveExternalStatus,
 } from "@/utils/provisional-scoring";
+import {
+  getAppLeagueContext,
+  getRequestPickerGameweekStatuses,
+} from "@/utils/app-context";
+import type { PickerGameweekStatus } from "@/utils/picker-eligibility";
+import { logServerTiming, startServerTiming } from "@/utils/server-timing";
 
 type NotificationRow = {
   id: string;
@@ -41,17 +44,6 @@ type NotificationCommentRow = {
     | null;
 };
 
-type PickerGameweekRow = {
-  id: string;
-  gameweek_number: number;
-  name: string | null;
-  season_id: string;
-};
-
-type FixtureStatusRow = {
-  status: string;
-};
-
 type FixtureRow = {
   id: string;
   kickoff_at: string;
@@ -76,107 +68,8 @@ type LatestGameweekRow = {
   fixtures: { id: string }[];
 };
 
-type PickerGameweekStatus = PickerGameweekRow & {
-  isUnlocked: boolean;
-  fixtureCount: number;
-  expectedFixtureCount: number;
-  hasPredictions: boolean;
-  isClosed: boolean;
-  isSelectionComplete: boolean;
-};
-
 function isTerminalFixtureStatus(status: string) {
   return ["completed", "postponed", "void"].includes(status);
-}
-
-async function isPreviousGameweekComplete({
-  supabase,
-  seasonId,
-  gameweekNumber,
-}: {
-  supabase: Awaited<ReturnType<typeof createClient>>;
-  seasonId: string;
-  gameweekNumber: number;
-}) {
-  if (gameweekNumber === 1) {
-    return true;
-  }
-
-  const { data: previousGameweek } = await supabase
-    .from("gameweeks")
-    .select("id")
-    .eq("season_id", seasonId)
-    .eq("gameweek_number", gameweekNumber - 1)
-    .maybeSingle();
-
-  if (!previousGameweek) {
-    return false;
-  }
-
-  const { data: previousFixtures } = await supabase
-    .from("fixtures")
-    .select("status")
-    .eq("gameweek_id", previousGameweek.id);
-
-  const fixtureList = (previousFixtures as FixtureStatusRow[] | null) ?? [];
-
-  return (
-    fixtureList.length > 0 &&
-    fixtureList.every((fixture) => isTerminalFixtureStatus(fixture.status))
-  );
-}
-
-async function getPickerGameweekStatus({
-  supabase,
-  gameweek,
-}: {
-  supabase: Awaited<ReturnType<typeof createClient>>;
-  gameweek: PickerGameweekRow;
-}): Promise<PickerGameweekStatus> {
-  const isUnlocked = await isPreviousGameweekComplete({
-    supabase,
-    seasonId: gameweek.season_id,
-    gameweekNumber: gameweek.gameweek_number,
-  });
-
-  const { data: fixtures } = await supabase
-    .from("fixtures")
-    .select("id, status, external_provider, external_fixture_id")
-    .eq("gameweek_id", gameweek.id);
-
-  const fixtureRows =
-    (fixtures as
-      | {
-          id: string;
-          status: string;
-          external_provider: string | null;
-          external_fixture_id: string | null;
-        }[]
-      | null) ?? [];
-  const fixtureIds = fixtureRows.map((fixture) => fixture.id);
-  const selectionStatus = getFixtureSelectionStatus(fixtureRows);
-
-  const { data: existingPrediction } =
-    fixtureIds.length > 0
-      ? await supabase
-          .from("predictions")
-          .select("fixture_id")
-          .in("fixture_id", fixtureIds)
-          .limit(1)
-          .maybeSingle()
-      : { data: null };
-
-  return {
-    ...gameweek,
-    isUnlocked,
-    fixtureCount: fixtureRows.length,
-    expectedFixtureCount: selectionStatus.expectedCount,
-    hasPredictions: Boolean(existingPrediction),
-    isSelectionComplete: selectionStatus.isComplete,
-    isClosed:
-      fixtureRows.length > 0 &&
-      fixtureRows.every((fixture) => isTerminalFixtureStatus(fixture.status)),
-  };
 }
 
 function formatGameweekName(gameweek: {
@@ -189,48 +82,48 @@ function formatGameweekName(gameweek: {
 export default async function HomePage({
   searchParams,
 }: {
-  searchParams?: Promise<{ activity?: string; comments?: string }>;
+  searchParams?: Promise<{
+    activity?: string;
+    comments?: string;
+  }>;
 }) {
   const params = searchParams ? await searchParams : {};
-  const supabase = await createClient();
+  const pageStartedAt = startServerTiming();
+  const { supabase, user, profile, selectedLeague, activeSeason } =
+    await getAppLeagueContext();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const { data: profile } = user
-    ? await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", user.id)
-        .maybeSingle()
-    : { data: null };
-
-  const { data: activeSeason } = await getActiveSeason(supabase, "id, name");
-
-  const { data: pickerGameweeks } =
-    user && activeSeason
-      ? await supabase
-          .from("gameweeks")
-          .select("id, gameweek_number, name, season_id")
-          .eq("season_id", activeSeason.id)
-          .eq("fixture_picker_id", user.id)
-          .order("gameweek_number", { ascending: true })
-      : { data: null };
-
-  const assignedPickerGameweeks =
-    (pickerGameweeks as PickerGameweekRow[] | null) ?? [];
-
-  const pickerStatuses: PickerGameweekStatus[] = [];
-
-  for (const gameweek of assignedPickerGameweeks) {
-    pickerStatuses.push(
-      await getPickerGameweekStatus({
-        supabase,
-        gameweek,
-      }),
-    );
-  }
+  const [pickerStatuses, activeGameweekResult, latestGameweekResult] =
+    await Promise.all([
+      user && activeSeason
+        ? getRequestPickerGameweekStatuses()
+        : Promise.resolve([] as PickerGameweekStatus[]),
+      activeSeason
+        ? supabase
+            .from("gameweeks")
+            .select("id", { count: "exact", head: true })
+            .eq("season_id", activeSeason.id)
+        : Promise.resolve({ count: 0 }),
+      activeSeason
+        ? supabase
+            .from("gameweeks")
+            .select(
+              `
+              id,
+              gameweek_number,
+              name,
+              is_double_gameweek,
+              fixtures!inner (
+                id
+              )
+            `,
+            )
+            .eq("season_id", activeSeason.id)
+            .order("gameweek_number", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
+  const activeGameweekCount = activeGameweekResult.count;
 
   const activePickerGameweek =
     pickerStatuses.find(
@@ -253,35 +146,8 @@ export default async function HomePage({
   const candidateFuturePickerGameweek =
     pickerStatuses.find((gameweek) => !gameweek.isUnlocked) ?? null;
 
-  const { count: activeGameweekCount } = activeSeason
-    ? await supabase
-        .from("gameweeks")
-        .select("id", { count: "exact", head: true })
-        .eq("season_id", activeSeason.id)
-    : { count: 0 };
-
-  const { data: latestGameweekWithFixtures } = activeSeason
-    ? await supabase
-        .from("gameweeks")
-        .select(
-          `
-          id,
-          gameweek_number,
-          name,
-          is_double_gameweek,
-          fixtures!inner (
-            id
-          )
-        `,
-        )
-        .eq("season_id", activeSeason.id)
-        .order("gameweek_number", { ascending: false })
-        .limit(1)
-        .maybeSingle()
-    : { data: null };
-
   const latestGameweek =
-    (latestGameweekWithFixtures as LatestGameweekRow | null) ?? null;
+    (latestGameweekResult.data as LatestGameweekRow | null) ?? null;
   const nextFuturePickerGameweek =
     candidateFuturePickerGameweek &&
     latestGameweek &&
@@ -306,14 +172,23 @@ export default async function HomePage({
   const externalFixtureIds = fixtureList
     .map((fixture) => fixture.external_fixture_id)
     .filter((value): value is string => Boolean(value));
-  const { data: externalScoreRows } =
-    externalFixtureIds.length > 0
-      ? await supabase
-          .from("external_fixtures")
-          .select("external_fixture_id, status, home_score, away_score")
-          .eq("provider", "football_data")
-          .in("external_fixture_id", externalFixtureIds)
-      : { data: [] };
+  const [{ data: externalScoreRows }, { data: userPredictions }] =
+    await Promise.all([
+      externalFixtureIds.length > 0
+        ? supabase
+            .from("external_fixtures")
+            .select("external_fixture_id, status, home_score, away_score")
+            .eq("provider", "football_data")
+            .in("external_fixture_id", externalFixtureIds)
+        : Promise.resolve({ data: [] }),
+      user && fixtureIds.length > 0
+        ? supabase
+            .from("predictions")
+            .select("fixture_id, home_score, away_score, points")
+            .eq("user_id", user.id)
+            .in("fixture_id", fixtureIds)
+        : Promise.resolve({ data: null }),
+    ]);
   const externalScoreByFixtureId = new Map(
     (
       (externalScoreRows as
@@ -337,48 +212,39 @@ export default async function HomePage({
     fixtureList.length > 0 &&
     fixtureList.every((fixture) => isTerminalFixtureStatus(fixture.status));
 
-  const { data: userPredictions } =
-    user && fixtureIds.length > 0
-      ? await supabase
-          .from("predictions")
-          .select("fixture_id, home_score, away_score, points")
-          .eq("user_id", user.id)
-          .in("fixture_id", fixtureIds)
-      : { data: null };
-
   const predictionList = (userPredictions as PredictionRow[] | null) ?? [];
   const fixtureCount = fixtureList.length;
 
-  const { data: leaderboardEntry } =
-    activeSeason && user
-      ? await supabase
-          .from("leaderboard_entries")
-          .select("rank, total_points, weekly_points")
-          .eq("season_id", activeSeason.id)
-          .eq("user_id", user.id)
-          .maybeSingle()
-      : { data: null };
-
-  const { data: seasonJokerUsage } =
-    activeSeason && user
-      ? await supabase
-          .from("joker_usage")
-          .select(
-            `
-            fixture_id,
-            fixtures!inner (
-              gameweeks!inner (
-                season_id,
-                is_double_gameweek
+  const [{ data: leaderboardEntry }, { data: seasonJokerUsage }] =
+    await Promise.all([
+      activeSeason && user
+        ? supabase
+            .from("leaderboard_entries")
+            .select("rank, total_points, weekly_points")
+            .eq("season_id", activeSeason.id)
+            .eq("user_id", user.id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      activeSeason && user
+        ? supabase
+            .from("joker_usage")
+            .select(
+              `
+              fixture_id,
+              fixtures!inner (
+                gameweeks!inner (
+                  season_id,
+                  is_double_gameweek
+                )
               )
+            `,
             )
-          `,
-          )
-          .eq("season_id", activeSeason.id)
-          .eq("user_id", user.id)
-          .is("refunded_at", null)
-          .eq("fixtures.gameweeks.season_id", activeSeason.id)
-      : { data: [] };
+            .eq("season_id", activeSeason.id)
+            .eq("user_id", user.id)
+            .is("refunded_at", null)
+            .eq("fixtures.gameweeks.season_id", activeSeason.id)
+        : Promise.resolve({ data: [] }),
+    ]);
   const jokersUsed = (
     (seasonJokerUsage as
       | {
@@ -493,38 +359,39 @@ export default async function HomePage({
         .select("id, type, title, body, event_key, created_at, metadata")
         .eq("season_id", activeSeason.id)
         .order("created_at", { ascending: false })
+        .limit(20)
     : { data: [] };
 
   const notificationList = (notifications as NotificationRow[] | null) ?? [];
   const notificationIds = notificationList.map((notification) => notification.id);
 
-  const { data: notificationReactions } =
-    notificationIds.length > 0
-      ? await supabase
-          .from("notification_reactions")
-          .select("notification_id, user_id, emoji")
-          .in("notification_id", notificationIds)
-      : { data: [] };
-
-  const { data: notificationComments } =
-    notificationIds.length > 0
-      ? await supabase
-          .from("notification_comments")
-          .select(
-            `
-            id,
-            notification_id,
-            user_id,
-            body,
-            created_at,
-            profiles (
-              display_name
+  const [{ data: notificationReactions }, { data: notificationComments }] =
+    await Promise.all([
+      notificationIds.length > 0
+        ? supabase
+            .from("notification_reactions")
+            .select("notification_id, user_id, emoji")
+            .in("notification_id", notificationIds)
+        : Promise.resolve({ data: [] }),
+      notificationIds.length > 0
+        ? supabase
+            .from("notification_comments")
+            .select(
+              `
+              id,
+              notification_id,
+              user_id,
+              body,
+              created_at,
+              profiles (
+                display_name
+              )
+            `,
             )
-          `,
-          )
-          .in("notification_id", notificationIds)
-          .order("created_at", { ascending: true })
-      : { data: [] };
+            .in("notification_id", notificationIds)
+            .order("created_at", { ascending: true })
+        : Promise.resolve({ data: [] }),
+    ]);
   const commentIds = (
     (notificationComments as NotificationCommentRow[] | null) ?? []
   ).map((comment) => comment.id);
@@ -609,20 +476,13 @@ export default async function HomePage({
     comments: commentsByNotification.get(notification.id) ?? [],
   }));
 
+  logServerTiming("dashboard.page", pageStartedAt, {
+    userId: user?.id,
+    leagueId: activeSeason ? selectedLeague?.id : null,
+  });
+
   return (
     <>
-      <header className="brand-card mb-4 overflow-hidden p-4 sm:p-5">
-        <p className="brand-eyebrow">League hub</p>
-        <div className="mt-2 max-w-3xl">
-          <h1 className="brand-title">Who You Got?</h1>
-          <p className="brand-subtitle mt-2">
-            {activeSeason?.name
-              ? `${activeSeason.name}: make your calls, track your position, and follow the league.`
-              : "Your private football prediction league will open once a season is live."}
-          </p>
-        </div>
-      </header>
-
       <DashboardSummary
         leaderboardEntry={leaderboardEntry}
         jokersLeft={jokersLeft}
@@ -634,12 +494,16 @@ export default async function HomePage({
           <div className="brand-alert-warning">
             <p className="text-sm font-semibold text-amber-300">No active season</p>
             <h2 className="mt-1 text-lg font-bold sm:text-xl">
-              Season setup is pending
+              This league has no active season
             </h2>
             <p className="mt-2 text-sm text-slate-300">
-              There is no live season yet. Predictions and fixture picking will
-              appear here once an admin activates a season.
+              This league is between seasons. Historical results remain in the
+              League Hub, and active play returns when a platform admin starts
+              the next season.
             </p>
+            <Link href="/leagues" className="brand-button-secondary mt-4">
+              Back to League Hub
+            </Link>
           </div>
         ) : latestGameweek ? (
           !hasActionablePredictionFixtures ? (

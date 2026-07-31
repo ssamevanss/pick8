@@ -12,10 +12,10 @@ import NotificationBell, {
 
 type AppShellProps = {
   children: ReactNode;
-  isAdmin?: boolean;
   canPickFixtures?: boolean;
   notifications?: HeaderUserNotification[];
   unreadNotificationCount?: number;
+  showBottomNavigation?: boolean;
 };
 
 type MobileMenuPosition = {
@@ -35,18 +35,27 @@ const pickFixturesNavItem = {
   label: "Pick Fixtures",
   mobileLabel: "Pick",
 };
-const adminNavItem = { href: "/admin", label: "Admin", mobileLabel: "Admin" };
-
 function isCurrentRoute(pathname: string, href: string) {
-  return pathname === href || pathname.startsWith(`${href}/`);
+  const hrefPath = href.split(/[?#]/, 1)[0];
+
+  if (hrefPath === "/leagues") {
+    return (
+      pathname === "/leagues" ||
+      pathname === "/leagues/create" ||
+      pathname === "/leagues/join" ||
+      pathname === "/league/settings"
+    );
+  }
+
+  return pathname === hrefPath || pathname.startsWith(`${hrefPath}/`);
 }
 
 export default function AppShell({
   children,
-  isAdmin = false,
   canPickFixtures = false,
   notifications = [],
   unreadNotificationCount = 0,
+  showBottomNavigation = true,
 }: AppShellProps) {
   const pathname = usePathname();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -59,7 +68,6 @@ export default function AppShell({
   const navItems = [
     ...baseNavItems,
     ...(canPickFixtures ? [pickFixturesNavItem] : []),
-    ...(isAdmin ? [adminNavItem] : []),
   ];
 
   useEffect(() => {
@@ -173,8 +181,10 @@ export default function AppShell({
   }
 
   const mobileMenuItems = [
+    { href: "/leagues", label: "Leagues" },
     { href: "/rules", label: "Rules" },
     { href: "/settings", label: "Settings" },
+    { href: "/settings#report-a-bug", label: "Report a bug" },
     { href: "/logout", label: "Sign out" },
   ];
 
@@ -188,17 +198,36 @@ export default function AppShell({
             : "scale-x-0 opacity-0"
         }`}
       />
-      <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 pb-[calc(6.5rem+env(safe-area-inset-bottom))] pt-4 sm:pb-28 sm:pt-6">
+      <div
+        className={`mx-auto flex min-h-dvh max-w-6xl flex-col px-4 pt-4 sm:pt-6 ${
+          showBottomNavigation
+            ? "pb-[calc(6.5rem+env(safe-area-inset-bottom))] sm:pb-28"
+            : "pb-8 sm:pb-12"
+        }`}
+      >
         <header className="relative mb-6 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#0b1627]/80 px-3 py-3 shadow-xl shadow-black/20 backdrop-blur sm:gap-4 sm:px-4">
-          <div className="min-w-0">
-            <BrandMark />
-          </div>
+          <BrandMark />
 
           <div className="flex shrink-0 items-center gap-2">
             <NotificationBell
               notifications={notifications}
               unreadCount={unreadNotificationCount}
             />
+
+            <Link
+              href="/leagues"
+              prefetch={false}
+              onClick={(event) => handleNavigate(event, "/leagues")}
+              className={`hidden min-h-10 rounded-full border px-3 py-2 text-sm font-semibold transition sm:inline-flex ${
+                isCurrentRoute(pathname, "/leagues")
+                  ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
+                  : activePendingHref === "/leagues"
+                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                    : "border-white/10 bg-slate-900/70 text-slate-300 hover:text-white active:bg-slate-800"
+              }`}
+            >
+              {activePendingHref === "/leagues" ? "Loading..." : "Leagues"}
+            </Link>
 
             <Link
               href="/rules"
@@ -271,7 +300,8 @@ export default function AppShell({
         </div>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl shadow-black/40 backdrop-blur-xl sm:px-4 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pt-3">
+      {showBottomNavigation ? (
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-2xl shadow-black/40 backdrop-blur-xl sm:px-4 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pt-3">
         <div
           className="mx-auto grid max-w-5xl gap-1 sm:gap-2"
           style={{
@@ -309,7 +339,8 @@ export default function AppShell({
             })()
           ))}
         </div>
-      </nav>
+        </nav>
+      ) : null}
 
       {isMobileMenuOpen && mobileMenuPosition
         ? createPortal(

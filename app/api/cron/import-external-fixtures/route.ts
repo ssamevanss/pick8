@@ -3,7 +3,7 @@ import {
   addDays,
   formatDateOnly,
   importExternalFixturesForSeason,
-  loadExternalFixtureImportSeason,
+  loadEligibleExternalFixtureImportSeasons,
   validateDateWindow,
 } from "@/utils/external-fixture-import";
 import { createAdminClient } from "@/utils/supabase/admin";
@@ -114,30 +114,25 @@ export async function GET(request: Request) {
     return Response.json({ ok: false, error: dateError }, { status: 400 });
   }
 
-  const { season, error: seasonError } = await loadExternalFixtureImportSeason({
-    supabase,
-    seasonId: null,
-  });
+  const { seasons, error: seasonError } =
+    await loadEligibleExternalFixtureImportSeasons({ supabase });
 
   if (seasonError) {
     return Response.json(
       {
         ok: true,
         skipped_run: true,
-        reason: seasonError,
+        reason: seasonError.message,
         dry_run: dryRun,
         provider_calls_made: 0,
         results: [],
       },
-      { status: seasonError.includes("No season") ? 200 : 500 },
+      { status: 500 },
     );
   }
 
   if (
-    !season ||
-    season.status !== "active" ||
-    season.base_provider !== "football_data" ||
-    !season.base_competition_code
+    seasons.length === 0
   ) {
     return Response.json({
       ok: true,
@@ -149,27 +144,36 @@ export async function GET(request: Request) {
     });
   }
 
-  if (!dryRun && !season.fixture_import_enabled) {
-    return Response.json(
-      {
-        ok: false,
-        error:
-          "Fixture import is disabled for this season. Enable fixture_import_enabled before scheduled import.",
-      },
-      { status: 403 },
-    );
-  }
-
   try {
-    const competitionCodes = await getCompetitionCodes({
+    const enabledCompetitionCodes = await getCompetitionCodes({
       supabase,
-      baseCompetitionCode: season.base_competition_code,
+      baseCompetitionCode: seasons[0].base_competition_code!,
       includeEnabled: searchParams.get("include_enabled") === "1",
     });
+    const tasks = new Map(
+      seasons.map((season) => [
+        `${season.base_competition_code}:${season.provider_season ?? ""}`,
+        { season, competitionCode: season.base_competition_code! },
+      ]),
+    );
+
+    for (const competitionCode of enabledCompetitionCodes) {
+      if (
+        ![...tasks.values()].some(
+          (task) => task.competitionCode === competitionCode,
+        )
+      ) {
+        tasks.set(`enabled:${competitionCode}`, {
+          season: seasons[0],
+          competitionCode,
+        });
+      }
+    }
+
     const results = [];
     let providerCallsMade = 0;
 
-    for (const competitionCode of competitionCodes) {
+    for (const { season, competitionCode } of tasks.values()) {
       const result = await importExternalFixturesForSeason({
         supabase,
         season,
@@ -187,7 +191,10 @@ export async function GET(request: Request) {
       skipped_run: false,
       dry_run: dryRun,
       window: { date_from: dateFrom, date_to: dateTo },
-      competition_codes: competitionCodes,
+      season_configurations: seasons.length,
+      competition_codes: [
+        ...new Set([...tasks.values()].map((task) => task.competitionCode)),
+      ],
       provider_calls_made: providerCallsMade,
       results,
     });

@@ -23,6 +23,7 @@ type UpsertGroupedUserNotificationInput = {
   bodySingular: (actorName: string) => string;
   bodyGrouped: (actorNames: string[], otherCount: number) => string;
   metadata?: Record<string, unknown>;
+  leagueId?: string;
 };
 
 function formatActorNames(names: string[]) {
@@ -68,6 +69,10 @@ function logUserNotificationInfo(
   stage: string,
   details: Record<string, unknown>,
 ) {
+  if (process.env.DEBUG_NOTIFICATIONS !== "1") {
+    return;
+  }
+
   console.info("[user-notifications]", stage, details);
 }
 
@@ -82,6 +87,7 @@ export async function upsertGroupedUserNotification({
   bodySingular,
   bodyGrouped,
   metadata = {},
+  leagueId,
 }: UpsertGroupedUserNotificationInput) {
   if (!recipientUserId || !actorUserId) {
     logUserNotificationInfo("skipped missing participant", {
@@ -125,6 +131,30 @@ export async function upsertGroupedUserNotification({
 
   if (recipient?.status !== "approved") {
     return;
+  }
+
+  if (leagueId) {
+    const { data: membership, error: membershipError } = await admin
+      .from("league_memberships")
+      .select("id, leagues!inner(status)")
+      .eq("league_id", leagueId)
+      .eq("user_id", recipientUserId)
+      .eq("status", "active")
+      .eq("leagues.status", "active")
+      .maybeSingle();
+
+    if (membershipError) {
+      logUserNotificationError("recipient membership lookup failed", {
+        recipientUserId,
+        leagueId,
+        message: membershipError.message,
+      });
+      return;
+    }
+
+    if (!membership) {
+      return;
+    }
   }
 
   const groupingKey = `${notificationType}:${targetType}:${targetId}`;

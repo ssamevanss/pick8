@@ -1,6 +1,6 @@
 import {
   autoPickMissingFixtures,
-  getEligibleActiveAutoPickSeason,
+  getEligibleActiveAutoPickSeasons,
 } from "@/utils/external-auto-pick";
 import { createAdminClient } from "@/utils/supabase/admin";
 
@@ -64,10 +64,18 @@ export async function GET(request: Request) {
     );
   }
 
-  const { season } = await getEligibleActiveAutoPickSeason({ supabase });
+  const { seasons, error: seasonsError } =
+    await getEligibleActiveAutoPickSeasons({ supabase });
   const dryRun = new URL(request.url).searchParams.get("dry_run") === "1";
 
-  if (!season) {
+  if (seasonsError) {
+    return Response.json(
+      { ok: false, error: seasonsError.message },
+      { status: 500 },
+    );
+  }
+
+  if (seasons.length === 0) {
     return Response.json({
       ok: true,
       skipped_run: true,
@@ -81,16 +89,32 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await autoPickMissingFixtures({
-      supabase,
-      season,
-      dryRun,
-    });
+    const results = [];
+
+    for (const season of seasons) {
+      results.push(
+        await autoPickMissingFixtures({
+          supabase,
+          season,
+          dryRun,
+        }),
+      );
+    }
 
     return Response.json({
       ok: true,
       skipped_run: false,
-      ...result,
+      dry_run: dryRun,
+      seasons_processed: results.length,
+      results,
+      created_count: results.reduce(
+        (total, result) => total + result.created_count,
+        0,
+      ),
+      updated_gameweeks: results.reduce(
+        (total, result) => total + result.updated_gameweeks,
+        0,
+      ),
     });
   } catch (autoPickError) {
     return Response.json(

@@ -1,6 +1,7 @@
 import {
   FootballDataError,
-  getEligibleActiveRefreshSeason,
+  fetchExternalFixtureRefreshProviderSnapshot,
+  getEligibleActiveRefreshSeasons,
   refreshExternalFixtures,
 } from "@/utils/external-fixture-refresh";
 import { createAdminClient } from "@/utils/supabase/admin";
@@ -65,7 +66,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const { season, error: seasonError } = await getEligibleActiveRefreshSeason({
+  const { seasons, error: seasonError } = await getEligibleActiveRefreshSeasons({
     supabase: adminSupabase,
   });
 
@@ -79,12 +80,14 @@ export async function GET(request: Request) {
     );
   }
 
-  if (!season) {
+  const dryRun = new URL(request.url).searchParams.get("dry_run") === "1";
+
+  if (seasons.length === 0) {
     return Response.json({
       ok: true,
       skipped_run: true,
       reason: "no eligible active season",
-      dry_run: new URL(request.url).searchParams.get("dry_run") === "1",
+      dry_run: dryRun,
       provider_calls_made: 0,
       external_fixtures_checked: 0,
       external_fixtures_updated: 0,
@@ -98,15 +101,30 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await refreshExternalFixtures({
+    const providerSnapshot = await fetchExternalFixtureRefreshProviderSnapshot({
       supabase: adminSupabase,
-      season,
-      dryRun: new URL(request.url).searchParams.get("dry_run") === "1",
+      seasons,
     });
+    const results = [];
+
+    for (const season of seasons) {
+      results.push(
+        await refreshExternalFixtures({
+          supabase: adminSupabase,
+          season,
+          dryRun,
+          providerSnapshot,
+        }),
+      );
+    }
 
     return Response.json({
       ok: true,
-      ...result,
+      skipped_run: false,
+      dry_run: dryRun,
+      seasons_processed: seasons.length,
+      provider_calls_made: providerSnapshot.byRequestKey.size,
+      results,
     });
   } catch (error) {
     if (error instanceof FootballDataError) {

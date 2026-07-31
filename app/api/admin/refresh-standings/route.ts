@@ -56,20 +56,24 @@ async function handleRefreshStandings(request: Request) {
     );
   }
 
-  const { season } = await getEligibleActiveStandingsSeason({ supabase });
   const searchParams = new URL(request.url).searchParams;
+  const seasonId = searchParams.get("season_id");
   const dryRun = searchParams.get("dry_run") !== "0";
+
+  if (!seasonId) {
+    return Response.json({ error: "season_id is required" }, { status: 400 });
+  }
+
+  const { season, error: seasonError } = await getEligibleActiveStandingsSeason({
+    supabase,
+    seasonId,
+  });
 
   if (!season) {
     return Response.json({
-      ok: true,
-      skipped_run: true,
-      reason: "no eligible active football-data season",
-      dry_run: dryRun,
-      provider_calls_made: 0,
-      fetched_count: 0,
-      planned_updates: [],
-    });
+      ok: false,
+      error: seasonError?.message ?? "Selected season is not an eligible active season",
+    }, { status: seasonError ? 500 : 400 });
   }
 
   try {

@@ -21,7 +21,11 @@ function formatJson(value: unknown) {
   return JSON.stringify(value ?? [], null, 2);
 }
 
-export default function ExternalFixtureRefreshCard() {
+export default function ExternalFixtureRefreshCard({
+  activeSeasonId,
+}: {
+  activeSeasonId: string | null;
+}) {
   const { showToast } = useToast();
   const [result, setResult] = useState<RefreshResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,10 +42,11 @@ export default function ExternalFixtureRefreshCard() {
       return;
     }
 
-    const endpoint =
-      mode === "refresh"
-        ? "/api/admin/external-fixtures/refresh?dry_run=0"
-        : "/api/admin/external-fixtures/refresh?dry_run=1";
+    const params = new URLSearchParams({
+      season_id: activeSeasonId ?? "",
+      dry_run: mode === "refresh" ? "0" : "1",
+    });
+    const endpoint = `/api/admin/external-fixtures/refresh?${params}`;
 
     setIsLoading(true);
     setActiveAction(mode);
@@ -90,7 +95,7 @@ export default function ExternalFixtureRefreshCard() {
         <button
           type="button"
           onClick={() => runRefresh("dry-run")}
-          disabled={isLoading}
+          disabled={isLoading || !activeSeasonId}
           aria-busy={isLoading && activeAction === "dry-run"}
           className="rounded-lg border border-emerald-500/40 px-4 py-3 text-sm font-semibold text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -102,7 +107,7 @@ export default function ExternalFixtureRefreshCard() {
         <button
           type="button"
           onClick={() => runRefresh("refresh")}
-          disabled={isLoading}
+          disabled={isLoading || !activeSeasonId}
           aria-busy={isLoading && activeAction === "refresh"}
           className="rounded-lg bg-amber-400 px-4 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
         >

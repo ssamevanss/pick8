@@ -23,6 +23,7 @@ import {
   isKickoffOutsideTimingWindow,
 } from "@/utils/fixture-timing-window";
 import { canBrowseOtherCompetitions } from "@/utils/football-competitions";
+import { getSelectedLeagueForUser } from "@/utils/leagues";
 
 const slotNumbers = [1, 2, 3, 4];
 
@@ -155,7 +156,13 @@ async function requireFixtureManagerForGameweek(gameweekId: string) {
     );
   }
 
-  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+  const { selectedLeague } = await getSelectedLeagueForUser(
+    supabase,
+    user.id,
+  );
+  const { data: activeSeason } = selectedLeague
+    ? await getActiveSeason(supabase, "id", selectedLeague.id)
+    : { data: null };
 
   if (!activeSeason || gameweek.season_id !== activeSeason.id) {
     redirect(
@@ -247,7 +254,7 @@ async function requireFixtureManagerForGameweek(gameweekId: string) {
     }
   }
 
-  return { supabase, gameweek, user };
+  return { supabase, gameweek, user, selectedLeague };
 }
 
 export async function savePickerFixtures(formData: FormData) {
@@ -259,10 +266,12 @@ export async function savePickerFixtures(formData: FormData) {
     );
   }
 
-  const { supabase, user } = await requireFixtureManagerForGameweek(gameweekId);
+  const { supabase, user, selectedLeague } =
+    await requireFixtureManagerForGameweek(gameweekId);
   const { data: activeSeason } = await getActiveSeason(
     supabase,
     "base_competition_code",
+    selectedLeague.id,
   );
   const timingWindow = await getGameweekTimingWindow({
     supabase,
@@ -476,12 +485,13 @@ export async function saveExternalPickerFixtures(formData: FormData) {
     );
   }
 
-  const { supabase, gameweek, user } =
+  const { supabase, gameweek, user, selectedLeague } =
     await requireFixtureManagerForGameweek(gameweekId);
 
   const { data: activeSeason } = await getActiveSeason(
     supabase,
     "id, base_provider, base_competition_code, base_competition_name",
+    selectedLeague.id,
   );
   const activeSeasonConfig = activeSeason as ActiveSeasonExternalConfig | null;
 

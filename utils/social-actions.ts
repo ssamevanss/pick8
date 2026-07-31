@@ -7,6 +7,7 @@ import {
   formatGroupedActorText,
   upsertGroupedUserNotification,
 } from "@/utils/user-notifications";
+import { requireLeagueMembership } from "@/utils/leagues";
 
 const ALLOWED_REACTIONS = new Set(["😂", "🔥", "👀", "😭", "🤝"]);
 const MAX_COMMENT_LENGTH = 240;
@@ -24,9 +25,11 @@ type FixtureScopeRow = {
         seasons:
           | {
               status: string | null;
+              league_id: string | null;
             }
           | {
               status: string | null;
+              league_id: string | null;
             }[]
           | null;
       }
@@ -35,9 +38,11 @@ type FixtureScopeRow = {
         seasons:
           | {
               status: string | null;
+              league_id: string | null;
             }
           | {
               status: string | null;
+              league_id: string | null;
             }[]
           | null;
       }[]
@@ -55,9 +60,11 @@ type NotificationScopeRow = {
   seasons:
     | {
         status: string | null;
+        league_id: string | null;
       }
     | {
         status: string | null;
+        league_id: string | null;
       }[]
     | null;
 };
@@ -71,10 +78,12 @@ type NotificationCommentScopeRow = {
     | {
         seasons:
           | {
-              status: string | null;
-            }
+            status: string | null;
+            league_id: string | null;
+          }
           | {
               status: string | null;
+              league_id: string | null;
             }[]
           | null;
       }
@@ -82,9 +91,11 @@ type NotificationCommentScopeRow = {
         seasons:
           | {
               status: string | null;
+              league_id: string | null;
             }
           | {
               status: string | null;
+              league_id: string | null;
             }[]
           | null;
       }[]
@@ -97,19 +108,39 @@ function getFixtureGameweek(row: FixtureScopeRow) {
 
 function getSeasonStatus(
   season:
-    | { status: string | null }
-    | { status: string | null }[]
+    | { status: string | null; league_id?: string | null }
+    | { status: string | null; league_id?: string | null }[]
     | null
     | undefined,
 ) {
   return Array.isArray(season) ? season[0]?.status : season?.status;
 }
 
+function getSeasonLeagueId(
+  season:
+    | { league_id?: string | null }
+    | { league_id?: string | null }[]
+    | null
+    | undefined,
+) {
+  return Array.isArray(season) ? season[0]?.league_id : season?.league_id;
+}
+
 function logSocialNotificationInfo(
   stage: string,
   details: Record<string, unknown>,
 ) {
+  if (process.env.DEBUG_NOTIFICATIONS !== "1") {
+    return;
+  }
+
   console.info("[user-notifications]", stage, details);
+}
+
+function getLeagueTargetHref(leagueId: string, destination: string) {
+  return `/leagues/select?league=${encodeURIComponent(
+    leagueId,
+  )}&next=${encodeURIComponent(destination)}`;
 }
 
 async function getApprovedUser() {
@@ -161,17 +192,21 @@ async function getActorName(userId: string) {
   return getProfileDisplayName(profile);
 }
 
-async function getApprovedUserIdsExcept({
+async function getLeagueMemberUserIdsExcept({
   admin,
+  leagueId,
   excludedUserIds,
 }: {
   admin: ReturnType<typeof createAdminClient>;
+  leagueId: string;
   excludedUserIds: string[];
 }) {
-  const { data: profiles, error } = await admin
-    .from("profiles")
-    .select("id")
-    .eq("status", "approved");
+  const { data: memberships, error } = await admin
+    .from("league_memberships")
+    .select("user_id, profiles!inner(status)")
+    .eq("league_id", leagueId)
+    .eq("status", "active")
+    .eq("profiles.status", "approved");
   const excluded = new Set(excludedUserIds.filter(Boolean));
 
   if (error) {
@@ -182,8 +217,8 @@ async function getApprovedUserIdsExcept({
     return [];
   }
 
-  return ((profiles as { id: string }[] | null) ?? [])
-    .map((profile) => profile.id)
+  return ((memberships as { user_id: string }[] | null) ?? [])
+    .map((membership) => membership.user_id)
     .filter((userId) => !excluded.has(userId));
 }
 
@@ -232,7 +267,8 @@ export async function togglePredictionReaction(formData: FormData) {
       gameweeks!inner (
         season_id,
         seasons!inner (
-          status
+          status,
+          league_id
         )
       )
     `,
@@ -247,11 +283,23 @@ export async function togglePredictionReaction(formData: FormData) {
   const typedFixture = fixture as FixtureScopeRow;
   const gameweek = getFixtureGameweek(typedFixture);
   const seasonStatus = getSeasonStatus(gameweek?.seasons);
+  const leagueId = getSeasonLeagueId(gameweek?.seasons);
   const isLocked =
     typedFixture.status !== "scheduled" ||
     new Date(typedFixture.kickoff_at) <= new Date();
 
-  if (!gameweek?.season_id || seasonStatus !== "active" || !isLocked) {
+  if (
+    !gameweek?.season_id ||
+    !leagueId ||
+    seasonStatus !== "active" ||
+    !isLocked
+  ) {
+    return;
+  }
+
+  try {
+    await requireLeagueMembership(supabase, user.id, leagueId);
+  } catch {
     return;
   }
 
@@ -302,6 +350,7 @@ export async function togglePredictionReaction(formData: FormData) {
     });
 
     await upsertGroupedUserNotification({
+      leagueId,
       recipientUserId: predictionUserId,
       actorUserId: user.id,
       actorName,
@@ -317,7 +366,11 @@ export async function togglePredictionReaction(formData: FormData) {
           otherCount,
         )} reacted to your ${scoreline} prediction for ${matchup}.`,
       metadata: {
-        targetHref: `/predictions?gameweek=${typedFixture.gameweek_id}&fixture=${fixtureId}#fixture-${fixtureId}`,
+        targetHref: getLeagueTargetHref(
+          leagueId,
+          `/predictions?gameweek=${typedFixture.gameweek_id}&fixture=${fixtureId}#fixture-${fixtureId}`,
+        ),
+        leagueId,
         fixtureId,
         gameweekId: typedFixture.gameweek_id,
         predictionUserId,
@@ -330,7 +383,7 @@ export async function togglePredictionReaction(formData: FormData) {
   revalidatePath("/predictions");
 }
 
-async function getNotificationScope(notificationId: string) {
+async function getNotificationScope(notificationId: string, userId: string) {
   const supabase = await createClient();
 
   const { data: notification } = await supabase
@@ -345,7 +398,8 @@ async function getNotificationScope(notificationId: string) {
       season_id,
       gameweek_id,
       seasons (
-        status
+        status,
+        league_id
       )
     `,
     )
@@ -364,11 +418,22 @@ async function getNotificationScope(notificationId: string) {
   ) {
     return null;
   }
+  const leagueId = getSeasonLeagueId(typedNotification.seasons);
+
+  if (!leagueId) {
+    return null;
+  }
+
+  try {
+    await requireLeagueMembership(supabase, userId, leagueId);
+  } catch {
+    return null;
+  }
 
   return typedNotification;
 }
 
-async function getNotificationCommentScope(commentId: string) {
+async function getNotificationCommentScope(commentId: string, userId: string) {
   const supabase = await createClient();
 
   const { data: comment } = await supabase
@@ -381,7 +446,8 @@ async function getNotificationCommentScope(commentId: string) {
       notification_id,
       notifications!inner (
         seasons!inner (
-          status
+          status,
+          league_id
         )
       )
     `,
@@ -399,6 +465,17 @@ async function getNotificationCommentScope(commentId: string) {
     : typedComment.notifications;
 
   if (getSeasonStatus(notification?.seasons) !== "active") {
+    return null;
+  }
+  const leagueId = getSeasonLeagueId(notification?.seasons);
+
+  if (!leagueId) {
+    return null;
+  }
+
+  try {
+    await requireLeagueMembership(supabase, userId, leagueId);
+  } catch {
     return null;
   }
 
@@ -419,9 +496,14 @@ export async function toggleNotificationReaction(formData: FormData) {
     return;
   }
 
-  const notification = await getNotificationScope(notificationId);
+  const notification = await getNotificationScope(notificationId, user.id);
 
   if (!notification?.season_id) {
+    return;
+  }
+  const leagueId = getSeasonLeagueId(notification.seasons);
+
+  if (!leagueId) {
     return;
   }
 
@@ -466,6 +548,7 @@ export async function toggleNotificationReaction(formData: FormData) {
     });
 
     await upsertGroupedUserNotification({
+      leagueId,
       recipientUserId,
       actorUserId: user.id,
       actorName,
@@ -477,7 +560,11 @@ export async function toggleNotificationReaction(formData: FormData) {
       bodyGrouped: (names, otherCount) =>
         `${formatGroupedActorText(names, otherCount)} reacted to ${activityTitle}.`,
       metadata: {
-        targetHref: `/dashboard?activity=${notificationId}&comments=1#activity-${notificationId}`,
+        targetHref: getLeagueTargetHref(
+          leagueId,
+          `/dashboard?activity=${notificationId}&comments=1#activity-${notificationId}`,
+        ),
+        leagueId,
         notificationId,
         activityTitle,
       },
@@ -505,7 +592,7 @@ export async function addNotificationComment(formData: FormData) {
     return;
   }
 
-  const notification = await getNotificationScope(notificationId);
+  const notification = await getNotificationScope(notificationId, user.id);
 
   if (!notification?.season_id) {
     return;
@@ -530,9 +617,18 @@ export async function addNotificationComment(formData: FormData) {
     notification,
     admin,
   });
-  const targetHref = `/dashboard?activity=${notificationId}&comments=1#activity-${notificationId}`;
-  const approvedRecipientIds = await getApprovedUserIdsExcept({
+  const leagueId = getSeasonLeagueId(notification.seasons);
+
+  if (!leagueId) {
+    return;
+  }
+  const targetHref = getLeagueTargetHref(
+    leagueId,
+    `/dashboard?activity=${notificationId}&comments=1#activity-${notificationId}`,
+  );
+  const approvedRecipientIds = await getLeagueMemberUserIdsExcept({
     admin,
+    leagueId,
     excludedUserIds: [user.id],
   });
 
@@ -547,6 +643,7 @@ export async function addNotificationComment(formData: FormData) {
 
   for (const recipientUserId of approvedRecipientIds) {
     await upsertGroupedUserNotification({
+      leagueId,
       recipientUserId,
       actorUserId: user.id,
       actorName,
@@ -562,6 +659,7 @@ export async function addNotificationComment(formData: FormData) {
       },
       metadata: {
         targetHref,
+        leagueId,
         notificationId,
         commentId: insertedComment?.id,
         activityTitle,
@@ -596,6 +694,11 @@ export async function deleteNotificationComment(formData: FormData) {
   if (!user || !profile) {
     return;
   }
+  const comment = await getNotificationCommentScope(commentId, user.id);
+
+  if (!comment) {
+    return;
+  }
 
   const admin = createAdminClient();
   const { data: userProfile } = await admin
@@ -628,9 +731,17 @@ export async function toggleNotificationCommentReaction(formData: FormData) {
     return;
   }
 
-  const comment = await getNotificationCommentScope(commentId);
+  const comment = await getNotificationCommentScope(commentId, user.id);
 
   if (!comment?.season_id) {
+    return;
+  }
+  const scopedNotification = Array.isArray(comment.notifications)
+    ? comment.notifications[0]
+    : comment.notifications;
+  const leagueId = getSeasonLeagueId(scopedNotification?.seasons);
+
+  if (!leagueId) {
     return;
   }
 
@@ -680,6 +791,7 @@ export async function toggleNotificationCommentReaction(formData: FormData) {
     });
 
     await upsertGroupedUserNotification({
+      leagueId,
       recipientUserId: commentOwnerUserId,
       actorUserId: user.id,
       actorName,
@@ -691,7 +803,11 @@ export async function toggleNotificationCommentReaction(formData: FormData) {
       bodyGrouped: (names, otherCount) =>
         `${formatGroupedActorText(names, otherCount)} reacted to your comment.`,
       metadata: {
-        targetHref: `/dashboard?activity=${comment.notification_id}&comments=1#activity-${comment.notification_id}`,
+        targetHref: getLeagueTargetHref(
+          leagueId,
+          `/dashboard?activity=${comment.notification_id}&comments=1#activity-${comment.notification_id}`,
+        ),
+        leagueId,
         commentId,
         notificationId: comment.notification_id,
       },

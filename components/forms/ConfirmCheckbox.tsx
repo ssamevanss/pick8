@@ -7,6 +7,7 @@ type ConfirmCheckboxProps = {
   ariaLabel?: string;
   confirmWhenChecking?: string;
   confirmWhenUnchecking?: string;
+  disabled?: boolean;
 };
 
 export default function ConfirmCheckbox({
@@ -16,6 +17,7 @@ export default function ConfirmCheckbox({
   ariaLabel,
   confirmWhenChecking,
   confirmWhenUnchecking,
+  disabled = false,
 }: ConfirmCheckboxProps) {
   return (
     <input
@@ -23,6 +25,7 @@ export default function ConfirmCheckbox({
       name={name}
       defaultChecked={defaultChecked}
       aria-label={ariaLabel}
+      disabled={disabled}
       className={className}
       onChange={(event) => {
         const message = event.currentTarget.checked

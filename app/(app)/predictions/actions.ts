@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
+import { getSelectedLeagueForUser } from "@/utils/leagues";
 
 type FixtureLookupRow = {
   id: string;
@@ -168,7 +169,13 @@ export async function savePredictions(formData: FormData) {
     );
   }
 
-  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+  const { selectedLeague } = await getSelectedLeagueForUser(
+    supabase,
+    user.id,
+  );
+  const { data: activeSeason } = selectedLeague
+    ? await getActiveSeason(supabase, "id", selectedLeague.id)
+    : { data: null };
 
   if (!activeSeason) {
     redirect(

@@ -3,9 +3,11 @@ export const dynamic = "force-dynamic";
 import SubmitButton from "@/components/forms/SubmitButton";
 import BugReportForm from "@/components/settings/BugReportForm";
 import ToastTrigger from "@/components/toast/ToastTrigger";
-import { createClient } from "@/utils/supabase/server";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { saveEmailPreferences, submitBugReport } from "./actions";
+import { getRequestAuthContext } from "@/utils/app-context";
+import { logServerTiming, startServerTiming } from "@/utils/server-timing";
 
 type SearchParams = Promise<{
   saved?: string;
@@ -55,10 +57,8 @@ export default async function SettingsPage({
   searchParams: SearchParams;
 }) {
   const params = await searchParams;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const pageStartedAt = startServerTiming();
+  const { supabase, user, profile } = await getRequestAuthContext();
 
   if (!user) {
     redirect("/login");
@@ -76,6 +76,8 @@ export default async function SettingsPage({
   const tableMissing =
     error?.message?.includes("user_email_preferences") ||
     error?.code === "42P01";
+
+  logServerTiming("settings.page", pageStartedAt, { userId: user.id });
 
   return (
     <>
@@ -117,6 +119,23 @@ export default async function SettingsPage({
           Email preferences are not ready yet. Run the email preferences SQL
           migration first.
         </p>
+      ) : null}
+
+      {profile?.role === "admin" && profile.status === "approved" ? (
+        <section className="brand-card mb-6 flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+          <div>
+            <p className="brand-eyebrow">Platform utility</p>
+            <h2 className="mt-1 text-xl font-black">Platform Admin</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Manage global users and leagues, seasons and archives, fixture
+              providers and results, cron readiness, cache health, exports,
+              and leaderboard maintenance.
+            </p>
+          </div>
+          <Link href="/admin" className="brand-button-secondary shrink-0">
+            Open Platform Admin
+          </Link>
+        </section>
       ) : null}
 
       <section className="brand-card p-4 sm:p-5">
@@ -165,7 +184,10 @@ export default async function SettingsPage({
         </form>
       </section>
 
-      <section className="brand-card mt-6 p-4 sm:p-5">
+      <section
+        id="report-a-bug"
+        className="brand-card mt-6 scroll-mt-6 p-4 sm:p-5"
+      >
         <div className="brand-section-header">
           <p className="brand-eyebrow">Help</p>
           <h2 className="text-2xl font-black tracking-tight">Report a bug</h2>

@@ -1,17 +1,50 @@
 # Future Multi-League Architecture
 
-Last reviewed: 2026-07-07
+Last reviewed: 2026-08-01
 
-This is a planning document only. It does not implement schema, code, UI, or
-production behaviour.
+Phase 1 and an intentionally limited early Phase 2 are now implemented in code.
+The migration must be applied in each Supabase environment before the new
+application code is deployed.
+
+## Implementation Status (2026-08-01)
+
+Implemented:
+
+- league, membership, invite, and season-link migration with default backfill
+- platform-admin and league-admin role separation
+- server-side selected-league resolution using validated query/cookie/fallback
+- league-scoped player pages plus prediction and fixture-selection writes
+- activity reads and social-action membership checks
+- league landing, switcher, create, join, and read-only league settings pages
+- retry-safe atomic security-definer create/join RPCs
+- base-competition choice plus immediate active-season, invite, and 38-gameweek
+  setup for a newly created league
+- multi-season reminder, auto-pick, and result-sync cron iteration
+- active league-member filtering for reminder and predictions-open emails
+- multi-season fixture refresh with shared provider snapshots
+- globally deduplicated result-provider fixture fetching
+- explicit season scope for every season-specific Platform Admin endpoint
+- approved-profile/active-league membership helpers, picker/Joker integrity
+  triggers, and league-scoped social read policies
+
+New leagues are immediately playable: creation adds the creator as league
+admin, creates an invite and configured active season, and creates gameweeks
+1–38 with the creator as the initial picker. Provider fixture rows are not
+copied; every league continues to read from the shared external fixture cache.
+
+Remaining deployment/feature follow-ups:
+
+- compare the deployed legacy gameplay-table RLS policies with the model below;
+  the repository hardening migration covers league helpers and social reads,
+  but unknown environment-created policies must be inspected in Supabase
+- add invite rotation/disable and safe member removal controls
 
 ## Summary
 
-The current app is a single private league with one active season at a time.
-That model is working well for the first production trial, but it should not be
-the long-term platform shape. The future platform should let one user belong to
-multiple private leagues, each with its own seasons, members, picker rotation,
-leaderboard, activity feed, and invite flow.
+The original app model was a single private league with one active season at a
+time. The implemented foundation now lets one user belong to multiple private
+leagues, each with its own seasons, members, picker rotation, leaderboard,
+activity feed, invite flow, and optional default launch preference.
 
 Recommended direction:
 
@@ -356,18 +389,23 @@ Rebalance rules:
 
 ## Multi-League User Experience
 
-### League Switcher
+### League Home And Switcher
 
-Add a compact league switcher in the app shell/header.
+Implemented routes are `/leagues`, `/leagues/create`, `/leagues/join`, and
+`/league/settings?league=<id>`. League Home is linked from desktop navigation
+and the mobile overflow menu. AppShell shows only a subtle selected-league link;
+the Hub is the primary switching surface. Open League uses a server route that
+validates active membership before writing the HTTP-only selected-league cookie.
 
 Rules:
 
 - user can belong to multiple active leagues
-- selected league stored in URL, cookie, or user preference
-- app chooses sensible default:
-  - last selected league
-  - otherwise first active membership
-  - otherwise create/join prompt
+- selected league stored in the `selected_league_id` HTTP-only cookie
+- `profiles.default_league_id` is an optional deliberate launch preference
+- root and normal post-login launch validate that default's active membership
+  and active season before setting the selected-league cookie
+- without a valid default, launch shows League Home
+- stale/removed selections and seasonless leagues return to League Home
 
 Possible routes:
 
@@ -429,11 +467,13 @@ No cross-league leakage:
 
 League admin can:
 
-- rename league
 - manage invite codes
-- remove members from the league
-- promote/demote league admins later
-- manage picker assignment for future gameweeks later
+- view active members
+- view the active-season gameweek picker schedule
+- toggle Double Gameweek for its own future/unlocked gameweeks
+
+League rename, member removal, role promotion/demotion, and manual picker
+reassignment remain deferred.
 
 League admin should not:
 
@@ -450,6 +490,7 @@ League admin should not:
 Platform admin can:
 
 - see all leagues
+- see all seasons and global account/league health counts
 - monitor failed cron/import/sync jobs
 - run fixture imports
 - run result sync
@@ -458,13 +499,29 @@ Platform admin can:
 - disable abusive leagues/invites
 - run global maintenance
 
-Current `profiles.role = admin` should become platform-admin role eventually.
-League admin should move to `league_memberships.role`.
+`profiles.role = admin` is the current platform-admin role.
+`league_memberships.role = league_admin` is the implemented per-league role and
+does not grant `/admin` access.
+
+The implemented Platform Admin uses Overview, Users, Leagues, Seasons, and
+Maintenance. Overview, Users, and Leagues are global. Seasons lists every
+season and accepts a league context for lifecycle/provider configuration.
+Maintenance separates global cache/cron/diagnostic tools from fixture, result,
+health, and scoring operations for the selected league's active season. User
+league filtering is display-only and never changes platform approval scope.
+Persisted cron run history, a dedicated bug
+report review queue, league suspension/invite revocation controls, and broader
+cross-league operational drill-down are deferred.
 
 ## Season Archive And Rollover
 
 Season archive/rollover is platform-managed in the first multi-league version.
 League admins and normal users mostly interact with the current active season.
+When a league is between seasons, its League Settings page is informational:
+the league owner cannot create the next season. A platform admin selects that
+league in Platform Admin -> Seasons, then creates a season or rolls over its
+current active season. These lifecycle actions derive and preserve that league
+scope and must not archive or activate a season in another league.
 
 Product philosophy:
 
@@ -481,6 +538,8 @@ Product philosophy:
 When archiving:
 
 - mark league season `archived`
+- set `show_in_archive = true`
+- disable fixture import and result sync
 - preserve fixtures
 - preserve predictions
 - preserve joker usage
@@ -492,6 +551,16 @@ When archiving:
 Archived seasons remain scoped to their league.
 Normal player pages should ignore them unless the user intentionally opens a
 history/archive view.
+
+Implemented League Hub behavior moves memberships with no active season out of
+the playable list and into collapsed `Past seasons`. Visible archived seasons
+link to the existing read-only final leaderboard. The league row and
+memberships remain active so a future season can reuse them.
+
+Whole-league archive is deferred. For now, archive the season; a league with no
+active season is treated as between seasons. Future league archive should set
+`leagues.status = archived`, disable invites/joins, preserve memberships and
+history, and provide an explicit unarchive policy.
 
 ### Create Next Season
 
@@ -509,6 +578,10 @@ Rollover flow:
    - picker rotation
 6. App keeps membership list.
 7. App assigns future gameweeks across active members.
+
+The implemented rollover now scopes every step to `sourceSeason.league_id` and
+rotates only active memberships whose profiles are approved. It never archives
+another league's active season.
 
 Old season history remains available in that league only.
 
@@ -534,12 +607,13 @@ Rules:
 - League season toggles decide whether a league season participates in result
   sync.
 
-Potential result-sync evolution:
+Current result-sync implementation:
 
-- current cron finds one active season
-- future cron finds all active league seasons with `result_sync_enabled = true`
-- collect selected linked fixtures in sync window
-- de-duplicate provider fixture IDs
+- current cron finds all active league seasons with
+  `result_sync_enabled = true`
+- current implementation collects selected linked fixtures per season
+- de-duplicates provider work across those seasons
+- de-duplicates provider fixture IDs
 - one provider batch request per chunk
 - apply results to all linked local fixtures across leagues
 

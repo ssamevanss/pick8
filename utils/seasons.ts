@@ -14,6 +14,7 @@ type ActiveSeasonResult = {
 
 type SeasonQuery = {
   eq(column: string, value: string | boolean): SeasonQuery;
+  neq(column: string, value: string | boolean): SeasonQuery;
   maybeSingle(): Promise<ActiveSeasonResult>;
 };
 
@@ -25,19 +26,30 @@ type SeasonClient = {
   from(table: "seasons"): SeasonSelect;
 };
 
-export async function getActiveSeason(supabase: unknown, select: string) {
+export async function getActiveSeason(
+  supabase: unknown,
+  select: string,
+  leagueId: string,
+) {
   const seasons = (supabase as SeasonClient).from("seasons");
-  const activeByStatus = await seasons
-    .select(select)
-    .eq("status", "active")
-    .maybeSingle();
+  let activeByStatusQuery = seasons.select(select).eq("status", "active");
+
+  activeByStatusQuery = activeByStatusQuery.eq("league_id", leagueId);
+
+  const activeByStatus = await activeByStatusQuery.maybeSingle();
 
   if (activeByStatus.data || activeByStatus.error) {
     return activeByStatus;
   }
 
-  return seasons
-    .select(select)
-    .eq("is_active", true)
-    .maybeSingle();
+  let activeByLegacyFlagQuery = seasons.select(select).eq("is_active", true);
+
+  activeByLegacyFlagQuery = activeByLegacyFlagQuery.neq("status", "archived");
+
+  activeByLegacyFlagQuery = activeByLegacyFlagQuery.eq(
+    "league_id",
+    leagueId,
+  );
+
+  return activeByLegacyFlagQuery.maybeSingle();
 }

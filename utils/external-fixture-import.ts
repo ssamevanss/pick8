@@ -3,7 +3,6 @@ import {
   normalizeFootballDataMatch,
   type NormalizedFootballDataFixture,
 } from "@/utils/football-data/client";
-import { getActiveSeason } from "@/utils/seasons";
 import { createAdminClient } from "@/utils/supabase/admin";
 
 type AdminSupabaseClient = ReturnType<typeof createAdminClient>;
@@ -94,24 +93,21 @@ export async function loadExternalFixtureImportSeason({
   supabase: AdminSupabaseClient;
   seasonId: string | null;
 }) {
-  const resolvedSeasonId =
-    seasonId ??
-    (await getActiveSeason(supabase, "id")).data?.id ??
-    null;
-
-  if (!resolvedSeasonId) {
+  if (!seasonId) {
     return {
       season: null,
-      error: "No season_id provided and no active season found.",
+      error: "season_id is required.",
     };
   }
 
   const { data: season, error } = await supabase
     .from("seasons")
     .select(
-      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled",
+      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
     )
-    .eq("id", resolvedSeasonId)
+    .eq("id", seasonId)
+    .eq("status", "active")
+    .eq("leagues.status", "active")
     .single();
 
   if (error || !season) {
@@ -124,6 +120,30 @@ export async function loadExternalFixtureImportSeason({
   return {
     season: season as ExternalFixtureImportSeason,
     error: null,
+  };
+}
+
+export async function loadEligibleExternalFixtureImportSeasons({
+  supabase,
+}: {
+  supabase: AdminSupabaseClient;
+}) {
+  const { data, error } = await supabase
+    .from("seasons")
+    .select(
+      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
+    )
+    .eq("status", "active")
+    .eq("base_provider", "football_data")
+    .eq("fixture_import_enabled", true)
+    .eq("leagues.status", "active")
+    .order("created_at", { ascending: true });
+
+  return {
+    seasons: ((data as ExternalFixtureImportSeason[] | null) ?? []).filter(
+      (season) => Boolean(season.base_competition_code),
+    ),
+    error,
   };
 }
 

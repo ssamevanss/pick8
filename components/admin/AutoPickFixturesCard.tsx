@@ -27,7 +27,11 @@ type AutoPickResult = {
   error?: string;
 };
 
-export default function AutoPickFixturesCard() {
+export default function AutoPickFixturesCard({
+  activeSeasonId,
+}: {
+  activeSeasonId: string | null;
+}) {
   const [result, setResult] = useState<AutoPickResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -50,6 +54,7 @@ export default function AutoPickFixturesCard() {
 
     try {
       const params = new URLSearchParams({
+        season_id: activeSeasonId ?? "",
         dry_run: action === "dry-run" ? "1" : "0",
       });
       const response = await fetch(`/api/admin/auto-pick-fixtures?${params}`, {
@@ -94,7 +99,7 @@ export default function AutoPickFixturesCard() {
           <button
             type="button"
             onClick={() => runAutoPick("dry-run")}
-            disabled={isLoading}
+            disabled={isLoading || !activeSeasonId}
             aria-busy={isLoading && activeAction === "dry-run"}
             className="rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-semibold text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -105,7 +110,7 @@ export default function AutoPickFixturesCard() {
           <button
             type="button"
             onClick={() => runAutoPick("run")}
-            disabled={isLoading}
+            disabled={isLoading || !activeSeasonId}
             aria-busy={isLoading && activeAction === "run"}
             className="rounded-lg bg-amber-400 px-3 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
           >

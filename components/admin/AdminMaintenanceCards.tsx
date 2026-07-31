@@ -37,6 +37,7 @@ export type ExternalFixtureReadinessRow = {
 };
 
 type AdminMaintenanceCardsProps = {
+  selectedLeagueName: string | null;
   activeSeasonId: string | null;
   activeSeasonName: string | null;
   activeSeasonBaseCompetitionCode?: string | null;
@@ -45,8 +46,8 @@ type AdminMaintenanceCardsProps = {
   reminderReadiness: ReminderReadinessRow[];
   externalFixtureReadiness: ExternalFixtureReadinessRow[];
   externalResultSyncSummary: ExternalResultSyncSummary;
-  recalculateAction: () => void;
-  rescoreAction?: () => void;
+  recalculateAction: (formData: FormData) => void;
+  rescoreAction?: (formData: FormData) => void;
   testNotificationAction?: () => void;
 };
 
@@ -75,6 +76,7 @@ function getDotClass(severity: HealthSeverity) {
 }
 
 export default function AdminMaintenanceCards({
+  selectedLeagueName,
   activeSeasonId,
   activeSeasonName,
   activeSeasonBaseCompetitionCode = null,
@@ -89,7 +91,31 @@ export default function AdminMaintenanceCards({
 }: AdminMaintenanceCardsProps) {
   return (
     <section className="mt-6 space-y-6">
-      <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+      <div className="brand-card p-4 sm:p-5">
+        <p className="brand-eyebrow">Maintenance scope</p>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div className="brand-card-soft p-3">
+            <h2 className="font-bold text-white">Global platform tools</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Shared cache refresh, cron readiness, reminders, environment
+              health, and diagnostic notification tooling.
+            </p>
+          </div>
+          <div className="brand-card-soft p-3">
+            <h2 className="font-bold text-white">Selected season tools</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              {selectedLeagueName
+                ? `${selectedLeagueName} · ${activeSeasonName ?? "This league is between seasons"}`
+                : "Select a league above for fixture import, result sync, scoring, and active-season health."}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-amber-400/30 bg-amber-400/5 p-4 shadow-lg">
+        <p className="text-xs font-black uppercase tracking-wide text-amber-300">
+          Backup / safety tool
+        </p>
         <h2 className="text-xl font-semibold">Season export</h2>
         <p className="mt-2 text-sm text-slate-400">
           Download a JSON backup for a selected season. Activity is included
@@ -138,6 +164,9 @@ export default function AdminMaintenanceCards({
       </div>
 
       <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+        <p className="text-xs font-black uppercase tracking-wide text-slate-500">
+          Selected active season
+        </p>
         <h2 className="text-xl font-semibold">Health check</h2>
         <p className="mt-2 text-sm text-slate-400">
           Quick checks for the active season, data completeness, scoring, and
@@ -174,6 +203,9 @@ export default function AdminMaintenanceCards({
       </div>
 
       <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+        <p className="text-xs font-black uppercase tracking-wide text-slate-500">
+          Global cache / selected season configuration
+        </p>
         <h2 className="text-xl font-semibold">External fixture cache</h2>
         <p className="mt-2 text-sm text-slate-400">
           football-data.org imports are server-side only and remain disabled
@@ -214,17 +246,21 @@ export default function AdminMaintenanceCards({
           baseCompetitionCode={activeSeasonBaseCompetitionCode}
         />
         <StandingsRefreshCard
+          activeSeasonId={activeSeasonId}
           baseCompetitionCode={activeSeasonBaseCompetitionCode}
         />
       </div>
 
-      <ExternalFixtureRefreshCard />
+      <ExternalFixtureRefreshCard activeSeasonId={activeSeasonId} />
 
-      <AutoPickFixturesCard />
+      <AutoPickFixturesCard activeSeasonId={activeSeasonId} />
 
       <ExternalResultSyncCard summary={externalResultSyncSummary} />
 
       <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+        <p className="text-xs font-black uppercase tracking-wide text-slate-500">
+          Global cron readiness
+        </p>
         <h2 className="text-xl font-semibold">Email reminders</h2>
         <p className="mt-2 text-sm text-slate-400">
           cron-job.org calls the secured cron endpoints to send matchday
@@ -263,6 +299,9 @@ export default function AdminMaintenanceCards({
       </div>
 
       <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+        <p className="text-xs font-black uppercase tracking-wide text-slate-500">
+          Test-only diagnostic
+        </p>
         <h2 className="text-xl font-semibold">Social inbox diagnostics</h2>
         <p className="mt-2 text-sm text-slate-400">
           Create a grouped inbox notification for the current admin. Use this
@@ -281,7 +320,10 @@ export default function AdminMaintenanceCards({
         ) : null}
       </div>
 
-      <div className="rounded-2xl bg-slate-900 p-4 shadow-lg">
+      <div className="rounded-2xl border border-amber-400/30 bg-amber-400/5 p-4 shadow-lg">
+        <p className="text-xs font-black uppercase tracking-wide text-amber-300">
+          Corrective / potentially dangerous
+        </p>
         <h2 className="text-xl font-semibold">Leaderboard maintenance</h2>
         <p className="mt-2 text-sm text-slate-400">
           Rebuild active-season leaderboard totals from already scored
@@ -294,18 +336,30 @@ export default function AdminMaintenanceCards({
         </p>
 
         <form action={recalculateAction} className="mt-4">
+          <input
+            type="hidden"
+            name="season_id"
+            value={activeSeasonId ?? ""}
+          />
           <SubmitButton
             idleLabel="Recalculate active leaderboard"
             pendingLabel="Recalculating leaderboard..."
+            disabled={!activeSeasonId}
             className="w-full rounded-lg border border-emerald-500/40 px-4 py-3 text-sm font-semibold text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
           />
         </form>
 
         {rescoreAction ? (
           <form action={rescoreAction} className="mt-3">
+            <input
+              type="hidden"
+              name="season_id"
+              value={activeSeasonId ?? ""}
+            />
             <SubmitButton
               idleLabel="Re-score completed fixtures"
               pendingLabel="Re-scoring fixtures..."
+              disabled={!activeSeasonId}
               className="w-full rounded-lg bg-amber-400 px-4 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
             />
           </form>

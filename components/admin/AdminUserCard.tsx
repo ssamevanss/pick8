@@ -62,14 +62,14 @@ export default function AdminUserCard({
           </div>
 
           <div>
-            <label className="text-sm text-slate-300">Role</label>
+            <label className="text-sm text-slate-300">Platform role</label>
             <select
               name="role"
               defaultValue={user.role}
               className="mt-1 w-full rounded-lg bg-slate-900 px-3 py-2 outline-none ring-1 ring-slate-800"
             >
-              <option value="player">Player</option>
-              <option value="admin">Admin</option>
+              <option value="player">Normal user</option>
+              <option value="admin">Platform admin</option>
             </select>
           </div>
         </div>
@@ -107,7 +107,7 @@ export default function AdminUserCard({
             <form action={approveUser}>
               <input type="hidden" name="user_id" value={user.id} />
               <SubmitButton
-                idleLabel="Approve"
+                idleLabel="Approve pending user"
                 pendingLabel="Approving..."
                 className="w-full rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 sm:w-auto"
               />
@@ -116,7 +116,7 @@ export default function AdminUserCard({
             <form action={rejectUser}>
               <input type="hidden" name="user_id" value={user.id} />
               <SubmitButton
-                idleLabel="Reject"
+                idleLabel="Reject pending user"
                 pendingLabel="Rejecting..."
                 className="w-full rounded-lg border border-red-900 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-950 sm:w-auto"
               />

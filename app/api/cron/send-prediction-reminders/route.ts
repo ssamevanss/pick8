@@ -71,56 +71,33 @@ function groupFixturesByGameweek(fixtures: FixtureRow[]) {
   return fixturesByGameweek;
 }
 
-async function getPreviousGameweekComplete({
-  supabase,
-  seasonId,
-  gameweekNumber,
-}: {
-  supabase: ReturnType<typeof createAdminClient>;
-  seasonId: string;
-  gameweekNumber: number;
-}) {
-  if (gameweekNumber === 1) {
-    return true;
-  }
-
-  const { data: previousGameweek } = await supabase
-    .from("gameweeks")
-    .select("id")
-    .eq("season_id", seasonId)
-    .eq("gameweek_number", gameweekNumber - 1)
-    .maybeSingle();
-
-  if (!previousGameweek) {
-    return false;
-  }
-
-  const { data: previousFixtures } = await supabase
-    .from("fixtures")
-    .select("status")
-    .eq("gameweek_id", previousGameweek.id);
-
-  const fixtureList = (previousFixtures as { status: string }[] | null) ?? [];
-
-  return (
-    fixtureList.length > 0 &&
-    fixtureList.every((fixture) => isTerminalFixtureStatus(fixture.status))
-  );
-}
-
 async function findNextActionablePickerGameweek({
   supabase,
-  seasonId,
   gameweeks,
   fixturesByGameweek,
   now,
 }: {
   supabase: ReturnType<typeof createAdminClient>;
-  seasonId: string;
   gameweeks: GameweekRow[];
   fixturesByGameweek: Map<string, FixtureRow[]>;
   now: Date;
 }) {
+  const gameweekByNumber = new Map(
+    gameweeks.map((gameweek) => [gameweek.gameweek_number, gameweek]),
+  );
+  const fixtureIds = [...fixturesByGameweek.values()].flatMap((fixtures) =>
+    fixtures.map((fixture) => fixture.id),
+  );
+  const { data: predictionRows } = fixtureIds.length
+    ? await supabase
+        .from("predictions")
+        .select("fixture_id")
+        .in("fixture_id", fixtureIds)
+    : { data: [] };
+  const predictedFixtureIds = new Set(
+    (predictionRows ?? []).map((prediction) => prediction.fixture_id),
+  );
+
   for (const gameweek of gameweeks) {
     if (!gameweek.fixture_picker_id) {
       continue;
@@ -133,28 +110,24 @@ async function findNextActionablePickerGameweek({
       continue;
     }
 
-    const previousComplete = await getPreviousGameweekComplete({
-      supabase,
-      seasonId,
-      gameweekNumber: gameweek.gameweek_number,
-    });
+    const previousGameweek = gameweekByNumber.get(
+      gameweek.gameweek_number - 1,
+    );
+    const previousFixtures = previousGameweek
+      ? fixturesByGameweek.get(previousGameweek.id) ?? []
+      : [];
+    const previousComplete =
+      gameweek.gameweek_number === 1 ||
+      (previousFixtures.length > 0 &&
+        previousFixtures.every((fixture) =>
+          isTerminalFixtureStatus(fixture.status),
+        ));
 
     if (!previousComplete) {
       continue;
     }
 
-    const fixtureIds = fixtures.map((fixture) => fixture.id);
-    const { data: existingPrediction } =
-      fixtureIds.length > 0
-        ? await supabase
-            .from("predictions")
-            .select("fixture_id")
-            .in("fixture_id", fixtureIds)
-            .limit(1)
-            .maybeSingle()
-        : { data: null };
-
-    if (existingPrediction) {
+    if (fixtures.some((fixture) => predictedFixtureIds.has(fixture.id))) {
       continue;
     }
 
@@ -249,12 +222,12 @@ export async function GET(request: Request) {
     );
   }
 
-  const { data: activeSeason, error: seasonError } = await supabase
+  const { data: activeSeasons, error: seasonError } = await supabase
     .from("seasons")
-    .select("id, name")
+    .select("id, name, leagues!inner(status)")
     .eq("status", "active")
-    .limit(1)
-    .maybeSingle();
+    .eq("leagues.status", "active")
+    .order("created_at", { ascending: true });
 
   if (seasonError) {
     return Response.json(
@@ -263,7 +236,7 @@ export async function GET(request: Request) {
     );
   }
 
-  if (!activeSeason) {
+  if (!activeSeasons?.length) {
     return Response.json({
       ok: true,
       dryRun: isDryRun,
@@ -274,68 +247,78 @@ export async function GET(request: Request) {
     });
   }
 
-  const { data: gameweeks, error: gameweeksError } = await supabase
-    .from("gameweeks")
-    .select("id, season_id, gameweek_number, name, fixture_picker_id")
-    .eq("season_id", activeSeason.id)
-    .order("gameweek_number", { ascending: true });
-
-  if (gameweeksError) {
-    return Response.json(
-      { ok: false, dryRun: isDryRun, error: gameweeksError.message },
-      { status: 500 },
-    );
-  }
-
-  const gameweekRows = (gameweeks as GameweekRow[] | null) ?? [];
-  const gameweekIds = gameweekRows.map((gameweek) => gameweek.id);
-  const { data: fixtures, error: fixturesError } =
-    gameweekIds.length > 0
-      ? await supabase
-          .from("fixtures")
-          .select(
-            "id, gameweek_id, kickoff_at, status, external_provider, external_fixture_id",
-          )
-          .in("gameweek_id", gameweekIds)
-          .order("kickoff_at", { ascending: true })
-      : { data: [], error: null };
-
-  if (fixturesError) {
-    return Response.json(
-      { ok: false, dryRun: isDryRun, error: fixturesError.message },
-      { status: 500 },
-    );
-  }
-
   const now = new Date();
-  const pickerGameweek = await findNextActionablePickerGameweek({
-    supabase,
-    seasonId: activeSeason.id,
-    gameweeks: gameweekRows,
-    fixturesByGameweek: groupFixturesByGameweek(
-      (fixtures as FixtureRow[] | null) ?? [],
-    ),
-    now,
-  });
-  const pickerResult = pickerGameweek
-    ? await sendPickerUpNextEmail({
+  const seasonResults = [];
+
+  for (const activeSeason of activeSeasons) {
+    const { data: gameweeks, error: gameweeksError } = await supabase
+      .from("gameweeks")
+      .select("id, season_id, gameweek_number, name, fixture_picker_id")
+      .eq("season_id", activeSeason.id)
+      .order("gameweek_number", { ascending: true });
+
+    if (gameweeksError) {
+      return Response.json(
+        { ok: false, dryRun: isDryRun, error: gameweeksError.message },
+        { status: 500 },
+      );
+    }
+
+    const gameweekRows = (gameweeks as GameweekRow[] | null) ?? [];
+    const gameweekIds = gameweekRows.map((gameweek) => gameweek.id);
+    const { data: fixtures, error: fixturesError } =
+      gameweekIds.length > 0
+        ? await supabase
+            .from("fixtures")
+            .select(
+              "id, gameweek_id, kickoff_at, status, external_provider, external_fixture_id",
+            )
+            .in("gameweek_id", gameweekIds)
+            .order("kickoff_at", { ascending: true })
+        : { data: [], error: null };
+
+    if (fixturesError) {
+      return Response.json(
+        { ok: false, dryRun: isDryRun, error: fixturesError.message },
+        { status: 500 },
+      );
+    }
+
+    const pickerGameweek = await findNextActionablePickerGameweek({
+      supabase,
+      gameweeks: gameweekRows,
+      fixturesByGameweek: groupFixturesByGameweek(
+        (fixtures as FixtureRow[] | null) ?? [],
+      ),
+      now,
+    });
+    const pickerResult = pickerGameweek
+      ? await sendPickerUpNextEmail({
+          supabase,
+          gameweekId: pickerGameweek.id,
+          dryRun: isDryRun,
+          siteUrl,
+        })
+      : { summaries: [], error: null };
+    const predictionDeadlineResult =
+      await sendPredictionDeadlineReminderEmails({
         supabase,
-        gameweekId: pickerGameweek.id,
+        seasonId: activeSeason.id,
         dryRun: isDryRun,
+        now,
         siteUrl,
-      })
-    : { summaries: [], error: null };
-  const predictionDeadlineResult = await sendPredictionDeadlineReminderEmails({
-    supabase,
-    seasonId: activeSeason.id,
-    dryRun: isDryRun,
-    now,
-    siteUrl,
-  });
-  const allSummaries = [
-    ...pickerResult.summaries,
-    ...predictionDeadlineResult.summaries,
-  ];
+      });
+
+    seasonResults.push({
+      season: activeSeason,
+      pickerResult,
+      predictionDeadlineResult,
+    });
+  }
+  const allSummaries = seasonResults.flatMap((result) => [
+    ...result.pickerResult.summaries,
+    ...result.predictionDeadlineResult.summaries,
+  ]);
   const errorCount = allSummaries.filter(
     (summary) => summary.status === "error",
   ).length;
@@ -344,14 +327,17 @@ export async function GET(request: Request) {
   ).length;
 
   return Response.json({
-    ok: errorCount === 0 && !pickerResult.error && !predictionDeadlineResult.error,
+    ok:
+      errorCount === 0 &&
+      seasonResults.every(
+        (result) =>
+          !result.pickerResult.error &&
+          !result.predictionDeadlineResult.error,
+      ),
     dryRun: isDryRun,
     warning: auth.warning,
-    season: activeSeason,
-    pickerUpNext: pickerResult.summaries,
-    pickerUpNextError: pickerResult.error,
-    predictionDeadlineReminders: predictionDeadlineResult.summaries,
-    predictionDeadlineError: predictionDeadlineResult.error,
+    seasonsProcessed: seasonResults.length,
+    results: seasonResults,
     sentOrWouldSend: sentCount,
     errors: errorCount,
   });

@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
+import { getActiveSeason } from "@/utils/seasons";
+import { getSelectedLeagueForUser } from "@/utils/leagues";
 
 type FixtureLookupRow = {
   id: string;
@@ -106,6 +108,17 @@ export async function savePredictions(formData: FormData) {
   if (userError || !user) {
     redirect("/login");
   }
+  const { selectedLeague } = await getSelectedLeagueForUser(
+    supabase,
+    user.id,
+  );
+  const { data: activeSeason } = selectedLeague
+    ? await getActiveSeason(supabase, "id", selectedLeague.id)
+    : { data: null };
+
+  if (!activeSeason) {
+    redirect("/dashboard?error=No active league season found");
+  }
 
   const fixtureIds = formData.getAll("fixture_id").map(String);
 
@@ -177,6 +190,17 @@ export async function savePredictions(formData: FormData) {
       redirect("/dashboard?error=One or more fixtures are locked");
     }
 
+    const seasonId = getSeasonId(fixture);
+    const isDoubleGameweek = getIsDoubleGameweek(fixture);
+
+    if (!seasonId) {
+      redirect("/dashboard?error=Season not found for fixture");
+    }
+
+    if (seasonId !== activeSeason.id) {
+      redirect("/dashboard?error=Fixture is outside the selected league");
+    }
+
     const { error: predictionError } = await supabase.from("predictions").upsert(
       {
         fixture_id: fixtureId,
@@ -193,13 +217,6 @@ export async function savePredictions(formData: FormData) {
       redirect(
         `/dashboard?error=${encodeURIComponent(predictionError.message)}`,
       );
-    }
-
-    const seasonId = getSeasonId(fixture);
-    const isDoubleGameweek = getIsDoubleGameweek(fixture);
-
-    if (!seasonId) {
-      redirect("/dashboard?error=Season not found for fixture");
     }
 
     if (isDoubleGameweek) {

@@ -7,10 +7,7 @@ import SubmitButton from "@/components/forms/SubmitButton";
 import ToastTrigger from "@/components/toast/ToastTrigger";
 import TeamIdentity from "@/components/predictions/TeamIdentity";
 import type { Fixture, Gameweek } from "@/components/predictions/types";
-import { createClient } from "@/utils/supabase/server";
-import { getActiveSeason } from "@/utils/seasons";
 import {
-  getEditablePickerGameweeks,
   type PickerEligibleGameweek,
 } from "@/utils/picker-eligibility";
 import {
@@ -39,6 +36,10 @@ import {
 import { getProviderTeamIdentityFromRawPayload } from "@/utils/team-assets";
 import { saveExternalPickerFixtures, savePickerFixtures } from "./actions";
 import { redirect } from "next/navigation";
+import {
+  getAppLeagueContext,
+  getRequestEditablePickerGameweeks,
+} from "@/utils/app-context";
 
 type PickerGameweek = PickerEligibleGameweek & Gameweek;
 
@@ -416,28 +417,15 @@ export default async function PickFixturesPage({
   }>;
 }) {
   const params = searchParams ? await searchParams : {};
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { supabase, user, activeSeason } = await getAppLeagueContext();
 
   if (!user) {
     redirect("/login");
   }
-
-  const { data: activeSeason } = await getActiveSeason(
-    supabase,
-    "id, base_provider, base_competition_code, base_competition_name, provider_season",
-  );
   const activeSeasonConfig = activeSeason as ActiveSeasonPickerConfig | null;
 
   const eligibleGameweeks = activeSeason
-    ? ((await getEditablePickerGameweeks({
-        supabase,
-        userId: user.id,
-        activeSeasonId: activeSeasonConfig!.id,
-      })) as PickerGameweek[])
+    ? ((await getRequestEditablePickerGameweeks()) as PickerGameweek[])
     : [];
 
   if (!activeSeason) {
@@ -455,7 +443,8 @@ export default async function PickFixturesPage({
             No active season
           </p>
           <p className="mt-2 text-sm text-slate-300">
-            There is no live season for fixture selection yet.
+            This league has no active season. Fixture selection will return
+            when a platform admin starts the next season.
           </p>
         </section>
       </>
@@ -620,10 +609,13 @@ export default async function PickFixturesPage({
           .in("status", selectableExternalStatuses)
           .gt("kickoff_at", nowIso)
           .order("kickoff_at", { ascending: true })
+          .limit(200)
       : { data: null, error: null };
 
   const { data: baseCompetitionFixtureRows } =
-    externalFixturesConfigured && activeSeasonConfig?.base_competition_code
+    isBaseCompetition
+      ? { data: externalFixtures }
+      : externalFixturesConfigured && activeSeasonConfig?.base_competition_code
       ? await supabase
           .from("external_fixtures")
           .select(
@@ -634,6 +626,7 @@ export default async function PickFixturesPage({
           .in("status", selectableExternalStatuses)
           .gt("kickoff_at", nowIso)
           .order("kickoff_at", { ascending: true })
+          .limit(200)
       : { data: [] };
 
   const allExternalFixtureRows =

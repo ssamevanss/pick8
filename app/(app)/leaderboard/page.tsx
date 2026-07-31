@@ -1,13 +1,13 @@
 export const dynamic = "force-dynamic";
 
 import Link from "next/link";
-import { createClient } from "@/utils/supabase/server";
-import { getActiveSeason } from "@/utils/seasons";
 import RankMedal from "@/components/leaderboard/RankMedal";
 import LeaderboardChart, {
   type LeaderboardChartPlayer,
 } from "@/components/leaderboard/LeaderboardChart";
 import LeaderboardViewToggle from "@/components/leaderboard/LeaderboardViewToggle";
+import { getAppLeagueContext } from "@/utils/app-context";
+import { logServerTiming, startServerTiming } from "@/utils/server-timing";
 
 type SearchParams = Promise<{
   players?: string;
@@ -229,19 +229,17 @@ export default async function LeaderboardPage({
   searchParams,
 }: LeaderboardPageProps) {
   const resolvedSearchParams = await searchParams;
+  const pageStartedAt = startServerTiming();
   const selectedArchivedSeasonId = resolvedSearchParams.season ?? null;
   const view = resolvedSearchParams.view === "chart" ? "chart" : "table";
 
-  const supabase = await createClient();
-
-  const { data: activeSeason } = await getActiveSeason(
-    supabase,
-    "id, name, status, show_in_archive, archived_at",
-  );
+  const { supabase, selectedLeague, activeSeason } =
+    await getAppLeagueContext();
 
   const { data: archivedSeasons } = await supabase
     .from("seasons")
     .select("id, name, status, show_in_archive, archived_at")
+    .eq("league_id", selectedLeague?.id ?? "")
     .eq("status", "archived")
     .eq("show_in_archive", true)
     .order("archived_at", { ascending: false });
@@ -256,57 +254,63 @@ export default async function LeaderboardPage({
   const selectedSeason = selectedArchivedSeason ?? activeSeason;
   const isArchivedSeason = selectedSeason?.status === "archived";
 
-  const { data: leaderboardEntries, error } = selectedSeason
-    ? await supabase
-        .from("leaderboard_entries")
-        .select(
-          `
-          user_id,
-          rank,
-          previous_rank,
-          total_points,
-          weekly_points,
-          exact_scores,
-          correct_results,
-          profiles (
-            display_name
+  const [
+    { data: leaderboardEntries, error },
+    { data: gameweekRows },
+    { data: predictionPointsRows },
+  ] = await Promise.all([
+    selectedSeason
+      ? supabase
+          .from("leaderboard_entries")
+          .select(
+            `
+            user_id,
+            rank,
+            previous_rank,
+            total_points,
+            weekly_points,
+            exact_scores,
+            correct_results,
+            profiles (
+              display_name
+            )
+          `,
           )
-        `,
-        )
-        .eq("season_id", selectedSeason.id)
-        .order("rank", { ascending: true })
-    : { data: null, error: null };
+          .eq("season_id", selectedSeason.id)
+          .order("rank", { ascending: true })
+      : Promise.resolve({ data: null, error: null }),
+    selectedSeason && view === "chart"
+      ? supabase
+          .from("gameweeks")
+          .select("id, gameweek_number")
+          .eq("season_id", selectedSeason.id)
+          .order("gameweek_number", { ascending: true })
+      : Promise.resolve({ data: null }),
+    selectedSeason && view === "chart"
+      ? supabase
+          .from("predictions")
+          .select(
+            `
+            user_id,
+            points,
+            fixtures!inner (
+              status,
+              gameweeks!inner (
+                id,
+                gameweek_number,
+                season_id
+              )
+            )
+          `,
+          )
+          .eq("fixtures.status", "completed")
+          .eq("fixtures.gameweeks.season_id", selectedSeason.id)
+          .not("points", "is", null)
+      : Promise.resolve({ data: null }),
+  ]);
 
   const entries = (leaderboardEntries as LeaderboardEntry[] | null) ?? [];
-  const { data: gameweekRows } = selectedSeason
-    ? await supabase
-        .from("gameweeks")
-        .select("id, gameweek_number")
-        .eq("season_id", selectedSeason.id)
-        .order("gameweek_number", { ascending: true })
-    : { data: null };
   const gameweeks = (gameweekRows as GameweekRow[] | null) ?? [];
-  const { data: predictionPointsRows } = selectedSeason
-    ? await supabase
-        .from("predictions")
-        .select(
-          `
-          user_id,
-          points,
-          fixtures!inner (
-            status,
-            gameweeks!inner (
-              id,
-              gameweek_number,
-              season_id
-            )
-          )
-        `,
-        )
-        .eq("fixtures.status", "completed")
-        .eq("fixtures.gameweeks.season_id", selectedSeason.id)
-        .not("points", "is", null)
-    : { data: null };
   const predictionRows =
     (predictionPointsRows as PredictionPointsRow[] | null) ?? [];
   const scoredGameweekIds = new Set(
@@ -326,6 +330,12 @@ export default async function LeaderboardPage({
     (gameweek) => gameweek.gameweek_number,
   );
 
+  logServerTiming("leaderboard.page", pageStartedAt, {
+    leagueId: selectedLeague?.id,
+    view,
+    playerCount: entries.length,
+  });
+
   return (
     <>
       <header className="brand-card mb-6 p-5 sm:p-6">
@@ -336,14 +346,22 @@ export default async function LeaderboardPage({
 
             <p className="brand-subtitle mt-2">
               {selectedSeason?.name ?? "No active season"}
-              {isArchivedSeason ? " · Final standings" : " · Current season"}
+              {selectedSeason
+                ? isArchivedSeason
+                  ? " · Final standings"
+                  : " · Current season"
+                : " · This league is between seasons"}
             </p>
           </div>
 
           <details className="relative w-full sm:w-auto">
             <summary className="inline-flex min-h-10 w-full cursor-pointer list-none items-center justify-between gap-2 rounded-full border border-white/10 bg-[#07111f]/75 px-3 py-2 text-sm font-semibold text-slate-200 transition hover:border-emerald-300/40 hover:text-white sm:w-56 [&::-webkit-details-marker]:hidden">
               <span className="min-w-0 truncate">
-                {selectedArchivedSeason ? "Previous season" : "Current season"}
+                {selectedArchivedSeason
+                  ? "Previous season"
+                  : activeSeason
+                    ? "Current season"
+                    : "Past seasons"}
               </span>
               <span className="text-emerald-300">▾</span>
             </summary>
@@ -385,6 +403,13 @@ export default async function LeaderboardPage({
         </div>
       </header>
 
+      {!activeSeason && !selectedArchivedSeason ? (
+        <p className="brand-alert-warning mb-4">
+          This league has no active season. Choose a past season above to view
+          its read-only final leaderboard.
+        </p>
+      ) : null}
+
       {selectedArchivedSeasonId && !selectedArchivedSeason ? (
         <p className="brand-alert-warning mt-4">
           That previous season is not available. It may be hidden, deleted, or
@@ -417,7 +442,7 @@ export default async function LeaderboardPage({
           <p className="brand-card-soft p-4 text-sm text-slate-400">
             {selectedSeason
               ? "No leaderboard entries yet. Standings will appear after results are saved."
-              : "No leaderboard is available until an active season exists."}
+              : "No active leaderboard is available. Choose a past season if one is listed."}
           </p>
         ) : null}
 

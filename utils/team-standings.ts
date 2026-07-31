@@ -2,7 +2,6 @@ import {
   fetchCompetitionStandings,
   FootballDataError,
 } from "@/utils/football-data/client";
-import { getActiveSeason } from "@/utils/seasons";
 import { createAdminClient } from "@/utils/supabase/admin";
 
 type AdminSupabaseClient = ReturnType<typeof createAdminClient>;
@@ -36,13 +35,18 @@ function asNumber(value: unknown): number | null {
 
 export async function getEligibleActiveStandingsSeason({
   supabase,
+  seasonId,
 }: {
   supabase: AdminSupabaseClient;
+  seasonId: string;
 }) {
-  const { data: activeSeason } = await getActiveSeason(
-    supabase,
-    "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled",
-  );
+  const { data: activeSeason, error } = await supabase
+    .from("seasons")
+    .select("id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)")
+    .eq("id", seasonId)
+    .eq("status", "active")
+    .eq("leagues.status", "active")
+    .maybeSingle();
   const season = activeSeason as StandingsRefreshSeason | null;
 
   if (
@@ -51,10 +55,33 @@ export async function getEligibleActiveStandingsSeason({
     season.base_provider !== "football_data" ||
     !season.base_competition_code
   ) {
-    return { season: null, error: null };
+    return { season: null, error };
   }
 
-  return { season, error: null };
+  return { season, error };
+}
+
+export async function getEligibleActiveStandingsSeasons({
+  supabase,
+}: {
+  supabase: AdminSupabaseClient;
+}) {
+  const { data, error } = await supabase
+    .from("seasons")
+    .select(
+      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
+    )
+    .eq("status", "active")
+    .eq("base_provider", "football_data")
+    .eq("leagues.status", "active")
+    .order("created_at", { ascending: true });
+
+  return {
+    seasons: ((data as StandingsRefreshSeason[] | null) ?? []).filter(
+      (season) => Boolean(season.base_competition_code),
+    ),
+    error,
+  };
 }
 
 export async function refreshTeamStandings({

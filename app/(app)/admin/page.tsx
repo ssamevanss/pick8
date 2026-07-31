@@ -8,15 +8,15 @@ import AdminCreateGameweekForm from "@/components/admin/AdminCreateGameweekForm"
 import AdminManageFixtureCard from "@/components/admin/AdminManageFixtureCard";
 import AdminResultFixtureCard from "@/components/admin/AdminResultFixtureCard";
 import AdminTabs from "@/components/admin/AdminTabs";
+import AdminScopeSelector from "@/components/admin/AdminScopeSelector";
 import AdminUserCard, {
   type AdminUser,
 } from "@/components/admin/AdminUserCard";
 import GameweekSelector from "@/components/gameweeks/GameweekSelector";
 import type { Fixture, Gameweek } from "@/components/predictions/types";
-import { createClient } from "@/utils/supabase/server";
 import { createAdminClient } from "@/utils/supabase/admin";
-import { getActiveSeason } from "@/utils/seasons";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import {
   activateSeason,
   archiveSeason,
@@ -54,6 +54,10 @@ import AdminMaintenanceCards, {
   type MaintenanceSeasonOption,
   type ReminderReadinessRow,
 } from "@/components/admin/AdminMaintenanceCards";
+import PlatformAdminOverview, {
+  type PlatformLeagueOverviewRow,
+  type PlatformSeasonOverviewRow,
+} from "@/components/admin/PlatformAdminOverview";
 import {
   canBrowseOtherCompetitions,
   footballDataCompetitionOptions,
@@ -68,6 +72,8 @@ import {
   getSpecialFixtureCutoff,
   isKickoffBeforeSpecialFixtureCutoff,
 } from "@/utils/fixture-timing-window";
+import { getAppLeagueContext } from "@/utils/app-context";
+import { logServerTiming, startServerTiming } from "@/utils/server-timing";
 
 type Profile = {
   id: string;
@@ -77,7 +83,7 @@ type Profile = {
   status: string;
 };
 
-type AdminTab = "overview" | "users" | "season" | "gameweeks" | "maintenance";
+type AdminTab = "overview" | "users" | "leagues" | "seasons" | "maintenance";
 
 type HealthFixtureRow = {
   id: string;
@@ -98,20 +104,54 @@ type HealthPredictionRow = {
   points: number | null;
 };
 
+type PlatformLeagueDatabaseRow = {
+  id: string;
+  name: string;
+  status: string;
+  default_base_competition_name: string | null;
+};
+
+type PlatformSeasonDatabaseRow = {
+  id: string;
+  league_id: string | null;
+  name: string;
+  status: string;
+  is_active: boolean | null;
+  base_competition_name: string | null;
+  base_competition_code: string | null;
+  fixture_import_enabled: boolean | null;
+  result_sync_enabled: boolean | null;
+};
+
+type PlatformMembershipDatabaseRow = {
+  league_id: string;
+  user_id: string;
+  role: "player" | "league_admin";
+  status: string;
+};
+
+type PlatformGameweekDatabaseRow = {
+  id: string;
+  season_id: string;
+  gameweek_number: number;
+  name: string | null;
+  fixtures: { id: string; status: string }[] | null;
+};
+
 function getSelectedTab(tab: string | undefined): AdminTab {
-  if (tab === "create") {
-    return "season";
+  if (tab === "season" || tab === "create") {
+    return "seasons";
   }
 
-  if (tab === "fixtures" || tab === "results") {
-    return "gameweeks";
+  if (tab === "gameweeks" || tab === "fixtures" || tab === "results") {
+    return "maintenance";
   }
 
   if (
     tab === "overview" ||
     tab === "users" ||
-    tab === "season" ||
-    tab === "gameweeks" ||
+    tab === "leagues" ||
+    tab === "seasons" ||
     tab === "maintenance"
   ) {
     return tab;
@@ -120,7 +160,14 @@ function getSelectedTab(tab: string | undefined): AdminTab {
   return "overview";
 }
 
-function getAdminSavedToastTitle(tab: string | undefined) {
+function getAdminSavedToastTitle(
+  tab: string | undefined,
+  saved?: string,
+) {
+  if (saved === "season-archived") {
+    return "Season archived";
+  }
+
   if (tab === "results") {
     return "Result updated";
   }
@@ -137,7 +184,11 @@ function getAdminSavedToastTitle(tab: string | undefined) {
     return "Settings saved";
   }
 
-  if (tab === "fixtures" || tab === "gameweeks") {
+  if (tab === "gameweeks") {
+    return "Gameweek settings saved";
+  }
+
+  if (tab === "fixtures") {
     return "Fixtures picked";
   }
 
@@ -153,50 +204,289 @@ export default async function AdminPage({
     gameweek?: string;
     tab?: string;
     competition?: string;
+    league?: string;
+    user_search?: string;
+    user_status?: string;
+    user_role?: string;
+    user_league?: string;
   }>;
 }) {
   const params = searchParams ? await searchParams : {};
+  const pageStartedAt = startServerTiming();
   const selectedTab = getSelectedTab(params.tab);
   const selectedGameweekId = params.gameweek;
 
-  const supabase = await createClient();
-  const adminSupabase = createAdminClient();
-
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role, status")
-    .eq("id", user?.id)
-    .single();
+    user,
+    profile,
+    selectedLeague: shellSelectedLeague,
+  } = await getAppLeagueContext();
+  const adminSupabase = createAdminClient();
 
   if (profile?.role !== "admin" || profile.status !== "approved") {
     redirect("/dashboard?error=Admin access required");
   }
 
-  const { data: activeSeason } = await getActiveSeason(
-    supabase,
-    "id, name, status, is_active, base_provider, base_competition_code, base_competition_name, base_competition_external_id, provider_season, fixture_import_enabled, result_sync_enabled",
-  );
+  let platformLeagueOverview: PlatformLeagueOverviewRow[] = [];
+  let platformSeasonOverview: PlatformSeasonOverviewRow[] = [];
+  let platformLeagueRows: PlatformLeagueDatabaseRow[] = [];
+  let platformSeasonRows: (PlatformSeasonDatabaseRow & AdminSeasonRow)[] = [];
+  let platformMembershipRows: PlatformMembershipDatabaseRow[] = [];
+  let platformOverviewCounts = {
+    approvedUsers: 0,
+    pendingUsers: 0,
+    disabledUsers: 0,
+    activeLeagues: 0,
+    activeSeasons: 0,
+    leaguesWithoutActiveSeason: 0,
+    upcomingUnpickedGameweeks: 0,
+    openBugReports: null as number | null,
+  };
 
-  const { data: seasons } = await supabase
-    .from("seasons")
-    .select(
-      "id, name, status, is_active, season_type, description, show_in_archive, provider_season, base_provider, base_competition_code, base_competition_name, fixture_import_enabled, result_sync_enabled, created_at, archived_at",
-    )
-    .order("created_at", { ascending: false });
+  {
+    const [
+      { data: platformProfiles },
+      { data: platformLeagues },
+      { data: platformSeasons },
+      { data: platformMemberships },
+      bugReportResult,
+    ] = await Promise.all([
+      selectedTab === "overview"
+        ? adminSupabase.from("profiles").select("id, status")
+        : Promise.resolve({ data: [] }),
+      adminSupabase
+        .from("leagues")
+        .select("id, name, status, default_base_competition_name")
+        .order("name", { ascending: true }),
+      adminSupabase
+        .from("seasons")
+        .select(
+          "id, league_id, name, status, is_active, season_type, description, show_in_archive, provider_season, base_provider, base_competition_code, base_competition_name, base_competition_external_id, fixture_import_enabled, result_sync_enabled, created_at, archived_at",
+        )
+        .order("created_at", { ascending: false }),
+      adminSupabase
+        .from("league_memberships")
+        .select("league_id, user_id, role, status")
+        .eq("status", "active"),
+      selectedTab === "overview"
+        ? adminSupabase
+            .from("bug_reports")
+            .select("id", { count: "exact", head: true })
+            .eq("status", "open")
+        : Promise.resolve({ data: null, count: 0, error: null }),
+    ]);
+    const profileRows = platformProfiles ?? [];
+    const leagueRows =
+      (platformLeagues as PlatformLeagueDatabaseRow[] | null) ?? [];
+    const seasonRows =
+      (platformSeasons as (PlatformSeasonDatabaseRow & AdminSeasonRow)[] | null) ?? [];
+    const membershipRows =
+      (platformMemberships as PlatformMembershipDatabaseRow[] | null) ?? [];
+    platformLeagueRows = leagueRows;
+    platformSeasonRows = seasonRows;
+    platformMembershipRows = membershipRows;
+    const seasonIds = seasonRows.map((season) => season.id);
+    const { data: platformGameweeks } =
+      seasonIds.length && ["overview", "seasons"].includes(selectedTab)
+      ? await adminSupabase
+          .from("gameweeks")
+          .select("id, season_id, gameweek_number, name, fixtures(id, status)")
+          .in("season_id", seasonIds)
+      : { data: [] };
+    const gameweekRows =
+      (platformGameweeks as PlatformGameweekDatabaseRow[] | null) ?? [];
+    const activeSeasons = seasonRows.filter(
+      (season) => season.status === "active",
+    );
+    const activeSeasonIds = new Set(activeSeasons.map((season) => season.id));
+    const activeSeasonByLeague = new Map(
+      activeSeasons.flatMap((season) =>
+        season.league_id ? [[season.league_id, season] as const] : [],
+      ),
+    );
+    const activeMemberCountByLeague = new Map<string, number>();
+    const leagueAdminCountByLeague = new Map<string, number>();
+    const gameweekCountBySeason = new Map<string, number>();
+    const seasonCountByLeague = new Map<string, number>();
+    const archivedSeasonCountByLeague = new Map<string, number>();
+    const latestCompletedGameweekBySeason = new Map<
+      string,
+      PlatformGameweekDatabaseRow
+    >();
 
-  const seasonList = (seasons as AdminSeasonRow[] | null) ?? [];
-  const { data: externalCompetitionRows } = await supabase
-    .from("external_competitions")
-    .select(
-      "provider, external_competition_code, external_competition_id, name",
-    )
-    .eq("provider", "football_data")
-    .eq("enabled", true)
-    .order("display_order", { ascending: true });
+    for (const membershipRow of membershipRows) {
+      activeMemberCountByLeague.set(
+        membershipRow.league_id,
+        (activeMemberCountByLeague.get(membershipRow.league_id) ?? 0) + 1,
+      );
+
+      if (membershipRow.role === "league_admin") {
+        leagueAdminCountByLeague.set(
+          membershipRow.league_id,
+          (leagueAdminCountByLeague.get(membershipRow.league_id) ?? 0) + 1,
+        );
+      }
+    }
+
+    for (const gameweekRow of gameweekRows) {
+      gameweekCountBySeason.set(
+        gameweekRow.season_id,
+        (gameweekCountBySeason.get(gameweekRow.season_id) ?? 0) + 1,
+      );
+
+      const fixtures = gameweekRow.fixtures ?? [];
+      const isComplete =
+        fixtures.length > 0 &&
+        fixtures.every((fixture) =>
+          ["completed", "postponed", "void"].includes(fixture.status),
+        );
+      const currentLatest = latestCompletedGameweekBySeason.get(
+        gameweekRow.season_id,
+      );
+
+      if (
+        isComplete &&
+        (!currentLatest ||
+          gameweekRow.gameweek_number > currentLatest.gameweek_number)
+      ) {
+        latestCompletedGameweekBySeason.set(
+          gameweekRow.season_id,
+          gameweekRow,
+        );
+      }
+    }
+
+    for (const season of seasonRows) {
+      if (!season.league_id) {
+        continue;
+      }
+
+      seasonCountByLeague.set(
+        season.league_id,
+        (seasonCountByLeague.get(season.league_id) ?? 0) + 1,
+      );
+
+      if (season.status === "archived") {
+        archivedSeasonCountByLeague.set(
+          season.league_id,
+          (archivedSeasonCountByLeague.get(season.league_id) ?? 0) + 1,
+        );
+      }
+    }
+
+    const leagueNameById = new Map(
+      leagueRows.map((league) => [league.id, league.name]),
+    );
+    platformLeagueOverview = leagueRows.map((league) => {
+      const leagueActiveSeason = activeSeasonByLeague.get(league.id);
+
+      return {
+        id: league.id,
+        name: league.name,
+        competition:
+          leagueActiveSeason?.base_competition_name ??
+          leagueActiveSeason?.base_competition_code ??
+          league.default_base_competition_name,
+        activeSeason: leagueActiveSeason?.name ?? null,
+        activeMembers: activeMemberCountByLeague.get(league.id) ?? 0,
+        leagueAdmins: leagueAdminCountByLeague.get(league.id) ?? 0,
+        seasonCount: seasonCountByLeague.get(league.id) ?? 0,
+        archivedSeasonCount:
+          archivedSeasonCountByLeague.get(league.id) ?? 0,
+        status: league.status,
+      };
+    });
+    platformSeasonOverview = seasonRows.map((season) => {
+      const latestCompletedGameweek = latestCompletedGameweekBySeason.get(
+        season.id,
+      );
+
+      return {
+        id: season.id,
+        leagueId: season.league_id,
+        leagueName: season.league_id
+          ? (leagueNameById.get(season.league_id) ?? "Unknown league")
+          : "Unassigned",
+        name: season.name,
+        competition:
+          season.base_competition_name ?? season.base_competition_code,
+        status: season.status,
+        gameweekCount: gameweekCountBySeason.get(season.id) ?? 0,
+        activeMembers: season.league_id
+          ? (activeMemberCountByLeague.get(season.league_id) ?? 0)
+          : 0,
+        latestCompletedGameweek: latestCompletedGameweek
+          ? latestCompletedGameweek.name ||
+            `Gameweek ${latestCompletedGameweek.gameweek_number}`
+          : null,
+        resultSyncEnabled: Boolean(season.result_sync_enabled),
+        fixtureImportEnabled: Boolean(season.fixture_import_enabled),
+      };
+    });
+    platformOverviewCounts = {
+      approvedUsers: profileRows.filter((item) => item.status === "approved")
+        .length,
+      pendingUsers: profileRows.filter((item) => item.status === "pending")
+        .length,
+      disabledUsers: profileRows.filter((item) => item.status === "disabled")
+        .length,
+      activeLeagues: leagueRows.filter((item) => item.status === "active")
+        .length,
+      activeSeasons: activeSeasons.length,
+      leaguesWithoutActiveSeason: leagueRows.filter(
+        (league) =>
+          league.status === "active" && !activeSeasonByLeague.has(league.id),
+      ).length,
+      upcomingUnpickedGameweeks: gameweekRows.filter(
+        (gameweek) =>
+          activeSeasonIds.has(gameweek.season_id) &&
+          (gameweek.fixtures?.length ?? 0) === 0,
+      ).length,
+      openBugReports: bugReportResult.error
+        ? null
+        : (bugReportResult.count ?? 0),
+    };
+  }
+
+  const requestedLeagueId =
+    params.league && params.league !== "all" ? params.league : null;
+  const defaultMaintenanceLeagueId = shellSelectedLeague?.id ?? null;
+  const scopedLeagueId =
+    requestedLeagueId ??
+    (selectedTab === "maintenance" && params.league !== "all"
+      ? defaultMaintenanceLeagueId
+      : null);
+  const selectedLeague =
+    platformLeagueRows.find((league) => league.id === scopedLeagueId) ?? null;
+  const activeSeason =
+    platformSeasonRows.find(
+      (season) =>
+        season.league_id === selectedLeague?.id && season.status === "active",
+    ) ?? null;
+  const seasonList = selectedLeague
+    ? platformSeasonRows.filter(
+        (season) => season.league_id === selectedLeague.id,
+      )
+    : [];
+  const visiblePlatformSeasons =
+    selectedTab === "seasons" && selectedLeague
+      ? platformSeasonOverview.filter(
+          (season) => season.leagueId === selectedLeague.id,
+        )
+      : platformSeasonOverview;
+
+  const { data: externalCompetitionRows } = ["seasons", "maintenance"].includes(
+    selectedTab,
+  )
+    ? await adminSupabase
+        .from("external_competitions")
+        .select(
+          "provider, external_competition_code, external_competition_id, name",
+        )
+        .eq("provider", "football_data")
+        .eq("enabled", true)
+        .order("display_order", { ascending: true })
+    : { data: [] };
   const externalCompetitionOptions =
     (
       (externalCompetitionRows as
@@ -230,9 +520,14 @@ export default async function AdminPage({
     externalCompetitionOptions.length > 0
       ? externalCompetitionOptions
       : footballDataCompetitionOptions;
+  const scopedMemberUserIds = selectedLeague
+    ? platformMembershipRows
+        .filter((membership) => membership.league_id === selectedLeague.id)
+        .map((membership) => membership.user_id)
+    : [];
 
   const { data: gameweeks } = activeSeason
-    ? await supabase
+    ? await adminSupabase
         .from("gameweeks")
         .select("id, gameweek_number, name, is_double_gameweek")
         .eq("season_id", activeSeason.id)
@@ -245,7 +540,7 @@ export default async function AdminPage({
 
   const { data: fixtureRows } =
     gameweekIds.length > 0
-      ? await supabase
+      ? await adminSupabase
           .from("fixtures")
           .select(
             "id, gameweek_id, home_team, away_team, kickoff_at, status, home_score, away_score, external_provider, external_fixture_id, external_last_synced_at",
@@ -280,19 +575,28 @@ export default async function AdminPage({
         1
       : 1;
 
-  const { data: profiles } = await supabase
-    .from("profiles")
-    .select("id, display_name, email, role, status")
-    .order("display_name", { ascending: true });
+  const { data: profiles } =
+    selectedTab === "maintenance" && scopedMemberUserIds.length > 0
+      ? await adminSupabase
+          .from("profiles")
+          .select("id, display_name, email, role, status")
+          .in("id", scopedMemberUserIds)
+          .eq("status", "approved")
+          .order("display_name", { ascending: true })
+      : { data: [] };
 
-  const { data: adminUsers, error: adminUsersError } = await supabase
-    .from("profiles")
-    .select("id, email, display_name, role, status")
-    .order("status", { ascending: false })
-    .order("display_name", { ascending: true });
+  const { data: adminUsers, error: adminUsersError } =
+    selectedTab === "users"
+      ? await adminSupabase
+          .from("profiles")
+          .select("id, email, display_name, role, status")
+          .order("status", { ascending: false })
+          .order("display_name", { ascending: true })
+      : { data: [], error: null };
 
-  const { data: fixtures, error } = selectedGameweek
-    ? await supabase
+  const { data: fixtures, error } =
+    selectedTab === "maintenance" && selectedGameweek
+    ? await adminSupabase
         .from("fixtures")
         .select(
           "id, gameweek_id, home_team, away_team, kickoff_at, competition, status, home_score, away_score",
@@ -303,19 +607,57 @@ export default async function AdminPage({
 
   const fixtureList = (fixtures as Fixture[] | null) ?? [];
   const userList = (adminUsers as AdminUser[] | null) ?? [];
-  const pendingUsers = userList.filter((adminUser) => adminUser.status === "pending");
-  const approvedUsers = userList.filter(
+  const userSearch = String(params.user_search ?? "").trim().toLowerCase();
+  const userStatus = ["pending", "approved", "disabled", "rejected"].includes(
+    String(params.user_status),
+  )
+    ? String(params.user_status)
+    : "all";
+  const userRole = ["admin", "player"].includes(String(params.user_role))
+    ? String(params.user_role)
+    : "all";
+  const userLeagueId = platformLeagueRows.some(
+    (league) => league.id === params.user_league,
+  )
+    ? String(params.user_league)
+    : "all";
+  const leagueFilteredUserIds =
+    userLeagueId === "all"
+      ? null
+      : new Set(
+          platformMembershipRows
+            .filter((membership) => membership.league_id === userLeagueId)
+            .map((membership) => membership.user_id),
+        );
+  const filteredUserList = userList.filter((adminUser) => {
+    const matchesSearch =
+      !userSearch ||
+      adminUser.display_name.toLowerCase().includes(userSearch) ||
+      adminUser.email?.toLowerCase().includes(userSearch);
+    const matchesStatus =
+      userStatus === "all" || adminUser.status === userStatus;
+    const matchesRole = userRole === "all" || adminUser.role === userRole;
+    const matchesLeague =
+      !leagueFilteredUserIds || leagueFilteredUserIds.has(adminUser.id);
+
+    return matchesSearch && matchesStatus && matchesRole && matchesLeague;
+  });
+  const pendingUsers = filteredUserList.filter(
+    (adminUser) => adminUser.status === "pending",
+  );
+  const approvedUsers = filteredUserList.filter(
     (adminUser) => adminUser.status === "approved",
   );
-  const rejectedUsers = userList.filter(
+  const rejectedUsers = filteredUserList.filter(
     (adminUser) => adminUser.status === "rejected",
   );
-  const disabledUsers = userList.filter(
+  const disabledUsers = filteredUserList.filter(
     (adminUser) => adminUser.status === "disabled",
   );
 
-  const { data: gameweekPickerAssignments } = activeSeason?.id
-    ? await supabase
+  const { data: gameweekPickerAssignments } =
+    selectedTab === "maintenance" && activeSeason?.id
+    ? await adminSupabase
         .from("gameweeks")
         .select(
           `
@@ -326,6 +668,7 @@ export default async function AdminPage({
           fixture_picker_id,
           fixtures (
             id,
+            kickoff_at,
             status,
             predictions (
               id
@@ -340,14 +683,17 @@ export default async function AdminPage({
   const gameweekPickerAssignmentList =
     (gameweekPickerAssignments as GameweekPickerAssignmentRow[] | null) ?? [];
 
-  const { count: approvedUserCount } = await supabase
-    .from("profiles")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "approved");
+  const needsHealthData = ["overview", "maintenance"].includes(selectedTab);
+  const { count: approvedUserCount } = needsHealthData
+    ? await adminSupabase
+        .from("profiles")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "approved")
+    : { count: 0 };
 
   const { count: predictionCount } =
-    activeSeasonFixtureIds.length > 0
-      ? await supabase
+    needsHealthData && activeSeasonFixtureIds.length > 0
+      ? await adminSupabase
           .from("predictions")
           .select("id", { count: "exact", head: true })
           .in("fixture_id", activeSeasonFixtureIds)
@@ -358,8 +704,8 @@ export default async function AdminPage({
     .map((fixture) => fixture.id);
 
   const { data: completedFixturePredictions } =
-    completedFixtureIds.length > 0
-      ? await supabase
+    needsHealthData && completedFixtureIds.length > 0
+      ? await adminSupabase
           .from("predictions")
           .select("fixture_id, points")
           .in("fixture_id", completedFixtureIds)
@@ -393,23 +739,27 @@ export default async function AdminPage({
     ).values(),
   ].slice(0, 3);
 
-  const { count: leaderboardEntryCount } = activeSeason?.id
-    ? await supabase
+  const { count: leaderboardEntryCount } = needsHealthData && activeSeason?.id
+    ? await adminSupabase
         .from("leaderboard_entries")
         .select("id", { count: "exact", head: true })
         .eq("season_id", activeSeason.id)
     : { count: 0 };
 
-  const { count: reminderCount, error: reminderCountError } = await adminSupabase
-    .from("email_notifications")
-    .select("id", { count: "exact", head: true });
+  const { count: reminderCount, error: reminderCountError } = needsHealthData
+    ? await adminSupabase
+        .from("email_notifications")
+        .select("id", { count: "exact", head: true })
+    : { count: 0, error: null };
 
-  const { data: latestReminder, error: latestReminderError } = await adminSupabase
-    .from("email_notifications")
-    .select("email_type, sent_at")
-    .order("sent_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const { data: latestReminder, error: latestReminderError } = needsHealthData
+    ? await adminSupabase
+        .from("email_notifications")
+        .select("email_type, sent_at")
+        .order("sent_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    : { data: null, error: null };
 
   const typedLatestReminder = latestReminder as {
     email_type: string;
@@ -601,8 +951,10 @@ export default async function AdminPage({
     null;
   const nowIso = new Date().toISOString();
   const { data: adminExternalFixtureRows } =
-    adminExternalFixturesConfigured && selectedAdminCompetitionCode
-      ? await supabase
+    selectedTab === "maintenance" &&
+    adminExternalFixturesConfigured &&
+    selectedAdminCompetitionCode
+      ? await adminSupabase
           .from("external_fixtures")
           .select(
             "id, provider, external_fixture_id, external_competition_code, external_round, external_matchday, external_stage, external_group, home_team, away_team, kickoff_at, status",
@@ -612,11 +964,13 @@ export default async function AdminPage({
           .in("status", ["TIMED", "SCHEDULED"])
           .gt("kickoff_at", nowIso)
           .order("kickoff_at", { ascending: true })
+          .limit(200)
       : { data: [] };
   const { data: adminBaseExternalFixtureRows } =
+    selectedTab === "maintenance" &&
     adminExternalFixturesConfigured &&
     activeSeasonExternalConfig?.base_competition_code
-      ? await supabase
+      ? await adminSupabase
           .from("external_fixtures")
           .select(
             "external_matchday, external_stage, kickoff_at",
@@ -629,6 +983,7 @@ export default async function AdminPage({
           .in("status", ["TIMED", "SCHEDULED"])
           .gt("kickoff_at", nowIso)
           .order("kickoff_at", { ascending: true })
+          .limit(200)
       : { data: [] };
   const adminBaseRows =
     (adminBaseExternalFixtureRows as
@@ -807,20 +1162,29 @@ export default async function AdminPage({
     },
   ];
 
-  const maintenanceSeasonOptions = seasonList.map((season) => ({
+  const maintenanceSeasonOptions = (
+    selectedLeague ? seasonList : platformSeasonRows
+  ).map((season) => ({
     id: season.id,
     name: season.name,
     status: season.status,
   })) as MaintenanceSeasonOption[];
 
+  logServerTiming("admin.page", pageStartedAt, {
+    userId: user?.id,
+    tab: selectedTab,
+    leagueId: selectedLeague?.id,
+  });
+
   return (
     <>
       <header className="brand-card p-5 sm:p-6">
-        <p className="brand-eyebrow">Control room</p>
-        <h1 className="brand-title mt-2">Admin</h1>
+        <p className="brand-eyebrow">Global control room</p>
+        <h1 className="brand-title mt-2">Platform Admin</h1>
         <p className="brand-subtitle mt-2">
-          Create gameweeks, manage fixtures, enter final results, and manage
-          users.
+          Global users and league health, plus selected-league season, fixture,
+          result, provider, and maintenance tools. League admins manage only
+          their own league from League Settings.
         </p>
       </header>
 
@@ -831,7 +1195,7 @@ export default async function AdminPage({
 
       {params.saved ? (
         <ToastTrigger
-          title={getAdminSavedToastTitle(params.tab)}
+          title={getAdminSavedToastTitle(params.tab, params.saved)}
           triggerKey={`admin:${params.tab ?? selectedTab}:${params.saved}`}
         />
       ) : null}
@@ -843,107 +1207,99 @@ export default async function AdminPage({
       ) : null}
 
       {selectedTab === "overview" ? (
-        <section className="mt-6 grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
-          <div className="brand-card p-4 sm:p-5">
-            <p className="brand-eyebrow">Active season</p>
-            <h2 className="mt-2 text-2xl font-bold">
-              {activeSeason?.name ?? "No active season"}
-            </h2>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <div className="brand-card-soft p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Status
-                </p>
-                <p className="mt-1 text-sm font-semibold text-white">
-                  {activeSeason?.status ?? "Not set"}
-                </p>
-              </div>
-              <div className="brand-card-soft p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Competition
-                </p>
-                <p className="mt-1 text-sm font-semibold text-white">
-                  {activeSeasonExternalConfig?.base_competition_name ??
-                    activeSeasonExternalConfig?.base_competition_code ??
-                    "Not set"}
-                </p>
-              </div>
-              <div className="brand-card-soft p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Fixture list
-                </p>
-                <p className="mt-1 text-sm font-semibold text-white">
-                  {activeSeasonExternalConfig?.fixture_import_enabled
-                    ? "Enabled"
-                    : "Off"}
-                </p>
-              </div>
-              <div className="brand-card-soft p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Result updates
-                </p>
-                <p className="mt-1 text-sm font-semibold text-white">
-                  {activeSeasonExternalConfig?.result_sync_enabled
-                    ? "Enabled"
-                    : "Off"}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="brand-card p-4 sm:p-5">
-            <p className="brand-eyebrow">Quick health</p>
-            <div className="mt-4 space-y-3">
-              {healthChecks.slice(0, 5).map((check) => (
-                <div
-                  key={check.label}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2"
-                >
-                  <span className="text-sm text-slate-300">{check.label}</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs font-bold ${
-                      check.severity === "ok"
-                        ? "bg-emerald-400/10 text-emerald-300"
-                        : check.severity === "warning"
-                          ? "bg-amber-300/10 text-amber-300"
-                          : "bg-red-400/10 text-red-300"
-                    }`}
-                  >
-                    {check.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
+        <PlatformAdminOverview
+          view="overview"
+          counts={platformOverviewCounts}
+          leagues={platformLeagueOverview}
+          seasons={platformSeasonOverview}
+          archiveSeasonAction={archiveSeason}
+        />
       ) : null}
 
-      {selectedTab === "season" ? (
+      {selectedTab === "leagues" ? (
+        <PlatformAdminOverview
+          view="leagues"
+          counts={platformOverviewCounts}
+          leagues={platformLeagueOverview}
+          seasons={platformSeasonOverview}
+          archiveSeasonAction={archiveSeason}
+        />
+      ) : null}
+
+      {selectedTab === "seasons" ? (
         <>
-          <AdminSeasonControlsCard
-            seasons={seasonList}
-            createSeasonAction={createSeason}
-            rolloverSeasonAction={rolloverActiveSeason}
-            activateSeasonAction={activateSeason}
+          <AdminScopeSelector
+            tab="seasons"
+            leagues={platformLeagueRows}
+            selectedLeagueId={selectedLeague?.id ?? null}
+            selectedLeagueName={selectedLeague?.name ?? null}
+            activeSeasonName={activeSeason?.name ?? null}
+            allowAll
+          />
+          <PlatformAdminOverview
+            view="seasons"
+            counts={platformOverviewCounts}
+            leagues={platformLeagueOverview}
+            seasons={visiblePlatformSeasons}
             archiveSeasonAction={archiveSeason}
-            restoreSeasonAction={restoreSeasonToDraft}
-            updateArchiveVisibilityAction={updateSeasonArchiveVisibility}
-            deleteSeasonAction={deleteSeason}
-            activeGameweekCount={gameweekList.length}
+            archiveReturnTo="season"
           />
 
-          <AdminSeasonSettingsCard
-            activeSeason={
-              (activeSeason as AdminSeasonSettingsSeason | null) ?? null
-            }
-            competitionOptions={seasonSettingsCompetitionOptions}
-            action={updateActiveSeasonProviderSettings}
-          />
+          {selectedLeague ? (
+            <>
+              <AdminSeasonControlsCard
+                leagueId={selectedLeague.id}
+                seasons={seasonList}
+                createSeasonAction={createSeason}
+                rolloverSeasonAction={rolloverActiveSeason}
+                activateSeasonAction={activateSeason}
+                archiveSeasonAction={archiveSeason}
+                restoreSeasonAction={restoreSeasonToDraft}
+                updateArchiveVisibilityAction={updateSeasonArchiveVisibility}
+                deleteSeasonAction={deleteSeason}
+                activeGameweekCount={gameweekList.length}
+              />
+
+              <AdminSeasonSettingsCard
+                activeSeason={
+                  (activeSeason as AdminSeasonSettingsSeason | null) ?? null
+                }
+                competitionOptions={seasonSettingsCompetitionOptions}
+                action={updateActiveSeasonProviderSettings}
+              />
+            </>
+          ) : (
+            <p className="brand-alert-warning mt-6">
+              Select a specific league to create, activate, roll over, or
+              configure its seasons. The table above remains global.
+            </p>
+          )}
         </>
       ) : null}
 
-      {selectedTab === "gameweeks" ? (
+      {selectedTab === "maintenance" ? (
+        <AdminScopeSelector
+          tab="maintenance"
+          leagues={platformLeagueRows}
+          selectedLeagueId={selectedLeague?.id ?? null}
+          selectedLeagueName={selectedLeague?.name ?? null}
+          activeSeasonName={activeSeason?.name ?? null}
+          allowAll
+        />
+      ) : null}
+
+      {selectedTab === "maintenance" && selectedLeague ? (
         <section className="brand-card mt-6 p-4 sm:p-5">
+          <div className="brand-section-header">
+            <p className="brand-eyebrow">Selected season operations</p>
+            <h2 className="text-2xl font-black tracking-tight">
+              Fixtures, gameweeks, and results
+            </h2>
+            <p className="brand-subtitle">
+              League: {selectedLeague.name} · Active season:{" "}
+              {activeSeason?.name ?? "This league is between seasons"}
+            </p>
+          </div>
           <AdminSeasonSetupCard
             activeSeasonId={activeSeason?.id ?? null}
             activeSeasonName={activeSeason?.name ?? null}
@@ -966,7 +1322,7 @@ export default async function AdminPage({
           <GameweekSelector
             gameweeks={gameweekList}
             selectedGameweekId={selectedGameweek?.id ?? null}
-            basePath="/admin?tab=gameweeks"
+            basePath={`/admin?tab=maintenance&league=${selectedLeague.id}`}
           />
           </div>
 
@@ -1077,8 +1433,84 @@ export default async function AdminPage({
         <section className="brand-card mt-6 p-4 sm:p-5">
           <h2 className="text-xl font-semibold">Users</h2>
           <p className="mt-2 text-sm text-slate-400">
-            Review account requests and manage display names and roles for league
-            members.
+            Review platform account requests and manage global app roles. League
+            membership roles are managed separately.
+          </p>
+
+          <form
+            action="/admin"
+            method="get"
+            className="brand-card-soft mt-5 grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_180px_180px_220px_auto] xl:items-end"
+          >
+            <input type="hidden" name="tab" value="users" />
+            <label className="text-sm font-semibold text-slate-300">
+              Search name or email
+              <input
+                type="search"
+                name="user_search"
+                defaultValue={params.user_search ?? ""}
+                placeholder="Start typing a name or email"
+                className="brand-input mt-1"
+              />
+            </label>
+            <label className="text-sm font-semibold text-slate-300">
+              Status
+              <select
+                name="user_status"
+                defaultValue={userStatus}
+                className="brand-input mt-1"
+              >
+                <option value="all">All statuses</option>
+                <option value="pending">Pending</option>
+                <option value="approved">Approved</option>
+                <option value="disabled">Disabled</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-300">
+              Platform role
+              <select
+                name="user_role"
+                defaultValue={userRole}
+                className="brand-input mt-1"
+              >
+                <option value="all">All roles</option>
+                <option value="admin">Platform admins</option>
+                <option value="player">Normal users</option>
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-300">
+              League membership
+              <select
+                name="user_league"
+                defaultValue={userLeagueId}
+                className="brand-input mt-1"
+              >
+                <option value="all">All leagues</option>
+                {platformLeagueRows.map((league) => (
+                  <option key={league.id} value={league.id}>
+                    {league.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex gap-2 md:col-span-2 xl:col-span-1">
+              <button type="submit" className="brand-button-primary flex-1">
+                Filter users
+              </button>
+              <Link
+                href="/admin?tab=users"
+                className="brand-button-secondary"
+              >
+                Clear
+              </Link>
+            </div>
+          </form>
+
+          <p className="mt-3 text-sm text-slate-400">
+            Showing {filteredUserList.length} of {userList.length} platform
+            accounts. League filtering checks active league memberships; it
+            does not change global approval scope.
           </p>
 
           {adminUsersError ? (
@@ -1090,6 +1522,14 @@ export default async function AdminPage({
           {!adminUsersError && userList.length === 0 ? (
             <p className="brand-card-soft mt-4 p-4 text-sm text-slate-400">
               No users found.
+            </p>
+          ) : null}
+
+          {!adminUsersError &&
+          userList.length > 0 &&
+          filteredUserList.length === 0 ? (
+            <p className="brand-card-soft mt-4 p-4 text-sm text-slate-400">
+              No users match these filters.
             </p>
           ) : null}
 
@@ -1199,6 +1639,7 @@ export default async function AdminPage({
 
       {selectedTab === "maintenance" ? (
         <AdminMaintenanceCards
+          selectedLeagueName={selectedLeague?.name ?? null}
           activeSeasonId={activeSeason?.id ?? null}
           activeSeasonName={activeSeason?.name ?? null}
           activeSeasonBaseCompetitionCode={

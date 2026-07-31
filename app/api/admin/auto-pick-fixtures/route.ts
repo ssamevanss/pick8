@@ -55,20 +55,24 @@ async function handleAutoPick(request: Request) {
     );
   }
 
-  const { season } = await getEligibleActiveAutoPickSeason({ supabase });
-  const dryRun = new URL(request.url).searchParams.get("dry_run") !== "0";
+  const searchParams = new URL(request.url).searchParams;
+  const seasonId = searchParams.get("season_id");
+  const dryRun = searchParams.get("dry_run") !== "0";
+
+  if (!seasonId) {
+    return Response.json({ error: "season_id is required" }, { status: 400 });
+  }
+
+  const { season, error: seasonError } = await getEligibleActiveAutoPickSeason({
+    supabase,
+    seasonId,
+  });
 
   if (!season) {
     return Response.json({
-      ok: true,
-      skipped_run: true,
-      reason: "no eligible active football-data season",
-      dry_run: dryRun,
-      candidate_gameweeks: [],
-      created_count: 0,
-      updated_gameweeks: 0,
-      skipped: [],
-    });
+      ok: false,
+      error: seasonError?.message ?? "Selected season is not an eligible active season",
+    }, { status: seasonError ? 500 : 400 });
   }
 
   try {

@@ -20,8 +20,10 @@ type StandingsRefreshResult = {
 };
 
 export default function StandingsRefreshCard({
+  activeSeasonId,
   baseCompetitionCode,
 }: {
+  activeSeasonId: string | null;
   baseCompetitionCode?: string | null;
 }) {
   const [competitionCode, setCompetitionCode] = useState(
@@ -51,6 +53,7 @@ export default function StandingsRefreshCard({
 
     try {
       const params = new URLSearchParams({
+        season_id: activeSeasonId ?? "",
         competition_code: competitionCode,
         dry_run: action === "dry-run" ? "1" : "0",
       });
@@ -110,7 +113,7 @@ export default function StandingsRefreshCard({
         <button
           type="button"
           onClick={() => runRefresh("dry-run")}
-          disabled={isLoading}
+          disabled={isLoading || !activeSeasonId}
           className="rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-semibold text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isLoading && activeAction === "dry-run"
@@ -120,7 +123,7 @@ export default function StandingsRefreshCard({
         <button
           type="button"
           onClick={() => runRefresh("run")}
-          disabled={isLoading}
+          disabled={isLoading || !activeSeasonId}
           className="rounded-lg bg-amber-400 px-3 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isLoading && activeAction === "run" ? "Refreshing..." : "Refresh standings"}

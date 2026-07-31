@@ -17,6 +17,7 @@ export type GameweekPickerAssignmentRow = {
     | {
         id: string;
         status?: string;
+        kickoff_at?: string | null;
         predictions?: { id: string }[] | null;
       }[]
     | null;
@@ -33,6 +34,19 @@ type AdminGameweekPickerAssignmentsCardProps = {
 
 function formatGameweekName(gameweek: GameweekPickerAssignmentRow) {
   return gameweek.name || `Gameweek ${gameweek.gameweek_number}`;
+}
+
+function hasGameweekStarted(gameweek: GameweekPickerAssignmentRow) {
+  const now = Date.now();
+
+  return Boolean(
+    gameweek.fixtures?.some((fixture) => {
+      const kickoff = fixture.kickoff_at
+        ? Date.parse(fixture.kickoff_at)
+        : Number.NaN;
+      return Number.isFinite(kickoff) && kickoff <= now;
+    }),
+  );
 }
 
 export default function AdminGameweekPickerAssignmentsCard({
@@ -102,8 +116,18 @@ export default function AdminGameweekPickerAssignmentsCard({
                 ),
               );
               const hasCompletedFixtures = Boolean(
-                gameweek.fixtures?.some((fixture) => fixture.status === "completed"),
+                gameweek.fixtures?.some((fixture) =>
+                  ["completed", "void"].includes(fixture.status ?? ""),
+                ),
               );
+              const hasLockedFixtures = Boolean(
+                gameweek.fixtures?.some((fixture) => fixture.status === "locked"),
+              );
+              const canToggleDoubleGameweek =
+                !hasPredictions &&
+                !hasCompletedFixtures &&
+                !hasLockedFixtures &&
+                !hasGameweekStarted(gameweek);
 
               return (
                 <div
@@ -145,6 +169,7 @@ export default function AdminGameweekPickerAssignmentsCard({
                     <ConfirmCheckbox
                       name={`is_double_gameweek_${gameweek.id}`}
                       defaultChecked={gameweek.is_double_gameweek}
+                      disabled={!canToggleDoubleGameweek}
                       ariaLabel={`Mark ${formatGameweekName(
                         gameweek,
                       )} as a Double Gameweek`}
@@ -160,6 +185,13 @@ export default function AdminGameweekPickerAssignmentsCard({
                       }
                       className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-300"
                     />
+                    {!canToggleDoubleGameweek ? (
+                      <input
+                        type="hidden"
+                        name={`preserve_double_gameweek_${gameweek.id}`}
+                        value="true"
+                      />
+                    ) : null}
                     <span>
                       <span className="block font-semibold text-white">
                         Double Gameweek

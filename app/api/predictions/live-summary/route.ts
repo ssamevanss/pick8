@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { createClient } from "@/utils/supabase/server";
 import { getActiveSeason } from "@/utils/seasons";
+import { getSelectedLeagueForUser } from "@/utils/leagues";
 import {
   calculateProvisionalPredictionScore,
   isLiveExternalStatus,
@@ -123,11 +124,18 @@ export async function GET(request: Request) {
   if (profile?.status !== "approved") {
     return Response.json({ error: "Forbidden" }, { status: 403 });
   }
-
-  const { data: activeSeason } = await getActiveSeason(
+  const { selectedLeague } = await getSelectedLeagueForUser(
     supabase,
-    "id, provider_season",
+    user.id,
   );
+
+  const { data: activeSeason } = selectedLeague
+    ? await getActiveSeason(
+        supabase,
+        "id, provider_season",
+        selectedLeague.id,
+      )
+    : { data: null };
 
   if (!activeSeason) {
     return Response.json({ error: "No active season" }, { status: 404 });

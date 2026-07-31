@@ -18,6 +18,15 @@ export type ExternalFixtureRefreshSeason = {
   fixture_import_enabled: boolean | null;
 };
 
+export type ExternalFixtureRefreshProviderSnapshot = {
+  dateFrom: string;
+  dateTo: string;
+  byRequestKey: Map<
+    string,
+    { fixtures: NormalizedFootballDataFixture[]; request: unknown }
+  >;
+};
+
 type ExistingExternalFixtureRow = {
   external_fixture_id: string;
   external_competition_id: string | null;
@@ -94,6 +103,101 @@ function addDays(date: Date, days: number) {
   const next = new Date(date);
   next.setUTCDate(next.getUTCDate() + days);
   return next;
+}
+
+function getProviderRequestKey(
+  competitionCode: string,
+  providerSeason?: string | null,
+) {
+  return `${competitionCode}:${providerSeason ?? ""}`;
+}
+
+async function getSeasonCompetitionCodes({
+  supabase,
+  season,
+}: {
+  supabase: AdminSupabaseClient;
+  season: ExternalFixtureRefreshSeason;
+}) {
+  const { data, error } = await supabase
+    .from("fixtures")
+    .select(
+      `
+        external_competition_code,
+        gameweeks!inner (
+          season_id
+        )
+      `,
+    )
+    .eq("gameweeks.season_id", season.id)
+    .eq("external_provider", "football_data")
+    .not("external_fixture_id", "is", null)
+    .not("external_competition_code", "is", null);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return [
+    ...new Set([
+      season.base_competition_code,
+      ...(((data as { external_competition_code: string | null }[] | null) ?? [])
+        .map((row) => row.external_competition_code)
+        .filter((code): code is string => Boolean(code))),
+    ]),
+  ].filter((code): code is string => Boolean(code));
+}
+
+export async function fetchExternalFixtureRefreshProviderSnapshot({
+  supabase,
+  seasons,
+  now = new Date(),
+}: {
+  supabase: AdminSupabaseClient;
+  seasons: ExternalFixtureRefreshSeason[];
+  now?: Date;
+}): Promise<ExternalFixtureRefreshProviderSnapshot> {
+  const dateFrom = formatDateOnly(addDays(now, -2));
+  const dateTo = formatDateOnly(addDays(now, 60));
+  const requests = new Map<
+    string,
+    { competitionCode: string; providerSeason?: string }
+  >();
+
+  for (const season of seasons) {
+    const competitionCodes = await getSeasonCompetitionCodes({ supabase, season });
+
+    for (const competitionCode of competitionCodes) {
+      const providerSeason =
+        competitionCode === season.base_competition_code
+          ? season.provider_season ?? undefined
+          : undefined;
+      requests.set(getProviderRequestKey(competitionCode, providerSeason), {
+        competitionCode,
+        providerSeason,
+      });
+    }
+  }
+
+  const byRequestKey: ExternalFixtureRefreshProviderSnapshot["byRequestKey"] =
+    new Map();
+
+  for (const [requestKey, providerRequest] of requests) {
+    const { matches, request } = await fetchCompetitionMatches({
+      competitionCode: providerRequest.competitionCode,
+      dateFrom,
+      dateTo,
+      season: providerRequest.providerSeason,
+    });
+    byRequestKey.set(requestKey, {
+      request,
+      fixtures: matches.map((match) =>
+        normalizeFootballDataMatch(match, providerRequest.competitionCode),
+      ),
+    });
+  }
+
+  return { dateFrom, dateTo, byRequestKey };
 }
 
 function isUsefulText(value: string | null | undefined) {
@@ -213,22 +317,49 @@ function shouldUpdateTeamName({
 
 export async function getEligibleActiveRefreshSeason({
   supabase,
+  seasonId,
+}: {
+  supabase: AdminSupabaseClient;
+  seasonId: string;
+}) {
+  const { data, error } = await supabase
+    .from("seasons")
+    .select(
+      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
+    )
+    .eq("id", seasonId)
+    .eq("status", "active")
+    .eq("base_provider", "football_data")
+    .eq("fixture_import_enabled", true)
+    .eq("leagues.status", "active")
+    .maybeSingle();
+
+  return {
+    season: (data as ExternalFixtureRefreshSeason | null) ?? null,
+    error,
+  };
+}
+
+export async function getEligibleActiveRefreshSeasons({
+  supabase,
 }: {
   supabase: AdminSupabaseClient;
 }) {
   const { data, error } = await supabase
     .from("seasons")
     .select(
-      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled",
+      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
     )
     .eq("status", "active")
     .eq("base_provider", "football_data")
     .eq("fixture_import_enabled", true)
-    .limit(1)
-    .maybeSingle();
+    .eq("leagues.status", "active")
+    .order("created_at", { ascending: true });
 
   return {
-    season: (data as ExternalFixtureRefreshSeason | null) ?? null,
+    seasons: ((data as ExternalFixtureRefreshSeason[] | null) ?? []).filter(
+      (season) => Boolean(season.base_competition_code),
+    ),
     error,
   };
 }
@@ -238,11 +369,13 @@ export async function refreshExternalFixtures({
   season,
   dryRun,
   now = new Date(),
+  providerSnapshot,
 }: {
   supabase: AdminSupabaseClient;
   season: ExternalFixtureRefreshSeason;
   dryRun: boolean;
   now?: Date;
+  providerSnapshot?: ExternalFixtureRefreshProviderSnapshot;
 }) {
   if (season.base_provider !== "football_data" || !season.base_competition_code) {
     return {
@@ -263,59 +396,43 @@ export async function refreshExternalFixtures({
   }
 
   const syncedAt = now.toISOString();
-  const dateFrom = formatDateOnly(addDays(now, -2));
-  const dateTo = formatDateOnly(addDays(now, 60));
-  const { data: selectedCompetitionRows, error: selectedCompetitionError } =
-    await supabase
-      .from("fixtures")
-      .select(
-        `
-        external_competition_code,
-        gameweeks!inner (
-          season_id
-        )
-      `,
-      )
-      .eq("gameweeks.season_id", season.id)
-      .eq("external_provider", "football_data")
-      .not("external_fixture_id", "is", null)
-      .not("external_competition_code", "is", null);
-
-  if (selectedCompetitionError) {
-    throw new Error(selectedCompetitionError.message);
-  }
-
-  const competitionCodes = [
-    ...new Set([
-      season.base_competition_code,
-      ...(((selectedCompetitionRows as
-        | { external_competition_code: string | null }[]
-        | null) ?? [])
-        .map((row) => row.external_competition_code)
-        .filter((code): code is string => Boolean(code))),
-    ]),
-  ].filter((code): code is string => Boolean(code));
+  const dateFrom = providerSnapshot?.dateFrom ?? formatDateOnly(addDays(now, -2));
+  const dateTo = providerSnapshot?.dateTo ?? formatDateOnly(addDays(now, 60));
+  const competitionCodes = await getSeasonCompetitionCodes({ supabase, season });
 
   const providerRequests: unknown[] = [];
   const fixtures: NormalizedFootballDataFixture[] = [];
 
   for (const competitionCode of competitionCodes) {
-    const { matches, request } = await fetchCompetitionMatches({
-      competitionCode,
-      dateFrom,
-      dateTo,
-      season:
-        competitionCode === season.base_competition_code
-          ? season.provider_season ?? undefined
-          : undefined,
-    });
+    const providerSeason =
+      competitionCode === season.base_competition_code
+        ? season.provider_season ?? undefined
+        : undefined;
+    const snapshotResult = providerSnapshot?.byRequestKey.get(
+      getProviderRequestKey(competitionCode, providerSeason),
+    );
+    const fetched = snapshotResult
+      ? null
+      : await fetchCompetitionMatches({
+          competitionCode,
+          dateFrom,
+          dateTo,
+          season: providerSeason,
+        });
+    const request = snapshotResult?.request ?? fetched!.request;
+    const normalizedFixtures =
+      snapshotResult?.fixtures ??
+      fetched!.matches.map((match) =>
+        normalizeFootballDataMatch(match, competitionCode),
+      );
 
     providerRequests.push(request);
-    fixtures.push(
-      ...matches.map((match) => normalizeFootballDataMatch(match, competitionCode)),
-    );
+    fixtures.push(...normalizedFixtures);
   }
-  const externalFixtureIds = fixtures
+  const uniqueFixtures = [...new Map(
+    fixtures.map((fixture) => [fixture.external_fixture_id, fixture]),
+  ).values()];
+  const externalFixtureIds = uniqueFixtures
     .map((fixture) => fixture.external_fixture_id)
     .filter(Boolean);
   const { data: existingExternalFixtures, error: existingExternalError } =
@@ -339,11 +456,11 @@ export async function refreshExternalFixtures({
     ),
   );
   const providerById = new Map(
-    fixtures.map((fixture) => [fixture.external_fixture_id, fixture]),
+    uniqueFixtures.map((fixture) => [fixture.external_fixture_id, fixture]),
   );
   const plannedUpdates: FixtureRefreshPlannedUpdate[] = [];
   const skipped: FixtureRefreshSkipped[] = [];
-  const externalRows = fixtures.map((fixture) => {
+  const externalRows = uniqueFixtures.map((fixture) => {
     const existing = existingExternalById.get(fixture.external_fixture_id);
     const changes = getExternalChanges({ fixture, existing });
 
@@ -580,8 +697,9 @@ export async function refreshExternalFixtures({
     window: { date_from: dateFrom, date_to: dateTo },
     provider_request: providerRequests[0] ?? null,
     provider_requests: providerRequests,
-    provider_calls_made: providerRequests.length,
-    external_fixtures_checked: fixtures.length,
+    provider_calls_made: providerSnapshot ? 0 : providerRequests.length,
+    provider_requests_reused: providerSnapshot ? providerRequests.length : 0,
+    external_fixtures_checked: uniqueFixtures.length,
     external_fixtures_updated: plannedUpdates.filter(
       (update) => update.scope === "external_cache",
     ).length,

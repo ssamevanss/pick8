@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@/utils/supabase/server";
-import { getActiveSeason } from "@/utils/seasons";
 
 type GameweekRow = {
   id: string;
@@ -83,18 +82,13 @@ export async function GET(request: NextRequest) {
   }
 
   const requestedSeasonId = request.nextUrl.searchParams.get("season_id");
-  const { data: activeSeason } = requestedSeasonId
-    ? { data: null }
-    : await getActiveSeason(supabase, "id");
-
-  const seasonId = requestedSeasonId || activeSeason?.id;
-
-  if (!seasonId) {
+  if (!requestedSeasonId) {
     return Response.json(
-      { error: "No season selected and no active season found" },
+      { error: "season_id is required" },
       { status: 400 },
     );
   }
+  const seasonId = requestedSeasonId;
 
   const { data: season, error: seasonError } = await supabase
     .from("seasons")

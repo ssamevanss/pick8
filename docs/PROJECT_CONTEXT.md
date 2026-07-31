@@ -1,5 +1,80 @@
 # Football Predictor App - Project Context
 
+## Multi-League Foundation (2026-07-31)
+
+Player requests now resolve through an approved user, active league membership,
+selected league, and that league's active season. In-app selection uses a
+validated route request when supplied, then an HTTP-only remembered league
+cookie, then the user's first active membership. App launch is deliberate:
+`profiles.default_league_id` opens Dashboard only after membership and active
+season validation; without a valid default, launch opens `/leagues`.
+`/leagues/launch` is an uncached redirect-only route, never an AppShell page.
+Password login resolves the same launch decision before returning its final
+Dashboard or League Hub redirect, while callback/root requests may pass through
+the redirect-only route. A successful launch must never leave
+`/leagues/launch` as the visible URL.
+
+`profiles.role = admin` remains platform administration.
+`league_memberships.role = league_admin` grants administration only inside that
+league and does not grant provider, result, score, rollover, or global-user
+controls.
+
+The main player reads and prediction/fixture writes are league scoped. The
+create form names the long-running league separately from its first/current
+season. Creation atomically creates the league-admin membership, invite, named
+active season, and 38 gameweeks assigned to the creator. The selected Premier
+League, La Liga, Serie A, Bundesliga, or Ligue 1 base competition configures
+that initial season's gameweek and fixture-provider setup. External fixture
+cache tables remain global and shared.
+
+`/leagues` is the League Home for approved users. `Your leagues` lists only
+memberships whose league has an active season. Leagues between seasons move to
+a collapsed `Past seasons` section, where a visible archived season links to
+its read-only final leaderboard. Cards without public archive history say the
+league is between seasons and do not offer `Open league`. `/leagues/create` supports PL,
+PD, SA, BL1, and FL1; `/leagues/join` accepts or prefills an invite code;
+`/league/settings` exposes member names, emails, and roles to active members.
+League admins and platform admins can share an active invite or create a new
+code when a league has none; players see the same league/member summary without
+invite controls. Platform admins may inspect League Settings without joining
+the league, but `league_admin` never grants access to `/admin`.
+League Settings exposes invites, members, the picker schedule, and safe future
+Double Gameweek toggles. Season creation, activation, archive, rollover,
+provider configuration, fixture import, result sync, and platform maintenance
+remain exclusively in Platform Admin. Between seasons, League Settings tells
+league owners that a platform admin must create the next season.
+Selection is persisted in the HTTP-only `selected_league_id` cookie. Missing
+memberships and stale selection cookies return users to League Home. A selected
+league without an active season renders friendly between-season states on
+Dashboard, Predictions, Pick Fixtures, and Leaderboard instead of crashing.
+League Hub now carries the main `Who You Got?` hero and default-launch controls;
+the selected-league Dashboard uses compact league/season context. AppShell uses
+simple app branding plus the Leagues navigation entry rather than a league
+dropdown or repeated selected-league label. Unauthenticated protected routes
+preserve their full relative path and query in `next`, including invite codes,
+and login resolves the default-league launch decision when no user-facing return
+path was supplied. `/leagues/launch` in `next` is treated as that internal
+decision rather than as a destination page.
+League Hub itself depends only on an authenticated approved profile. It does
+not resolve a selected league, require an active season, or require any league
+membership. Optional default-launch lookup failures degrade to no default
+rather than being mistaken for a failed login.
+
+The final boundary hardening is in
+`docs/2026-08-01-multi-league-hardening.sql`. League membership and league-admin
+authority require an active membership row, an approved profile, and an active
+league. `seasons.league_id` is mandatory; picker assignments and Joker
+season/fixture relationships are database-validated; social reads are limited
+to members of the row's season league. Disabled users may retain membership
+history, but that history grants no current access or notification eligibility.
+
+All scheduled provider/reminder jobs enumerate active seasons in active
+leagues. Shared external caches remain global, provider requests are reused
+across identical league configurations, and local fixture/result/scoring work
+is applied per season. Platform Admin manual maintenance never selects a
+global "latest active season": season-specific endpoints require the explicit
+season selected in the Admin scope UI.
+
 ## Purpose
 
 The Football Predictor App is a private, invite-only web app for a group of friends to predict football scores across a season. It replaces a manual football prediction game with a mobile-friendly app that handles fixture selection, prediction entry, joker chips, result entry, scoring, leaderboard updates, and league activity updates.
@@ -187,34 +262,72 @@ Current behaviour:
 
 ### `/admin`
 
-Admin hub.
+Platform Admin control room. Access requires an approved profile with
+`profiles.role = admin`; a per-league `league_admin` membership never grants
+access. The normal navigation no longer promotes this route. Approved platform
+admins reach it from the utility card in `/settings`.
 
 Current tabs include:
 
 - Overview
 - Users
-- Season
-- Gameweeks
+- Leagues
+- Seasons
 - Maintenance
 
 Overview includes:
 
-- Active season summary
-- Provider/competition status
-- Import/result-update status
-- Quick health checks
+- global approved/pending/disabled user counts
+- active league/season and missing-active-season counts
+- active-season gameweeks with no fixtures selected
+- open bug report count when the table is available
+- a clear ownership model: leagues are long-running groups; seasons are
+  competition periods inside one league
 
-Season includes:
+Leagues includes every league, its members, league admins, status, active
+season, and historical season counts. League Settings remains the place for
+that league's invites and membership administration.
+
+Seasons includes every season globally, with league, competition, status,
+member count, latest completed gameweek, sync flags, and the
+confirmation-protected `Archive season` action. Selecting one league exposes:
 
 - Season lifecycle controls
 - Active season provider/competition/result-sync settings
 
-Gameweeks includes:
+Maintenance has an explicit league context. Selecting a league clearly names
+its active season, or says `This league is between seasons`, before exposing:
 
 - Gameweek generation
 - Gameweek picker assignments
 - Fixture management
 - Cached external fixture picker
+- Result entry and scoring correction
+- Provider import/result sync tools
+- Global cache, cron/reminder, health, export, and diagnostic tools
+
+The Users, Leagues, Seasons, and Maintenance controls remain platform
+tools. Provider imports/cache, result sync and overrides, global user state,
+season lifecycle, and emergency maintenance were not moved to League Settings.
+The maintenance notification action remains as an explicit delivery diagnostic,
+and manual gameweek creation remains under Advanced. A bug-report review queue
+and persisted last/next cron run history are deferred because the current schema
+only provides report rows and does not track cron runs.
+
+### `/league/settings?league=<id>`
+
+League Settings is the league-scoped administration area. Active members can
+read league details and the active member list. An active `league_admin` for
+that league, or a platform admin, can also manage the invite, see the active
+season's gameweek picker schedule, and toggle Double Gameweek for editable
+gameweeks. Picker reassignment is view-only here and remains deferred.
+
+The Double Gameweek action derives the league from the submitted gameweek on
+the server and then authorizes that actual league. It rejects changes when the
+season is not active, any fixture is locked/final, kickoff has passed, or any
+prediction exists. Enabling it removes any existing Joker rows for the
+gameweek. League admins never receive provider, result, season-lifecycle,
+platform-user, or maintenance controls.
 - Manual fixture fallback
 - Result entry
 
@@ -298,17 +411,21 @@ password recovery.
 - `rejected`
 - `disabled`
 
-Only approved users can access the app. Admins can approve/reject/disable/re-enable users.
+Only approved users can access the app. Platform admins can
+approve/reject/disable/re-enable users. Re-enable is an explicit
+`disabled` → `approved` transition; it does not reuse pending approval or alter
+league memberships. Approve and reject are restricted to pending profiles, and
+disable is restricted to approved profiles.
 
 ## Season lifecycle
 
 Seasons have a status:
 
 - `draft`: admin setup/testing, hidden from normal users
-- `active`: the one live season normal users see/use
+- `active`: the live season normal users see/use within a league
 - `archived`: finished/read-only season
 
-There should only be one active season at a time.
+There should only be one active season per league at a time.
 
 Expected flow:
 
@@ -319,6 +436,22 @@ Expected flow:
 5. Archive it at the end of the year.
 6. Optionally expose its final leaderboard if `show_in_archive = true`.
 7. Create the next real season.
+
+The platform archive action is non-destructive. It sets `status = archived`,
+`is_active = false`, `show_in_archive = true`, records the archiving admin/time,
+and turns off fixture import and result sync. It does not change fixtures,
+predictions, leaderboard rows, Joker usage, memberships, notifications,
+activity, comments, reactions, or the global external fixture cache. An already
+archived season is rejected.
+
+Archived seasons are excluded from gameplay writes and all active-season cron
+targets. The public archive currently exposes final leaderboard table/chart
+history only. Preserved activity/comments/reactions are not surfaced as mutable
+archive UI in this pass.
+
+The existing rollover is league-scoped: the next season receives the same
+`league_id`, only that league's active season is archived, gameweeks start
+clean, and picker rotation uses active approved members of that league.
 
 Important columns:
 
@@ -337,7 +470,7 @@ Important columns:
 - `seasons.archived_by`
 
 Admins can edit the provider/competition and import/result-sync toggles from
-Admin -> Season -> Season settings. Normal users cannot access these controls,
+Platform Admin -> Seasons after selecting a league. Normal users cannot access these controls,
 and API keys remain server-side only.
 
 ## Fixture picker assignment
@@ -378,7 +511,8 @@ Prediction scoring:
   - correct result = 6
   - incorrect = 0
 
-Scores are calculated when Admin saves results through Admin -> Gameweeks.
+Scores are calculated when Platform Admin saves results through Maintenance for
+the selected league's active season.
 
 Expected flow:
 
@@ -661,9 +795,11 @@ Reminder completeness is based on the selected/actionable fixtures in that
 gameweek, so cup/test gameweeks with one or two fixtures do not require four
 predictions.
 
-Double Gameweeks are managed in Admin -> Gameweeks. Enabling one removes
-Joker usage for that gameweek and completed fixtures should be rescored so the
-leaderboard reflects the 2x gameweek multiplier.
+Platform admins can manage Double Gameweeks in Platform Admin -> Maintenance.
+League admins can toggle only their own league's future/unlocked gameweeks from
+League Settings. Both paths refuse inactive-season, started, locked, predicted,
+or completed gameweeks. Enabling one removes Joker usage for that gameweek, and
+neither path rescores historical results.
 
 ## Development commands
 

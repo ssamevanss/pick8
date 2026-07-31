@@ -7,11 +7,17 @@ import SubmitButton from "@/components/forms/SubmitButton";
 type LoginFormProps = {
   action: (formData: FormData) => void | Promise<void>;
   defaultEmail?: string;
+  next?: string;
 };
 
-export default function LoginForm({ action, defaultEmail = "" }: LoginFormProps) {
+export default function LoginForm({
+  action,
+  defaultEmail = "",
+  next = "",
+}: LoginFormProps) {
   return (
     <form action={action} className="mt-6 space-y-4">
+      <input type="hidden" name="next" value={next} />
       <div>
         <label className="text-sm text-slate-300" htmlFor="email">
           Email

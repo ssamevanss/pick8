@@ -85,7 +85,9 @@ Rules:
 
 ## `seasons`
 
-Represents a football prediction season or trial competition.
+Represents one football prediction competition period inside a league. A
+season owns gameweeks, fixtures, predictions, and leaderboard rows; it does not
+own league membership or invites.
 
 Important columns:
 
@@ -110,7 +112,7 @@ Important columns:
 
 Rules:
 
-- Only one season should be active at a time.
+- Only one season per league should be active at a time.
 - `is_active` currently mirrors `status = 'active'` for backwards compatibility.
 - Normal player-facing pages should use the active season only.
 - Archived seasons are read-only.
@@ -119,7 +121,15 @@ Rules:
 - External fixture imports are disabled by default and should only run for explicitly configured seasons.
 - Result sync is triggered manually through the admin-only 2.0D endpoint until cron automation is added.
 - Provider/competition fields and import/result-sync toggles are managed from
-  Admin -> Season -> Season settings for the active season.
+  Platform Admin -> Seasons for the selected league's active season.
+- Platform archive sets `status = archived`, `is_active = false`,
+  `show_in_archive = true`, `fixture_import_enabled = false`, and
+  `result_sync_enabled = false`, with `archived_at`/`archived_by`. It does not
+  delete or mutate related gameplay, social, notification, membership, or
+  external-cache rows.
+- Active-season lookup prefers `status = active`; the legacy `is_active`
+  fallback explicitly excludes `status = archived` so a stale compatibility
+  flag cannot revive archived gameplay.
 
 Recommended SQL additions already used:
 
@@ -151,13 +161,17 @@ add column if not exists fixture_import_enabled boolean not null default false,
 add column if not exists result_sync_enabled boolean not null default false;
 ```
 
-Only one active season:
+One active season per league:
 
 ```sql
-create unique index if not exists seasons_one_active_unique
-on public.seasons ((status))
+create unique index if not exists seasons_one_active_per_league_unique
+on public.seasons (league_id)
 where status = 'active';
 ```
+
+The multi-league migration definition-checks and removes the known legacy
+global indexes `seasons_one_active_idx` and `seasons_one_active_unique`. Unknown
+or league-scoped definitions are preserved.
 
 Mirror trigger:
 
@@ -181,6 +195,79 @@ for each row
 execute function public.sync_season_is_active();
 ```
 
+## `leagues`, `league_memberships`, and `league_invites`
+
+Migrations: `docs/2026-07-31-leagues.sql` followed by
+`docs/2026-08-01-multi-league-hardening.sql`.
+
+- `leagues` is the long-running private group boundary. Its name, status,
+  members, league admins, and invites persist across seasons.
+- `league_memberships.role` is `player` or `league_admin`.
+- `profiles.role = admin` remains the platform-admin role.
+- invite rows are visible to league admins; joining occurs through an atomic
+  security-definer RPC.
+- approved existing profiles and seasons are backfilled into
+  `Who You Got? Default League`.
+- self-created leagues atomically receive an invite, the separately named
+  initial active season, and 38 creator-assigned gameweeks. The submitted base
+  competition configures that season's provider and fixture/gameweek setup.
+- `leagues.creation_key`, unique per creator when present, makes retried create
+  requests return the original league instead of creating duplicates.
+- `create_league_for_current_user(league_name, base_competition_code,
+  request_creation_key, initial_season_name)` trims and validates the initial
+  season name at 2–100 characters. The competition/year-generated name is kept
+  only as a fallback when the optional RPC argument is omitted. This initial
+  setup does not grant league owners later season-lifecycle permissions;
+  platform admins create or roll over future seasons for a selected league.
+- League Settings performs an explicit membership/platform-admin authorization
+  check before its server-only administrative read. League gameweek/prediction
+  state is read with the service client only after that authorization so picker
+  status and toggle eligibility cannot be undercounted by player prediction
+  RLS. Creating a replacement invite is likewise server-authorized and is shown
+  only when there is no active code.
+- authenticated table grants permit reads and RPC execution, but RLS restricts
+  league and membership rows to active members and invite rows to league admins.
+  Membership/admin helpers require all three conditions: active membership,
+  approved profile, and active league. A disabled/rejected user does not regain
+  access merely because a historical membership row remains active.
+- service-role CRUD grants support trusted cron/server operations; the migration
+  finishes with `notify pgrst, 'reload schema'`.
+- `profiles.default_league_id` is the deliberate launch preference. A trigger
+  rejects values without an active membership; launch also revalidates the
+  membership and active season before selecting it.
+
+`seasons.league_id` references `leagues.id`. Active-season uniqueness is one
+active season per league. The hardening migration also makes `league_id`
+non-null after the migration backfill:
+
+```sql
+create unique index if not exists seasons_one_active_per_league_unique
+on public.seasons (league_id)
+where status = 'active';
+```
+
+The migration verifies the known legacy index definition before removing it.
+It also adds the request-path indexes
+`gameweeks(season_id, gameweek_number)`,
+`gameweeks(season_id, fixture_picker_id, gameweek_number)`,
+`fixtures(gameweek_id)`, and `predictions(user_id, fixture_id)`. Existing
+notification and email-notification migrations already provide their
+season/time and delivery lookup indexes.
+
+The hardening migration adds `can_access_season`, scopes social comment/reaction
+reads to the season's league membership, validates that a non-null gameweek
+picker is an approved active member of that league, and rejects Joker rows whose
+`season_id` does not match the fixture's gameweek season. These are database
+integrity/security boundaries in addition to server-action validation.
+
+Additional request-path indexes are defined idempotently in
+`docs/2026-07-31-performance-indexes.sql`. They cover profile status queues,
+ordered gameweek fixtures, fixture-led prediction reads, active Joker lookups,
+season-ranked leaderboard reads, header notification ordering, and active
+provider-season cron discovery. The migration deliberately does not duplicate
+existing membership, invite, reminder, social, external-cache, standings, or
+bug-report indexes.
+
 ## `gameweeks`
 
 Represents a competition week/round.
@@ -202,6 +289,14 @@ Rules:
 - Auto-assignment rotates approved users across gameweeks.
 - `is_double_gameweek = true` doubles all prediction points in that gameweek
   and disables Joker use for that gameweek.
+- League admins may change it only through the server-authorized League Settings
+  action for their own league. The action derives `league_id` through
+  `gameweeks -> seasons`, requires the season to be active, and rejects any
+  prediction, started kickoff, or locked/completed/void fixture. Platform admins
+  may target any league but use the same safety checks from League Settings.
+- Enabling through League Settings removes Joker rows for the gameweek. Because
+  submitted predictions and started/final fixtures are rejected, this path does
+  not rescore historical results.
 
 ## `fixtures`
 

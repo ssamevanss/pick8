@@ -89,6 +89,13 @@ type SyncOptions = {
   season: SeasonRow;
   dryRun: boolean;
   fixtures: LocalExternalFixture[];
+  providerSnapshot?: ExternalResultProviderSnapshot;
+};
+
+export type ExternalResultProviderSnapshot = {
+  matches: Map<string, Record<string, unknown>>;
+  providerStatus: number;
+  apiCallCount: number;
 };
 
 function mapProviderStatus({
@@ -156,6 +163,27 @@ function chunk<T>(items: T[], size: number) {
   return chunks;
 }
 
+export async function fetchExternalResultProviderSnapshot(
+  providerIds: string[],
+): Promise<ExternalResultProviderSnapshot> {
+  const matches = new Map<string, Record<string, unknown>>();
+  let apiCallCount = 0;
+  let providerStatus = 200;
+
+  for (const ids of chunk([...new Set(providerIds)], 20)) {
+    const result = await fetchMatchesByIds(ids);
+    apiCallCount += 1;
+    providerStatus = result.request.status;
+
+    for (const match of result.matches) {
+      const normalized = normalizeFootballDataMatch(match);
+      matches.set(normalized.external_fixture_id, match);
+    }
+  }
+
+  return { matches, providerStatus, apiCallCount };
+}
+
 export async function getSeasonById({
   supabase,
   seasonId,
@@ -165,9 +193,11 @@ export async function getSeasonById({
 }) {
   const { data, error } = await supabase
     .from("seasons")
-    .select("id, name, result_sync_enabled")
+    .select("id, name, result_sync_enabled, leagues!inner(status)")
     .eq("id", seasonId)
-    .single();
+    .eq("status", "active")
+    .eq("leagues.status", "active")
+    .maybeSingle();
 
   return { season: data as SeasonRow | null, error };
 }
@@ -177,15 +207,26 @@ export async function getEligibleActiveSyncSeason({
 }: {
   supabase: AdminSupabaseClient;
 }) {
+  const { seasons, error } = await getEligibleActiveSyncSeasons({ supabase });
+
+  return { season: seasons[0] ?? null, error };
+}
+
+export async function getEligibleActiveSyncSeasons({
+  supabase,
+}: {
+  supabase: AdminSupabaseClient;
+}) {
   const { data, error } = await supabase
     .from("seasons")
-    .select("id, name")
+    .select("id, name, result_sync_enabled, leagues!inner(status)")
     .eq("status", "active")
     .eq("base_provider", "football_data")
     .eq("result_sync_enabled", true)
-    .maybeSingle();
+    .eq("leagues.status", "active")
+    .order("created_at", { ascending: true });
 
-  return { season: data as SeasonRow | null, error };
+  return { seasons: (data as SeasonRow[] | null) ?? [], error };
 }
 
 export async function getManualSyncFixtures({
@@ -311,6 +352,7 @@ export async function syncExternalFixtureResults({
   season,
   dryRun,
   fixtures,
+  providerSnapshot,
 }: SyncOptions): Promise<ExternalResultSyncResult> {
   const providerIds = [
     ...new Set(
@@ -321,20 +363,12 @@ export async function syncExternalFixtureResults({
   ];
   const plannedUpdates: PlannedUpdate[] = [];
   const skipped: SkippedFixture[] = [];
-  const providerMatches = new Map<string, Record<string, unknown>>();
-  let apiCallCount = 0;
-  let providerStatus = 200;
-
-  for (const ids of chunk(providerIds, 20)) {
-    const result = await fetchMatchesByIds(ids);
-    apiCallCount += 1;
-    providerStatus = result.request.status;
-
-    for (const match of result.matches) {
-      const normalized = normalizeFootballDataMatch(match);
-      providerMatches.set(normalized.external_fixture_id, match);
-    }
-  }
+  const snapshot =
+    providerSnapshot ??
+    (await fetchExternalResultProviderSnapshot(providerIds));
+  const providerMatches = snapshot.matches;
+  const providerStatus = snapshot.providerStatus;
+  const apiCallCount = providerSnapshot ? 0 : snapshot.apiCallCount;
 
   for (const fixture of fixtures) {
     const externalFixtureId = fixture.external_fixture_id;

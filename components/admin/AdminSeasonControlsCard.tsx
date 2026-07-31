@@ -19,6 +19,7 @@ export type AdminSeasonRow = {
 };
 
 type AdminSeasonControlsCardProps = {
+  leagueId: string;
   seasons: AdminSeasonRow[];
   createSeasonAction: (formData: FormData) => Promise<void>;
   rolloverSeasonAction: (formData: FormData) => Promise<void>;
@@ -67,6 +68,7 @@ function getSeasonTypeLabel(value: string) {
 }
 
 export default function AdminSeasonControlsCard({
+  leagueId,
   seasons,
   createSeasonAction,
   rolloverSeasonAction,
@@ -88,8 +90,8 @@ export default function AdminSeasonControlsCard({
       <div>
         <h2 className="text-xl font-semibold">Season management</h2>
         <p className="mt-2 text-sm text-slate-400">
-          Create test seasons, activate the current competition, and archive old
-          seasons when they are finished.
+          Manage the season lifecycle for this selected league. League owners
+          cannot create, activate, archive, or roll over seasons.
         </p>
       </div>
 
@@ -108,8 +110,8 @@ export default function AdminSeasonControlsCard({
           </>
         ) : (
           <p className="mt-2 text-sm text-amber-300">
-            No active season. Players will not have a live season until one is
-            activated.
+            This league is between seasons. Create or activate its next season
+            to reopen active play.
           </p>
         )}
       </div>
@@ -118,7 +120,10 @@ export default function AdminSeasonControlsCard({
         action={createSeasonAction}
         className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-4"
       >
-        <h3 className="text-lg font-semibold">Create new season</h3>
+        <input type="hidden" name="league_id" value={leagueId} />
+        <h3 className="text-lg font-semibold">
+          Create season for this league
+        </h3>
 
         <label className="mt-4 block text-sm font-medium text-slate-300">
           Season name
@@ -191,18 +196,20 @@ export default function AdminSeasonControlsCard({
                 Auto-assign fixture pickers
                 </span>
                 <span className="mt-1 block text-slate-400">
-                Assign gameweeks in rotation from the current approved users.
+                Assign gameweeks in rotation from this league&apos;s active,
+                approved members.
                 </span>
             </span>
             </label>
 
         <p className="mt-3 text-xs text-slate-500">
           Creating a season as active will archive the current active season.
-          Draft seasons are hidden from normal users.
+          Draft seasons are hidden from normal users. Other leagues are not
+          affected.
         </p>
 
         <SubmitButton
-          idleLabel="Create season"
+          idleLabel="Create season for this league"
           pendingLabel="Creating season..."
           className="mt-4 w-full rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950"
         />
@@ -221,13 +228,15 @@ export default function AdminSeasonControlsCard({
 
           <div>
             <h3 className="text-lg font-semibold text-white">
-              Archive and start next season
+              Roll over this league
             </h3>
             <p className="mt-2 text-sm text-slate-300">
-              Platform/admin rollover only. This preserves{" "}
+              Archive current season and create next season. This platform-admin
+              action preserves{" "}
               <span className="font-semibold text-white">{activeSeason.name}</span>{" "}
               as read-only history, creates a clean active season, generates
-              gameweeks, and assigns fixture pickers.
+              gameweeks, and assigns fixture pickers. Other leagues are not
+              affected.
             </p>
           </div>
 
@@ -316,8 +325,21 @@ export default function AdminSeasonControlsCard({
             and users will see the new active season immediately.
           </p>
 
+          <label className="mt-3 flex items-start gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              name="confirm_rollover"
+              required
+              className="mt-1 accent-amber-300"
+            />
+            <span>
+              I understand the current season will be archived and the new
+              season will become active.
+            </span>
+          </label>
+
           <SubmitButton
-            idleLabel="Archive current and start next"
+            idleLabel="Archive current season and create next season"
             pendingLabel="Rolling over..."
             className="mt-4 w-full rounded-lg bg-amber-300 px-4 py-3 text-sm font-semibold text-slate-950"
           />
@@ -390,12 +412,29 @@ export default function AdminSeasonControlsCard({
                 ) : null}
 
                 {season.status !== "archived" ? (
-                  <form action={archiveSeasonAction}>
+                  <form
+                    action={archiveSeasonAction}
+                    className="rounded-lg border border-amber-300/20 bg-amber-300/5 p-3"
+                  >
                     <input type="hidden" name="season_id" value={season.id} />
+                    <input type="hidden" name="return_to" value="season" />
+                    <p className="text-xs leading-relaxed text-slate-300">
+                      This will make the season read-only and remove it from
+                      active play. Historical results remain available.
+                    </p>
+                    <label className="mt-3 flex items-start gap-2 text-xs text-slate-300">
+                      <input
+                        type="checkbox"
+                        name="confirm_archive"
+                        required
+                        className="mt-0.5 accent-amber-300"
+                      />
+                      <span>I understand and want to archive it.</span>
+                    </label>
                     <SubmitButton
-                      idleLabel="Archive"
+                      idleLabel="Archive season"
                       pendingLabel="Archiving..."
-                      className="w-full rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-300"
+                      className="mt-3 w-full rounded-lg bg-amber-300 px-3 py-2 text-sm font-semibold text-slate-950"
                     />
                   </form>
                 ) : null}

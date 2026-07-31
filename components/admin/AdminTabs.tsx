@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 
-type AdminTab = "overview" | "users" | "season" | "gameweeks" | "maintenance";
+type AdminTab = "overview" | "users" | "leagues" | "seasons" | "maintenance";
 
 type AdminTabsProps = {
   selectedTab: AdminTab;
@@ -13,17 +13,13 @@ type AdminTabsProps = {
 const tabs: { id: AdminTab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "users", label: "Users" },
-  { id: "season", label: "Season" },
-  { id: "gameweeks", label: "Gameweeks" },
+  { id: "leagues", label: "Leagues" },
+  { id: "seasons", label: "Seasons" },
   { id: "maintenance", label: "Maintenance" },
 ];
 
 function getTabHref(tab: AdminTab, selectedGameweekId: string | null) {
-  if (tab !== "gameweeks") {
-    return `/admin?tab=${tab}`;
-  }
-
-  if (selectedGameweekId) {
+  if (tab === "maintenance" && selectedGameweekId) {
     return `/admin?tab=${tab}&gameweek=${selectedGameweekId}`;
   }
 

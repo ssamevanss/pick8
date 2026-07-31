@@ -6,7 +6,7 @@ import { useToast } from "@/components/toast/ToastProvider";
 type ToastTriggerProps = {
   title: string;
   description?: string;
-  tone?: "success" | "info";
+  tone?: "success" | "info" | "error";
   triggerKey?: string;
 };
 

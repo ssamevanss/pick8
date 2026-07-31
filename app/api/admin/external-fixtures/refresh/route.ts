@@ -56,8 +56,16 @@ async function handleRefresh(request: Request) {
     );
   }
 
+  const searchParams = new URL(request.url).searchParams;
+  const seasonId = searchParams.get("season_id");
+
+  if (!seasonId) {
+    return Response.json({ error: "season_id is required" }, { status: 400 });
+  }
+
   const { season, error: seasonError } = await getEligibleActiveRefreshSeason({
     supabase: adminSupabase,
+    seasonId,
   });
 
   if (seasonError) {
@@ -65,28 +73,20 @@ async function handleRefresh(request: Request) {
   }
 
   if (!season) {
-    return Response.json({
-      ok: true,
-      skipped_run: true,
-      reason: "no eligible active season",
-      dry_run: new URL(request.url).searchParams.get("dry_run") !== "0",
-      provider_calls_made: 0,
-      external_fixtures_checked: 0,
-      external_fixtures_updated: 0,
-      selected_app_fixtures_checked: 0,
-      selected_app_fixtures_updated: 0,
-      kickoff_changes: 0,
-      team_name_changes: 0,
-      planned_updates: [],
-      skipped: [],
-    });
+    return Response.json(
+      {
+        ok: false,
+        error: "Selected season is not an eligible active season",
+      },
+      { status: 400 },
+    );
   }
 
   try {
     const result = await refreshExternalFixtures({
       supabase: adminSupabase,
       season,
-      dryRun: new URL(request.url).searchParams.get("dry_run") !== "0",
+      dryRun: searchParams.get("dry_run") !== "0",
     });
 
     return Response.json({

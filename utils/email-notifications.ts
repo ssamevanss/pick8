@@ -74,6 +74,59 @@ export type EmailDeliverySummary = {
 
 const TERMINAL_FIXTURE_STATUSES = ["completed", "postponed", "void"];
 
+async function getSeasonActiveMemberIds({
+  supabase,
+  seasonId,
+}: {
+  supabase: AdminSupabaseClient;
+  seasonId: string;
+}) {
+  const { data: season, error: seasonError } = await supabase
+    .from("seasons")
+    .select("league_id, leagues!inner(status)")
+    .eq("id", seasonId)
+    .eq("status", "active")
+    .eq("leagues.status", "active")
+    .maybeSingle();
+
+  if (seasonError || !season?.league_id) {
+    return {
+      userIds: [] as string[],
+      leagueId: null as string | null,
+      error: seasonError,
+    };
+  }
+
+  const { data: memberships, error } = await supabase
+    .from("league_memberships")
+    .select("user_id, profiles!inner(status)")
+    .eq("league_id", season.league_id)
+    .eq("status", "active")
+    .eq("profiles.status", "approved");
+
+  return {
+    userIds: ((memberships as { user_id: string }[] | null) ?? []).map(
+      (membership) => membership.user_id,
+    ),
+    leagueId: season.league_id as string,
+    error,
+  };
+}
+
+function getLeagueRouteUrl({
+  siteUrl,
+  leagueId,
+  next,
+}: {
+  siteUrl: string;
+  leagueId: string;
+  next: string;
+}) {
+  return `${siteUrl}/leagues/select?league=${encodeURIComponent(
+    leagueId,
+  )}&next=${encodeURIComponent(next)}`;
+}
+
 function escapeHtml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -467,6 +520,22 @@ export async function sendPickerUpNextEmail({
       error: gameweekError?.message ?? "No fixture picker assigned",
     };
   }
+  const { userIds: activeMemberIds, leagueId, error: membershipError } =
+    await getSeasonActiveMemberIds({
+      supabase,
+      seasonId: gameweek.season_id,
+    });
+
+  if (
+    membershipError ||
+    !leagueId ||
+    !activeMemberIds.includes(gameweek.fixture_picker_id)
+  ) {
+    return {
+      summaries: [] as EmailDeliverySummary[],
+      error: membershipError?.message ?? "Fixture picker is not an active league member",
+    };
+  }
 
   const { data: picker, error: pickerError } = await supabase
     .from("profiles")
@@ -545,7 +614,11 @@ export async function sendPickerUpNextEmail({
   });
   const selectionStatus = getFixtureSelectionStatus(fixtures);
   const gameweekName = formatGameweekName(gameweek);
-  const buttonUrl = `${siteUrl}/pick-fixtures?gameweek=${gameweek.id}`;
+  const buttonUrl = getLeagueRouteUrl({
+    siteUrl,
+    leagueId,
+    next: `/pick-fixtures?gameweek=${gameweek.id}`,
+  });
   const fixtureText = selectionStatus.isComplete
     ? `${selectionStatus.selectedCount} fixture${
         selectionStatus.selectedCount === 1 ? "" : "s"
@@ -615,9 +688,10 @@ export async function sendPredictionsOpenEmails({
     supabase,
     gameweekId,
   });
-  const { profiles, error: profileError } = await getApprovedEmailProfiles({
-    supabase,
-  });
+  const { profiles: approvedProfiles, error: profileError } =
+    await getApprovedEmailProfiles({
+      supabase,
+    });
 
   if (gameweekError || fixtureError || profileError || !gameweek) {
     return {
@@ -630,6 +704,24 @@ export async function sendPredictionsOpenEmails({
     };
   }
 
+  const { userIds: activeMemberIds, leagueId, error: membershipError } =
+    await getSeasonActiveMemberIds({
+      supabase,
+      seasonId: gameweek.season_id,
+    });
+
+  if (membershipError || !leagueId) {
+    return {
+      summaries: [] as EmailDeliverySummary[],
+      error: membershipError?.message ?? "Active league not found for season",
+    };
+  }
+
+  const activeMemberIdSet = new Set(activeMemberIds);
+  const profiles = approvedProfiles.filter((profile) =>
+    activeMemberIdSet.has(profile.id),
+  );
+
   const selectionStatus = getFixtureSelectionStatus(fixtures);
 
   if (!selectionStatus.isComplete) {
@@ -640,7 +732,11 @@ export async function sendPredictionsOpenEmails({
   }
 
   const gameweekName = formatGameweekName(gameweek);
-  const buttonUrl = `${siteUrl}/predictions?gameweek=${gameweek.id}`;
+  const buttonUrl = getLeagueRouteUrl({
+    siteUrl,
+    leagueId,
+    next: `/predictions?gameweek=${gameweek.id}`,
+  });
   const fixtureLines = getFixtureLines(fixtures);
   const subject = `Predictions are open for ${gameweekName}`;
   const intro = gameweek.is_double_gameweek
@@ -826,13 +922,30 @@ export async function sendPredictionDeadlineReminderEmails({
     candidateGameweeks.push(gameweek);
   }
 
-  const { profiles, error: profileError } = await getApprovedEmailProfiles({
-    supabase,
-  });
+  const { profiles: approvedProfiles, error: profileError } =
+    await getApprovedEmailProfiles({
+      supabase,
+    });
 
   if (profileError) {
-    return { summaries: [] as EmailDeliverySummary[], error: profileError.message };
+    return {
+      summaries: [] as EmailDeliverySummary[],
+      error: profileError.message,
+    };
   }
+  const { userIds: activeMemberIds, leagueId, error: membershipError } =
+    await getSeasonActiveMemberIds({ supabase, seasonId });
+
+  if (membershipError || !leagueId) {
+    return {
+      summaries: [] as EmailDeliverySummary[],
+      error: membershipError?.message ?? "Active league not found for season",
+    };
+  }
+  const activeMemberIdSet = new Set(activeMemberIds);
+  const profiles = approvedProfiles.filter((profile) =>
+    activeMemberIdSet.has(profile.id),
+  );
 
   const { preferences, error: preferenceError } = await getEmailPreferenceMap({
     supabase,
@@ -892,7 +1005,11 @@ export async function sendPredictionDeadlineReminderEmails({
   for (const gameweek of candidateGameweeks) {
     const actionableFixtures = actionableByGameweek.get(gameweek.id) ?? [];
     const gameweekName = formatGameweekName(gameweek);
-    const buttonUrl = `${siteUrl}/predictions?gameweek=${gameweek.id}`;
+    const buttonUrl = getLeagueRouteUrl({
+      siteUrl,
+      leagueId,
+      next: `/predictions?gameweek=${gameweek.id}`,
+    });
     const firstKickoff = actionableFixtures[0]?.kickoff_at;
     const deadlineText = firstKickoff
       ? formatTimeForEmail(firstKickoff)

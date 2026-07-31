@@ -13,8 +13,6 @@ import type {
   ReactionSummary,
   TeamFormResult,
 } from "@/components/predictions/types";
-import { createClient } from "@/utils/supabase/server";
-import { getActiveSeason } from "@/utils/seasons";
 import {
   calculateProvisionalPredictionScore,
   isLiveExternalStatus,
@@ -28,6 +26,8 @@ import {
 import { getProviderTeamIdentityFromRawPayload } from "@/utils/team-assets";
 import { getSeasonCompetitionMode } from "@/utils/football-competitions";
 import { savePredictions } from "./actions";
+import { getAppLeagueContext } from "@/utils/app-context";
+import { logServerTiming, startServerTiming } from "@/utils/server-timing";
 
 type CompletedFixtureForForm = {
   id: string;
@@ -46,6 +46,10 @@ type ExternalCompletedFixtureForForm = CompletedFixtureForForm & {
 type ActiveSeasonForPredictions = {
   id: string;
   provider_season: string | null;
+};
+
+type GameweekWithFixtures = Gameweek & {
+  fixtures: { id: string }[];
 };
 
 function getTeamFormResult({
@@ -104,49 +108,34 @@ function getRecentTeamForm({
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ saved?: string; error?: string; gameweek?: string }>;
+  searchParams?: Promise<{
+    saved?: string;
+    error?: string;
+    gameweek?: string;
+  }>;
 }) {
   const params = searchParams ? await searchParams : {};
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const { data: activeSeason } = await getActiveSeason(
-    supabase,
-    "id, provider_season",
-  );
+  const pageStartedAt = startServerTiming();
+  const { supabase, user, selectedLeague, activeSeason } =
+    await getAppLeagueContext();
   const activeSeasonConfig = activeSeason as ActiveSeasonForPredictions | null;
 
   const { data: gameweeks } = activeSeason
     ? await supabase
         .from("gameweeks")
-        .select("id, gameweek_number, name, is_double_gameweek")
+        .select(
+          "id, gameweek_number, name, is_double_gameweek, fixtures(id)",
+        )
         .eq("season_id", activeSeason.id)
         .order("gameweek_number", { ascending: true })
     : { data: null };
 
-  const gameweekList = (gameweeks as Gameweek[] | null) ?? [];
-
-  const gameweekIds = gameweekList.map((gameweek) => gameweek.id);
-
-  const { data: fixtureRows } =
-    gameweekIds.length > 0
-      ? await supabase
-          .from("fixtures")
-          .select("gameweek_id")
-          .in("gameweek_id", gameweekIds)
-      : { data: [] };
-
-  const gameweekIdsWithFixtures = new Set(
-    (fixtureRows ?? []).map((fixture) => fixture.gameweek_id),
-  );
+  const gameweekList = (gameweeks as GameweekWithFixtures[] | null) ?? [];
 
   const latestGameweekWithFixtures =
     [...gameweekList]
       .reverse()
-      .find((gameweek) => gameweekIdsWithFixtures.has(gameweek.id)) ?? null;
+      .find((gameweek) => gameweek.fixtures.length > 0) ?? null;
 
   const selectedGameweek =
     gameweekList.find((gameweek) => gameweek.id === params.gameweek) ??
@@ -173,16 +162,84 @@ export default async function DashboardPage({
     .map((fixture) => fixture.external_fixture_id)
     .filter((value): value is string => Boolean(value));
 
-  const { data: externalScoreRows } =
+  const [
+    { data: externalScoreRows },
+    { data: predictions, error: predictionsError },
+    { data: predictionReactions },
+    { data: jokerUsage, error: jokerUsageError },
+    { data: seasonJokerUsage },
+    { data: leaderboardEntry },
+  ] = await Promise.all([
     externalFixtureIds.length > 0
-      ? await supabase
+      ? supabase
           .from("external_fixtures")
           .select(
             "external_fixture_id, status, home_score, away_score, last_synced_at, raw_payload, provider_season",
           )
           .eq("provider", "football_data")
           .in("external_fixture_id", externalFixtureIds)
-      : { data: [] };
+      : Promise.resolve({ data: [] }),
+    fixtureIds.length > 0
+      ? supabase
+          .from("predictions")
+          .select(
+            `
+            fixture_id,
+            user_id,
+            home_score,
+            away_score,
+            points,
+            is_exact_score,
+            is_correct_result,
+            profiles (
+              display_name
+            )
+          `,
+          )
+          .in("fixture_id", fixtureIds)
+      : Promise.resolve({ data: null, error: null }),
+    fixtureIds.length > 0
+      ? supabase
+          .from("prediction_reactions")
+          .select("fixture_id, prediction_user_id, user_id, emoji")
+          .in("fixture_id", fixtureIds)
+      : Promise.resolve({ data: [] }),
+    fixtureIds.length > 0
+      ? supabase
+          .from("joker_usage")
+          .select("fixture_id, user_id")
+          .in("fixture_id", fixtureIds)
+          .is("refunded_at", null)
+      : Promise.resolve({ data: null, error: null }),
+    activeSeason && user
+      ? supabase
+          .from("joker_usage")
+          .select(
+            `
+            fixture_id,
+            user_id,
+            fixtures!inner (
+              gameweeks!inner (
+                season_id,
+                is_double_gameweek
+              )
+            )
+          `,
+          )
+          .eq("season_id", activeSeason.id)
+          .eq("user_id", user.id)
+          .is("refunded_at", null)
+          .eq("fixtures.gameweeks.season_id", activeSeason.id)
+      : Promise.resolve({ data: [] }),
+    activeSeason && user
+      ? supabase
+          .from("leaderboard_entries")
+          .select("rank, total_points, weekly_points")
+          .eq("season_id", activeSeason.id)
+          .eq("user_id", user.id)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
   const externalScoreByFixtureId = new Map(
     (
       (externalScoreRows as
@@ -214,65 +271,6 @@ export default async function DashboardPage({
     ]),
   );
 
-  const { data: predictions, error: predictionsError } =
-    fixtureIds.length > 0
-      ? await supabase
-          .from("predictions")
-          .select(
-            `
-            fixture_id,
-            user_id,
-            home_score,
-            away_score,
-            points,
-            is_exact_score,
-            is_correct_result,
-            profiles (
-              display_name
-            )
-          `,
-          )
-          .in("fixture_id", fixtureIds)
-      : { data: null, error: null };
-
-  const { data: predictionReactions } =
-    fixtureIds.length > 0
-      ? await supabase
-          .from("prediction_reactions")
-          .select("fixture_id, prediction_user_id, user_id, emoji")
-          .in("fixture_id", fixtureIds)
-      : { data: [] };
-
-  const { data: jokerUsage, error: jokerUsageError } =
-    fixtureIds.length > 0
-      ? await supabase
-          .from("joker_usage")
-          .select("fixture_id, user_id")
-          .in("fixture_id", fixtureIds)
-          .is("refunded_at", null)
-      : { data: null, error: null };
-
-  const { data: seasonJokerUsage } =
-    activeSeason && user
-      ? await supabase
-          .from("joker_usage")
-          .select(
-            `
-            fixture_id,
-            user_id,
-            fixtures!inner (
-              gameweeks!inner (
-                season_id,
-                is_double_gameweek
-              )
-            )
-          `,
-          )
-          .eq("season_id", activeSeason.id)
-          .eq("user_id", user.id)
-          .is("refunded_at", null)
-          .eq("fixtures.gameweeks.season_id", activeSeason.id)
-      : { data: [] };
 
   const latestFixtureKickoff =
     fixtureList
@@ -287,56 +285,85 @@ export default async function DashboardPage({
         .filter((value): value is string => Boolean(value)),
     ),
   ];
-  let completedExternalFormFixtures: unknown[] | null = [];
+  const [completedExternalFormFixtures, completedLocalFormFixtures, standingRows] =
+    await Promise.all([
+      (async () => {
+        if (!latestFixtureKickoff || fixtureCompetitionCodes.length === 0) {
+          return [];
+        }
 
-  if (latestFixtureKickoff && fixtureCompetitionCodes.length > 0) {
-    let completedExternalFormQuery = supabase
-      .from("external_fixtures")
-      .select(
-        "external_fixture_id, external_competition_code, provider_season, home_team, away_team, kickoff_at, home_score, away_score",
-      )
-      .eq("provider", "football_data")
-      .in("external_competition_code", fixtureCompetitionCodes)
-      .eq("status", "FINISHED")
-      .not("home_score", "is", null)
-      .not("away_score", "is", null)
-      .lt("kickoff_at", latestFixtureKickoff)
-      .order("kickoff_at", { ascending: false });
-
-    if (activeSeasonConfig?.provider_season) {
-      completedExternalFormQuery = completedExternalFormQuery.eq(
-        "provider_season",
-        activeSeasonConfig.provider_season,
-      );
-    }
-
-    const { data } = await completedExternalFormQuery;
-    completedExternalFormFixtures = data;
-  }
-  const { data: completedLocalFormFixtures } =
-    activeSeason && latestFixtureKickoff && fixtureCompetitionCodes.length === 0
-      ? await supabase
-          .from("fixtures")
+        let query = supabase
+          .from("external_fixtures")
           .select(
-            `
-            id,
-            home_team,
-            away_team,
-            kickoff_at,
-            home_score,
-            away_score,
-            gameweeks!inner (
-              season_id
-            )
-          `,
+            "external_fixture_id, external_competition_code, provider_season, home_team, away_team, kickoff_at, home_score, away_score",
           )
-          .eq("gameweeks.season_id", activeSeason.id)
-          .eq("status", "completed")
+          .eq("provider", "football_data")
+          .in("external_competition_code", fixtureCompetitionCodes)
+          .eq("status", "FINISHED")
           .not("home_score", "is", null)
           .not("away_score", "is", null)
           .lt("kickoff_at", latestFixtureKickoff)
           .order("kickoff_at", { ascending: false })
-      : { data: [] };
+          .limit(500);
+
+        if (activeSeasonConfig?.provider_season) {
+          query = query.eq(
+            "provider_season",
+            activeSeasonConfig.provider_season,
+          );
+        }
+
+        return (await query).data ?? [];
+      })(),
+      activeSeason &&
+      latestFixtureKickoff &&
+      fixtureCompetitionCodes.length === 0
+        ? supabase
+            .from("fixtures")
+            .select(
+              `
+              id,
+              home_team,
+              away_team,
+              kickoff_at,
+              home_score,
+              away_score,
+              gameweeks!inner (
+                season_id
+              )
+            `,
+            )
+            .eq("gameweeks.season_id", activeSeason.id)
+            .eq("status", "completed")
+            .not("home_score", "is", null)
+            .not("away_score", "is", null)
+            .lt("kickoff_at", latestFixtureKickoff)
+            .order("kickoff_at", { ascending: false })
+            .then((result) => result.data ?? [])
+        : Promise.resolve([]),
+      (async () => {
+        if (fixtureCompetitionCodes.length === 0) {
+          return [];
+        }
+
+        let query = supabase
+          .from("external_team_standings")
+          .select(
+            "external_competition_code, provider_season, team_name, team_short_name, team_tla, crest_url, position, played, won, drawn, lost, points, raw_payload",
+          )
+          .eq("provider", "football_data")
+          .in("external_competition_code", fixtureCompetitionCodes);
+
+        if (activeSeasonConfig?.provider_season) {
+          query = query.eq(
+            "provider_season",
+            activeSeasonConfig.provider_season,
+          );
+        }
+
+        return (await query).data ?? [];
+      })(),
+    ]);
   const completedFixtureRows =
     fixtureCompetitionCodes.length > 0
       ? ((completedExternalFormFixtures as
@@ -351,27 +378,6 @@ export default async function DashboardPage({
           away_score: fixture.away_score,
         }))
       : ((completedLocalFormFixtures as CompletedFixtureForForm[] | null) ?? []);
-  let standingRows: unknown[] | null = [];
-
-  if (fixtureCompetitionCodes.length > 0) {
-    let standingQuery = supabase
-      .from("external_team_standings")
-      .select(
-        "external_competition_code, provider_season, team_name, team_short_name, team_tla, crest_url, position, played, won, drawn, lost, points, raw_payload",
-      )
-      .eq("provider", "football_data")
-      .in("external_competition_code", fixtureCompetitionCodes);
-
-    if (activeSeasonConfig?.provider_season) {
-      standingQuery = standingQuery.eq(
-        "provider_season",
-        activeSeasonConfig.provider_season,
-      );
-    }
-
-    const { data } = await standingQuery;
-    standingRows = data;
-  }
   const { meaningfulRows: meaningfulStandingRows, hiddenPreseasonGroups } =
     getMeaningfulStandingRows(
       (standingRows as TeamStandingDisplayRow[] | null) ?? [],
@@ -464,16 +470,6 @@ export default async function DashboardPage({
     (fixture) =>
       fixture.status === "scheduled" && new Date(fixture.kickoff_at) > new Date(),
   );
-
-  const { data: leaderboardEntry } =
-    activeSeason && user
-      ? await supabase
-          .from("leaderboard_entries")
-          .select("rank, total_points, weekly_points")
-          .eq("season_id", activeSeason.id)
-          .eq("user_id", user.id)
-          .maybeSingle()
-      : { data: null };
 
   const predictionsByFixture = new Map<string, Prediction[]>();
   const predictionReactionsByKey = new Map<string, ReactionSummary[]>();
@@ -636,6 +632,11 @@ export default async function DashboardPage({
     liveFixtureCount += 1;
   }
 
+  logServerTiming("predictions.page", pageStartedAt, {
+    userId: user?.id,
+    leagueId: selectedLeague?.id,
+  });
+
   return (
     <>
       <header className="brand-card mb-8 p-5 sm:p-6">
@@ -707,8 +708,8 @@ export default async function DashboardPage({
 
         {!activeSeason ? (
           <p className="brand-alert-warning">
-            No active season is available yet. Predictions will open once an
-            admin activates a season.
+            This league has no active season. Predictions remain unavailable
+            until a platform admin starts the next season.
           </p>
         ) : null}
 

@@ -6,6 +6,7 @@ import { createClient } from "@/utils/supabase/server";
 import { createAdminClient } from "@/utils/supabase/admin";
 import { getKickoffIso } from "@/utils/fixtures";
 import { getActiveSeason } from "@/utils/seasons";
+import { getSelectedLeagueForUser } from "@/utils/leagues";
 import { upsertActivityNotification } from "@/utils/activity";
 import { upsertFixturesPickedActivity } from "@/utils/fixture-activity";
 import {
@@ -253,6 +254,50 @@ async function requireAdmin() {
   return { supabase, user };
 }
 
+async function isActiveSeason(
+  supabase: SupabaseLikeClient,
+  seasonId: string,
+) {
+  const { data } = await supabase
+    .from("seasons")
+    .select("id")
+    .eq("id", seasonId)
+    .eq("status", "active")
+    .maybeSingle();
+
+  return Boolean(data);
+}
+
+async function isActiveGameweek(
+  supabase: SupabaseLikeClient,
+  gameweekId: string,
+) {
+  const { data: gameweek } = await supabase
+    .from("gameweeks")
+    .select("season_id")
+    .eq("id", gameweekId)
+    .maybeSingle();
+
+  return gameweek?.season_id
+    ? isActiveSeason(supabase, gameweek.season_id)
+    : false;
+}
+
+async function isActiveFixture(
+  supabase: SupabaseLikeClient,
+  fixtureId: string,
+) {
+  const { data: fixture } = await supabase
+    .from("fixtures")
+    .select("gameweek_id")
+    .eq("id", fixtureId)
+    .maybeSingle();
+
+  return fixture?.gameweek_id
+    ? isActiveGameweek(supabase, fixture.gameweek_id)
+    : false;
+}
+
 function getSeasonIdFromFixture(fixture: FixtureToScore) {
   if (Array.isArray(fixture.gameweeks)) {
     return fixture.gameweeks[0]?.season_id ?? null;
@@ -478,11 +523,11 @@ export async function recalculateLeaderboard(
   }
 }
 
-export async function recalculateActiveSeasonLeaderboard() {
+export async function recalculateActiveSeasonLeaderboard(formData: FormData) {
   const { supabase } = await requireAdmin();
-  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+  const seasonId = String(formData.get("season_id") ?? "");
 
-  if (!activeSeason) {
+  if (!seasonId || !(await isActiveSeason(supabase, seasonId))) {
     redirect(
       `/admin?tab=maintenance&error=${encodeURIComponent(
         "No active season found",
@@ -490,7 +535,7 @@ export async function recalculateActiveSeasonLeaderboard() {
     );
   }
 
-  await recalculateLeaderboard(activeSeason.id);
+  await recalculateLeaderboard(seasonId);
 
   revalidatePath("/admin");
   revalidatePath("/dashboard");
@@ -499,11 +544,13 @@ export async function recalculateActiveSeasonLeaderboard() {
   redirect("/admin?tab=maintenance&saved=1");
 }
 
-export async function rescoreActiveSeasonAndRecalculateLeaderboard() {
+export async function rescoreActiveSeasonAndRecalculateLeaderboard(
+  formData: FormData,
+) {
   const { supabase } = await requireAdmin();
-  const { data: activeSeason } = await getActiveSeason(supabase, "id");
+  const seasonId = String(formData.get("season_id") ?? "");
 
-  if (!activeSeason) {
+  if (!seasonId || !(await isActiveSeason(supabase, seasonId))) {
     redirect(
       `/admin?tab=maintenance&error=${encodeURIComponent(
         "No active season found",
@@ -522,7 +569,7 @@ export async function rescoreActiveSeasonAndRecalculateLeaderboard() {
     `,
     )
     .eq("status", "completed")
-    .eq("gameweeks.season_id", activeSeason.id);
+    .eq("gameweeks.season_id", seasonId);
 
   if (error) {
     redirect(
@@ -534,7 +581,7 @@ export async function rescoreActiveSeasonAndRecalculateLeaderboard() {
     await scoreFixture(fixture.id);
   }
 
-  await recalculateLeaderboard(activeSeason.id);
+  await recalculateLeaderboard(seasonId);
 
   revalidatePath("/admin");
   revalidatePath("/dashboard");
@@ -584,6 +631,12 @@ export async function createGameweekWithFixtures(formData: FormData) {
 
   if (!seasonId || !Number.isInteger(gameweekNumber) || gameweekNumber < 1) {
     redirect("/admin?tab=create&error=Invalid gameweek");
+  }
+
+  if (!(await isActiveSeason(supabase, seasonId))) {
+    redirect(
+      "/admin?tab=gameweeks&error=Archived+seasons+are+read-only",
+    );
   }
 
   const fixturesToCreate = [];
@@ -698,6 +751,12 @@ export async function generateMissingGameweeks(formData: FormData) {
     );
   }
 
+  if (!(await isActiveSeason(supabase, seasonId))) {
+    redirect(
+      "/admin?tab=gameweeks&error=Archived+seasons+are+read-only",
+    );
+  }
+
   const { data: existingGameweeks, error: existingError } = await supabase
     .from("gameweeks")
     .select("gameweek_number")
@@ -763,6 +822,14 @@ export async function addFixtureToGameweek(formData: FormData) {
     );
   }
 
+  if (!(await isActiveGameweek(supabase, gameweekId))) {
+    redirect(
+      `/admin?tab=gameweeks&error=${encodeURIComponent(
+        "Archived seasons are read-only",
+      )}`,
+    );
+  }
+
   const kickoffAt = getKickoffIso(kickoffRaw);
 
   if (!kickoffAt) {
@@ -773,10 +840,14 @@ export async function addFixtureToGameweek(formData: FormData) {
     );
   }
 
-  const { data: activeSeason } = await getActiveSeason(
-    supabase,
-    "base_competition_code, base_competition_name",
-  );
+  const { selectedLeague } = await getSelectedLeagueForUser(supabase, user.id);
+  const { data: activeSeason } = selectedLeague
+    ? await getActiveSeason(
+        supabase,
+        "base_competition_code, base_competition_name",
+        selectedLeague.id,
+      )
+    : { data: null };
   const activeSeasonCompetition = activeSeason as {
     base_competition_code: string | null;
     base_competition_name: string | null;
@@ -950,6 +1021,14 @@ export async function addExternalFixturesToGameweek(formData: FormData) {
     redirect("/admin?tab=fixtures&error=Missing gameweek");
   }
 
+  if (!(await isActiveGameweek(supabase, gameweekId))) {
+    redirect(
+      `/admin?tab=gameweeks&error=${encodeURIComponent(
+        "Archived seasons are read-only",
+      )}`,
+    );
+  }
+
   if (uniqueExternalIds.length === 0) {
     redirect(
       `/admin?tab=fixtures&gameweek=${gameweekId}&error=${encodeURIComponent(
@@ -978,10 +1057,14 @@ export async function addExternalFixturesToGameweek(formData: FormData) {
     redirect("/admin?tab=fixtures&error=Gameweek not found");
   }
 
-  const { data: activeSeason } = await getActiveSeason(
-    supabase,
-    "id, base_provider, base_competition_code, base_competition_name",
-  );
+  const { selectedLeague } = await getSelectedLeagueForUser(supabase, user.id);
+  const { data: activeSeason } = selectedLeague
+    ? await getActiveSeason(
+        supabase,
+        "id, base_provider, base_competition_code, base_competition_name",
+        selectedLeague.id,
+      )
+    : { data: null };
   const activeSeasonConfig = activeSeason as ActiveSeasonExternalConfig | null;
 
   if (!activeSeasonConfig || typedGameweek.season_id !== activeSeasonConfig.id) {
@@ -1271,6 +1354,14 @@ export async function updateFixtureDetails(formData: FormData) {
     redirect("/admin?tab=fixtures&error=Fixture details are incomplete");
   }
 
+  if (!(await isActiveFixture(supabase, fixtureId))) {
+    redirect(
+      `/admin?tab=gameweeks&error=${encodeURIComponent(
+        "Archived seasons are read-only",
+      )}`,
+    );
+  }
+
   const kickoffAt = getKickoffIso(kickoffRaw);
 
   const { data: existingFixture } = await supabase
@@ -1320,6 +1411,14 @@ export async function deleteFixture(formData: FormData) {
 
   if (!fixtureId) {
     redirect("/admin?tab=fixtures&error=Missing fixture");
+  }
+
+  if (!(await isActiveFixture(supabase, fixtureId))) {
+    redirect(
+      `/admin?tab=gameweeks&error=${encodeURIComponent(
+        "Archived seasons are read-only",
+      )}`,
+    );
   }
 
   const { data: existingFixture } = await supabase
@@ -1386,15 +1485,24 @@ export async function disableUser(formData: FormData) {
     );
   }
 
-  const { error } = await supabase
+  const { data: disabledProfile, error } = await supabase
     .from("profiles")
     .update({
       status: "disabled",
     })
-    .eq("id", userId);
+    .eq("id", userId)
+    .eq("status", "approved")
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     redirect(`/admin?tab=users&error=${encodeURIComponent(error.message)}`);
+  }
+
+  if (!disabledProfile) {
+    redirect(
+      "/admin?tab=users&error=Only+approved+users+can+be+disabled",
+    );
   }
 
   revalidatePath("/admin");
@@ -1413,15 +1521,24 @@ export async function enableUser(formData: FormData) {
     redirect("/admin?tab=users&error=Missing user");
   }
 
-  const { error } = await supabase
+  const { data: enabledProfile, error } = await supabase
     .from("profiles")
     .update({
       status: "approved",
     })
-    .eq("id", userId);
+    .eq("id", userId)
+    .eq("status", "disabled")
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     redirect(`/admin?tab=users&error=${encodeURIComponent(error.message)}`);
+  }
+
+  if (!enabledProfile) {
+    redirect(
+      "/admin?tab=users&error=Only+disabled+users+can+be+re-enabled",
+    );
   }
 
   revalidatePath("/admin");
@@ -1440,15 +1557,24 @@ export async function approveUser(formData: FormData) {
     redirect("/admin?tab=users&error=Missing user");
   }
 
-  const { error } = await supabase
+  const { data: approvedProfile, error } = await supabase
     .from("profiles")
     .update({
       status: "approved",
     })
-    .eq("id", userId);
+    .eq("id", userId)
+    .eq("status", "pending")
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     redirect(`/admin?tab=users&error=${encodeURIComponent(error.message)}`);
+  }
+
+  if (!approvedProfile) {
+    redirect(
+      "/admin?tab=users&error=Only+pending+users+can+be+approved",
+    );
   }
 
   revalidatePath("/admin");
@@ -1475,15 +1601,24 @@ export async function rejectUser(formData: FormData) {
     );
   }
 
-  const { error } = await supabase
+  const { data: rejectedProfile, error } = await supabase
     .from("profiles")
     .update({
       status: "rejected",
     })
-    .eq("id", userId);
+    .eq("id", userId)
+    .eq("status", "pending")
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     redirect(`/admin?tab=users&error=${encodeURIComponent(error.message)}`);
+  }
+
+  if (!rejectedProfile) {
+    redirect(
+      "/admin?tab=users&error=Only+pending+users+can+be+rejected",
+    );
   }
 
   revalidatePath("/admin");
@@ -1519,6 +1654,50 @@ function getSeasonRedirectUrl({
 }) {
   const params = new URLSearchParams({
     tab: "create",
+  });
+
+  if (saved) {
+    params.set("saved", saved);
+  }
+
+  if (error) {
+    params.set("error", error);
+  }
+
+  return `/admin?${params.toString()}`;
+}
+
+function getGameweeksRedirectUrl({
+  saved,
+  error,
+}: {
+  saved?: string;
+  error?: string;
+}) {
+  const params = new URLSearchParams({ tab: "gameweeks" });
+
+  if (saved) {
+    params.set("saved", saved);
+  }
+
+  if (error) {
+    params.set("error", error);
+  }
+
+  return `/admin?${params.toString()}`;
+}
+
+function getArchiveSeasonRedirectUrl({
+  returnTo,
+  saved,
+  error,
+}: {
+  returnTo: "overview" | "season";
+  saved?: string;
+  error?: string;
+}) {
+  const params = new URLSearchParams({
+    tab: returnTo === "overview" ? "overview" : "season",
   });
 
   if (saved) {
@@ -1576,6 +1755,7 @@ async function createGameweeksForSeason({
 
 export async function createSeason(formData: FormData) {
   const { supabase, user } = await requireAdmin();
+  const requestedLeagueId = String(formData.get("league_id") ?? "").trim();
 
   const name = String(formData.get("name") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim();
@@ -1615,14 +1795,40 @@ export async function createSeason(formData: FormData) {
     );
   }
 
+  const { selectedLeague } = requestedLeagueId
+    ? {
+        selectedLeague: (
+          await createAdminClient()
+            .from("leagues")
+            .select("id, name, status")
+            .eq("id", requestedLeagueId)
+            .eq("status", "active")
+            .maybeSingle()
+        ).data,
+      }
+    : await getSelectedLeagueForUser(supabase, user.id);
+
+  if (!selectedLeague) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "Select a league before creating a season",
+      }),
+    );
+  }
+
   if (status === "active") {
     const { error: archiveActiveError } = await supabase
       .from("seasons")
       .update({
         status: "archived",
+        is_active: false,
+        show_in_archive: true,
+        fixture_import_enabled: false,
+        result_sync_enabled: false,
         archived_at: new Date().toISOString(),
         archived_by: user.id,
       })
+      .eq("league_id", selectedLeague.id)
       .eq("status", "active");
 
     if (archiveActiveError) {
@@ -1641,6 +1847,7 @@ export async function createSeason(formData: FormData) {
       description: description || null,
       season_type: seasonType,
       status,
+      league_id: selectedLeague.id,
       created_by: user.id,
     })
     .select("id")
@@ -1703,11 +1910,21 @@ export async function rolloverActiveSeason(formData: FormData) {
   const gameweekCount = Number(formData.get("gameweek_count") ?? 0);
   const showOldInArchive =
     String(formData.get("show_old_in_archive") ?? "") === "on";
+  const confirmed =
+    String(formData.get("confirm_rollover") ?? "") === "on";
 
   if (!sourceSeasonId) {
     redirect(
       getSeasonRedirectUrl({
         error: "No active season selected for rollover",
+      }),
+    );
+  }
+
+  if (!confirmed) {
+    redirect(
+      getSeasonRedirectUrl({
+        error: "Confirm the season rollover before continuing",
       }),
     );
   }
@@ -1735,7 +1952,7 @@ export async function rolloverActiveSeason(formData: FormData) {
   const { data: sourceSeason, error: sourceSeasonError } = await supabase
     .from("seasons")
     .select(
-      "id, name, status, season_type, base_provider, base_competition_code, base_competition_name, base_competition_external_id, fixture_import_enabled, result_sync_enabled",
+      "id, league_id, name, status, season_type, show_in_archive, base_provider, base_competition_code, base_competition_name, base_competition_external_id, fixture_import_enabled, result_sync_enabled",
     )
     .eq("id", sourceSeasonId)
     .eq("status", "active")
@@ -1751,7 +1968,10 @@ export async function rolloverActiveSeason(formData: FormData) {
     );
   }
 
-  const approvedPlayers = await getApprovedPlayerIds({ supabase });
+  const approvedPlayers = await getApprovedPlayerIds({
+    supabase,
+    seasonId: sourceSeasonId,
+  });
 
   if (approvedPlayers.length === 0) {
     redirect(
@@ -1768,6 +1988,7 @@ export async function rolloverActiveSeason(formData: FormData) {
       description: description || null,
       season_type: sourceSeason.season_type ?? "standard",
       status: "draft",
+      league_id: sourceSeason.league_id,
       base_provider: sourceSeason.base_provider,
       base_competition_code: sourceSeason.base_competition_code,
       base_competition_name: sourceSeason.base_competition_name,
@@ -1815,10 +2036,14 @@ export async function rolloverActiveSeason(formData: FormData) {
     .from("seasons")
     .update({
       status: "archived",
+      is_active: false,
       archived_at: archivedAt,
       archived_by: user.id,
       show_in_archive: showOldInArchive,
+      fixture_import_enabled: false,
+      result_sync_enabled: false,
     })
+    .eq("league_id", sourceSeason.league_id)
     .eq("status", "active");
 
   if (archiveActiveError) {
@@ -1833,6 +2058,7 @@ export async function rolloverActiveSeason(formData: FormData) {
     .from("seasons")
     .update({
       status: "active",
+      is_active: true,
       archived_at: null,
       archived_by: null,
     })
@@ -1843,6 +2069,10 @@ export async function rolloverActiveSeason(formData: FormData) {
       .from("seasons")
       .update({
         status: "active",
+        is_active: true,
+        show_in_archive: sourceSeason.show_in_archive,
+        fixture_import_enabled: Boolean(sourceSeason.fixture_import_enabled),
+        result_sync_enabled: Boolean(sourceSeason.result_sync_enabled),
         archived_at: null,
         archived_by: null,
       })
@@ -1883,7 +2113,7 @@ export async function activateSeason(formData: FormData) {
 
   const { data: targetSeason, error: targetSeasonError } = await supabase
     .from("seasons")
-    .select("id, status")
+    .select("id, league_id, status")
     .eq("id", seasonId)
     .single();
 
@@ -1907,9 +2137,14 @@ export async function activateSeason(formData: FormData) {
     .from("seasons")
     .update({
       status: "archived",
+      is_active: false,
+      show_in_archive: true,
+      fixture_import_enabled: false,
+      result_sync_enabled: false,
       archived_at: new Date().toISOString(),
       archived_by: user.id,
     })
+    .eq("league_id", targetSeason.league_id)
     .eq("status", "active")
     .neq("id", seasonId);
 
@@ -1925,6 +2160,7 @@ export async function activateSeason(formData: FormData) {
     .from("seasons")
     .update({
       status: "active",
+      is_active: true,
       archived_at: null,
       archived_by: null,
     })
@@ -2114,30 +2350,38 @@ export async function restoreSeasonToDraft(formData: FormData) {
 }
 
 export async function saveGameweekPickerAssignments(formData: FormData) {
-  const { supabase } = await requireAdmin();
+  await requireAdmin();
+  const adminSupabase = createAdminClient();
 
   const gameweekIds = formData.getAll("gameweek_id").map(String);
-  const seasonsToRecalculate = new Set<string>();
 
   if (gameweekIds.length === 0) {
     redirect(
-      getSeasonRedirectUrl({
+      getGameweeksRedirectUrl({
         error: "No gameweeks found to update",
       }),
     );
   }
 
   for (const gameweekId of gameweekIds) {
-    const { data: currentGameweek, error: currentGameweekError } = await supabase
+    const { data: currentGameweek, error: currentGameweekError } =
+      await adminSupabase
       .from("gameweeks")
       .select(
         `
         id,
         season_id,
         is_double_gameweek,
+        seasons (
+          league_id,
+          status,
+          is_active
+        ),
         fixtures (
           id,
-          status
+          kickoff_at,
+          status,
+          predictions (id)
         )
       `,
       )
@@ -2146,7 +2390,7 @@ export async function saveGameweekPickerAssignments(formData: FormData) {
 
     if (currentGameweekError || !currentGameweek) {
       redirect(
-        getSeasonRedirectUrl({
+        getGameweeksRedirectUrl({
           error: currentGameweekError?.message ?? "Gameweek not found",
         }),
       );
@@ -2160,17 +2404,83 @@ export async function saveGameweekPickerAssignments(formData: FormData) {
       fixturePickerIdRaw && fixturePickerIdRaw !== "unassigned"
         ? fixturePickerIdRaw
         : null;
-    const isDoubleGameweek =
-      String(formData.get(`is_double_gameweek_${gameweekId}`) ?? "") === "on";
+    const preserveDoubleGameweek =
+      String(formData.get(`preserve_double_gameweek_${gameweekId}`) ?? "") ===
+      "true";
+    const isDoubleGameweek = preserveDoubleGameweek
+      ? Boolean(currentGameweek.is_double_gameweek)
+      : String(formData.get(`is_double_gameweek_${gameweekId}`) ?? "") ===
+        "on";
     const currentFixtureRows =
-      (currentGameweek.fixtures as { id: string; status: string }[] | null) ?? [];
-    const completedFixtureIds = currentFixtureRows
-      .filter((fixture) => fixture.status === "completed")
-      .map((fixture) => fixture.id);
+      (currentGameweek.fixtures as
+        | {
+            id: string;
+            kickoff_at: string | null;
+            status: string;
+            predictions: { id: string }[] | null;
+          }[]
+        | null) ?? [];
+    const seasonRelation = Array.isArray(currentGameweek.seasons)
+      ? currentGameweek.seasons[0]
+      : currentGameweek.seasons;
+    const seasonIsActive = seasonRelation?.status === "active";
     const doubleGameweekChanged =
       Boolean(currentGameweek.is_double_gameweek) !== isDoubleGameweek;
 
-    const { error } = await supabase
+    if (!seasonIsActive) {
+      redirect(
+        getGameweeksRedirectUrl({
+          error: "Archived seasons are read-only",
+        }),
+      );
+    }
+
+    if (fixturePickerId) {
+      const { data: eligiblePicker, error: eligiblePickerError } =
+        await adminSupabase
+          .from("league_memberships")
+          .select("id, profiles!inner(status)")
+          .eq("league_id", seasonRelation?.league_id ?? "")
+          .eq("user_id", fixturePickerId)
+          .eq("status", "active")
+          .eq("profiles.status", "approved")
+          .maybeSingle();
+
+      if (eligiblePickerError || !eligiblePicker) {
+        redirect(
+          getGameweeksRedirectUrl({
+            error: "Fixture picker must be an approved active member of this league",
+          }),
+        );
+      }
+    }
+
+    if (doubleGameweekChanged) {
+      const hasPredictions = currentFixtureRows.some(
+        (fixture) => (fixture.predictions?.length ?? 0) > 0,
+      );
+      const hasLockedOrFinalFixture = currentFixtureRows.some((fixture) =>
+        ["locked", "completed", "void"].includes(fixture.status),
+      );
+      const now = Date.now();
+      const hasStarted = currentFixtureRows.some((fixture) => {
+        const kickoff = fixture.kickoff_at
+          ? Date.parse(fixture.kickoff_at)
+          : Number.NaN;
+        return Number.isFinite(kickoff) && kickoff <= now;
+      });
+
+      if (hasPredictions || hasLockedOrFinalFixture || hasStarted) {
+        redirect(
+          getGameweeksRedirectUrl({
+            error:
+              "Double Gameweek cannot change after predictions, kickoff, locking, or final results",
+          }),
+        );
+      }
+    }
+
+    const { error } = await adminSupabase
       .from("gameweeks")
       .update({
         fixture_picker_id: fixturePickerId,
@@ -2180,14 +2490,18 @@ export async function saveGameweekPickerAssignments(formData: FormData) {
 
     if (error) {
       redirect(
-        getSeasonRedirectUrl({
+        getGameweeksRedirectUrl({
           error: error.message,
         }),
       );
     }
 
-    if (isDoubleGameweek && currentFixtureRows.length > 0) {
-      const { error: jokerDeleteError } = await supabase
+    if (
+      doubleGameweekChanged &&
+      isDoubleGameweek &&
+      currentFixtureRows.length > 0
+    ) {
+      const { error: jokerDeleteError } = await adminSupabase
         .from("joker_usage")
         .delete()
         .in(
@@ -2197,24 +2511,12 @@ export async function saveGameweekPickerAssignments(formData: FormData) {
 
       if (jokerDeleteError) {
         redirect(
-          getSeasonRedirectUrl({
+          getGameweeksRedirectUrl({
             error: jokerDeleteError.message,
           }),
         );
       }
     }
-
-    if (doubleGameweekChanged && completedFixtureIds.length > 0) {
-      for (const fixtureId of completedFixtureIds) {
-        await scoreFixture(fixtureId, supabase);
-      }
-
-      seasonsToRecalculate.add(currentGameweek.season_id);
-    }
-  }
-
-  for (const seasonId of seasonsToRecalculate) {
-    await recalculateLeaderboard(seasonId, supabase);
   }
 
   revalidatePath("/admin");
@@ -2224,7 +2526,7 @@ export async function saveGameweekPickerAssignments(formData: FormData) {
   revalidatePath("/leaderboard");
 
   redirect(
-    getSeasonRedirectUrl({
+    getGameweeksRedirectUrl({
       saved: "1",
     }),
   );
@@ -2239,6 +2541,14 @@ export async function autoAssignAllGameweekPickers(formData: FormData) {
     redirect(
       getSeasonRedirectUrl({
         error: "No season selected",
+      }),
+    );
+  }
+
+  if (!(await isActiveSeason(supabase, seasonId))) {
+    redirect(
+      getGameweeksRedirectUrl({
+        error: "Archived seasons are read-only",
       }),
     );
   }
@@ -2279,6 +2589,14 @@ export async function autoAssignFutureGameweekPickers(formData: FormData) {
     redirect(
       getSeasonRedirectUrl({
         error: "No season selected",
+      }),
+    );
+  }
+
+  if (!(await isActiveSeason(supabase, seasonId))) {
+    redirect(
+      getGameweeksRedirectUrl({
+        error: "Archived seasons are read-only",
       }),
     );
   }
@@ -2541,71 +2859,155 @@ export async function deleteSeason(formData: FormData) {
 }
 
 export async function archiveSeason(formData: FormData) {
-  const { supabase, user } = await requireAdmin();
+  const { user } = await requireAdmin();
+  const adminSupabase = createAdminClient();
 
   const seasonId = String(formData.get("season_id") ?? "");
+  const returnTo =
+    String(formData.get("return_to") ?? "") === "overview"
+      ? "overview"
+      : "season";
+  const confirmed =
+    String(formData.get("confirm_archive") ?? "") === "on";
 
   if (!seasonId) {
     redirect(
-      getSeasonRedirectUrl({
+      getArchiveSeasonRedirectUrl({
+        returnTo,
         error: "No season selected",
       }),
     );
   }
 
-  const { error } = await supabase
+  if (!confirmed) {
+    redirect(
+      getArchiveSeasonRedirectUrl({
+        returnTo,
+        error: "Confirm that you understand the season will become read-only",
+      }),
+    );
+  }
+
+  const { data: season, error: seasonError } = await adminSupabase
+    .from("seasons")
+    .select("id, status")
+    .eq("id", seasonId)
+    .maybeSingle();
+
+  if (seasonError || !season) {
+    redirect(
+      getArchiveSeasonRedirectUrl({
+        returnTo,
+        error: seasonError?.message ?? "Season not found",
+      }),
+    );
+  }
+
+  if (season.status === "archived") {
+    redirect(
+      getArchiveSeasonRedirectUrl({
+        returnTo,
+        error: "Season is already archived",
+      }),
+    );
+  }
+
+  const { data: archivedSeason, error } = await adminSupabase
     .from("seasons")
     .update({
       status: "archived",
+      is_active: false,
+      show_in_archive: true,
+      fixture_import_enabled: false,
+      result_sync_enabled: false,
       archived_at: new Date().toISOString(),
       archived_by: user.id,
     })
-    .eq("id", seasonId);
+    .eq("id", seasonId)
+    .neq("status", "archived")
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     redirect(
-      getSeasonRedirectUrl({
+      getArchiveSeasonRedirectUrl({
+        returnTo,
         error: error.message,
       }),
     );
   }
 
+  if (!archivedSeason) {
+    redirect(
+      getArchiveSeasonRedirectUrl({
+        returnTo,
+        error: "Season is already archived",
+      }),
+    );
+  }
+
   revalidatePath("/admin");
+  revalidatePath("/leagues");
+  revalidatePath("/leagues/launch");
   revalidatePath("/dashboard");
   revalidatePath("/predictions");
   revalidatePath("/pick-fixtures");
   revalidatePath("/leaderboard");
 
   redirect(
-    getSeasonRedirectUrl({
-      saved: "1",
+    getArchiveSeasonRedirectUrl({
+      returnTo,
+      saved: "season-archived",
     }),
   );
 }
 
 async function getApprovedPlayerIds({
   supabase,
+  seasonId,
 }: {
   supabase: Awaited<ReturnType<typeof createClient>>;
+  seasonId: string;
 }) {
-  const { data: approvedPlayers, error } = await supabase
-    .from("profiles")
-    .select("id, display_name")
-    .eq("status", "approved")
-    .order("display_name", { ascending: true });
+  const { data: season, error: seasonError } = await supabase
+    .from("seasons")
+    .select("league_id")
+    .eq("id", seasonId)
+    .maybeSingle();
+
+  if (seasonError || !season?.league_id) {
+    throw new Error(
+      seasonError?.message ?? "Season is not attached to a league",
+    );
+  }
+
+  const { data: memberships, error } = await supabase
+    .from("league_memberships")
+    .select("user_id, profiles!inner(id, display_name, status)")
+    .eq("league_id", season.league_id)
+    .eq("status", "active")
+    .eq("profiles.status", "approved")
+    .order("joined_at", { ascending: true });
 
   if (error) {
     throw new Error(error.message);
   }
 
-  return (
-    approvedPlayers as
-      | {
-          id: string;
-          display_name: string;
-        }[]
-      | null
-  ) ?? [];
+  return ((memberships ?? []) as {
+    user_id: string;
+    profiles:
+      | { id: string; display_name: string; status: string }
+      | { id: string; display_name: string; status: string }[]
+      | null;
+  }[]).flatMap((membership) => {
+    const profile = Array.isArray(membership.profiles)
+      ? membership.profiles[0]
+      : membership.profiles;
+
+    return profile
+      ? [{ id: membership.user_id, display_name: profile.display_name }]
+      : [];
+  });
 }
 
 async function autoAssignPickersForSeason({
@@ -2617,7 +3019,7 @@ async function autoAssignPickersForSeason({
   seasonId: string;
   onlyGameweeksWithoutFixtures?: boolean;
 }) {
-  const approvedPlayers = await getApprovedPlayerIds({ supabase });
+  const approvedPlayers = await getApprovedPlayerIds({ supabase, seasonId });
 
   if (approvedPlayers.length === 0) {
     throw new Error("No approved users found to assign as fixture pickers");
@@ -3041,6 +3443,18 @@ export async function updateFixtureResults(formData: FormData) {
   const updatedSeasonIds = new Set<string>();
   const updatedGameweekIds = new Set<string>();
   let savedAnyFixture = false;
+
+  const activeFixtureChecks = await Promise.all(
+    fixtureIds.map((fixtureId) => isActiveFixture(supabase, fixtureId)),
+  );
+
+  if (activeFixtureChecks.some((isActive) => !isActive)) {
+    redirect(
+      `/admin?tab=gameweeks&error=${encodeURIComponent(
+        "Archived seasons are read-only",
+      )}`,
+    );
+  }
 
   for (const fixtureId of fixtureIds) {
     const homeScoreRaw = formData.get(`home_score_${fixtureId}`);

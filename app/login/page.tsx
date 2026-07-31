@@ -2,13 +2,28 @@ import Link from "next/link";
 import BrandMark from "@/components/brand/BrandMark";
 import LoginForm from "@/components/auth/LoginForm";
 import { login } from "./actions";
+import { createClient } from "@/utils/supabase/server";
+import { redirect } from "next/navigation";
+
+function safeNext(value: string | undefined) {
+  return value?.startsWith("/") && !value.startsWith("//") ? value : "";
+}
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ error?: string; email?: string }>;
+  searchParams?: Promise<{ error?: string; email?: string; next?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
+  const next = safeNext(params.next);
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (user) {
+    redirect(next || "/leagues/launch");
+  }
 
   return (
     <main className="app-surface flex min-h-screen items-center justify-center px-4 py-8 text-white">
@@ -27,7 +42,11 @@ export default async function LoginPage({
           </p>
         ) : null}
 
-        <LoginForm action={login} defaultEmail={params.email ?? ""} />
+        <LoginForm
+          action={login}
+          defaultEmail={params.email ?? ""}
+          next={next}
+        />
 
         <p className="mt-4 text-center text-sm text-slate-400">
           Need an account?{" "}

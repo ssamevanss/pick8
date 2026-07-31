@@ -1,6 +1,6 @@
 import {
   FootballDataError,
-  getEligibleActiveStandingsSeason,
+  getEligibleActiveStandingsSeasons,
   refreshTeamStandings,
 } from "@/utils/team-standings";
 import { createAdminClient } from "@/utils/supabase/admin";
@@ -65,10 +65,18 @@ export async function GET(request: Request) {
     );
   }
 
-  const { season } = await getEligibleActiveStandingsSeason({ supabase });
+  const { seasons, error: seasonsError } =
+    await getEligibleActiveStandingsSeasons({ supabase });
   const dryRun = new URL(request.url).searchParams.get("dry_run") === "1";
 
-  if (!season) {
+  if (seasonsError) {
+    return Response.json(
+      { ok: false, error: seasonsError.message },
+      { status: 500 },
+    );
+  }
+
+  if (seasons.length === 0) {
     return Response.json({
       ok: true,
       skipped_run: true,
@@ -80,17 +88,35 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await refreshTeamStandings({
-      supabase,
-      season,
-      competitionCode: season.base_competition_code!,
-      dryRun,
-    });
+    const uniqueConfigurations = new Map(
+      seasons.map((season) => [
+        `${season.base_competition_code}:${season.provider_season ?? ""}`,
+        season,
+      ]),
+    );
+    const results = [];
+
+    for (const season of uniqueConfigurations.values()) {
+      results.push(
+        await refreshTeamStandings({
+          supabase,
+          season,
+          competitionCode: season.base_competition_code!,
+          dryRun,
+        }),
+      );
+    }
 
     return Response.json({
       ok: true,
       skipped_run: false,
-      ...result,
+      active_seasons: seasons.length,
+      provider_configurations: uniqueConfigurations.size,
+      provider_calls_made: results.reduce(
+        (total, result) => total + result.provider_calls_made,
+        0,
+      ),
+      results,
     });
   } catch (error) {
     if (error instanceof FootballDataError) {

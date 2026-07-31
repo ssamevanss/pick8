@@ -5,7 +5,6 @@ import {
   getExternalFixtureGroupKey,
   type ExternalFixtureRow,
 } from "@/utils/external-fixtures";
-import { getActiveSeason } from "@/utils/seasons";
 import { createAdminClient } from "@/utils/supabase/admin";
 import { upsertFixturesPickedActivity } from "@/utils/fixture-activity";
 
@@ -13,6 +12,7 @@ type AdminSupabaseClient = ReturnType<typeof createAdminClient>;
 
 type AutoPickSeason = {
   id: string;
+  league_id: string;
   name: string;
   status: string | null;
   base_provider: string | null;
@@ -107,26 +107,50 @@ function isSelectableExternalStatus(status: string) {
 
 export async function getEligibleActiveAutoPickSeason({
   supabase,
+  seasonId,
+}: {
+  supabase: AdminSupabaseClient;
+  seasonId: string;
+}) {
+  const { data, error } = await supabase
+    .from("seasons")
+    .select(
+      "id, league_id, name, status, base_provider, base_competition_code, base_competition_name, leagues!inner(status)",
+    )
+    .eq("id", seasonId)
+    .eq("status", "active")
+    .eq("base_provider", "football_data")
+    .eq("leagues.status", "active")
+    .maybeSingle();
+
+  return {
+    season:
+      data && data.base_competition_code ? (data as AutoPickSeason) : null,
+    error,
+  };
+}
+
+export async function getEligibleActiveAutoPickSeasons({
+  supabase,
 }: {
   supabase: AdminSupabaseClient;
 }) {
-  const { data: activeSeason } = await getActiveSeason(
-    supabase,
-    "id, name, status, base_provider, base_competition_code, base_competition_name",
-  );
+  const { data, error } = await supabase
+    .from("seasons")
+    .select(
+      "id, league_id, name, status, base_provider, base_competition_code, base_competition_name, leagues!inner(status)",
+    )
+    .eq("status", "active")
+    .eq("base_provider", "football_data")
+    .eq("leagues.status", "active")
+    .order("created_at", { ascending: true });
 
-  const season = activeSeason as AutoPickSeason | null;
-
-  if (
-    !season ||
-    season.status !== "active" ||
-    season.base_provider !== "football_data" ||
-    !season.base_competition_code
-  ) {
-    return { season: null, error: null };
-  }
-
-  return { season, error: null };
+  return {
+    seasons: ((data as AutoPickSeason[] | null) ?? []).filter(
+      (season) => Boolean(season.base_competition_code),
+    ),
+    error,
+  };
 }
 
 export async function autoPickMissingFixtures({
@@ -166,6 +190,23 @@ export async function autoPickMissingFixtures({
 
   const gameweekList = (gameweeks as AutoPickGameweek[] | null) ?? [];
   const gameweekIds = gameweekList.map((gameweek) => gameweek.id);
+
+  const { data: eligiblePickerRows, error: eligiblePickerError } = await supabase
+    .from("league_memberships")
+    .select("user_id, profiles!inner(status)")
+    .eq("league_id", season.league_id)
+    .eq("status", "active")
+    .eq("profiles.status", "approved");
+
+  if (eligiblePickerError) {
+    throw new Error(eligiblePickerError.message);
+  }
+
+  const eligiblePickerIds = new Set(
+    ((eligiblePickerRows as { user_id: string }[] | null) ?? []).map(
+      (row) => row.user_id,
+    ),
+  );
 
   if (gameweekIds.length === 0) {
     return {
@@ -240,6 +281,24 @@ export async function autoPickMissingFixtures({
   let updatedGameweeks = 0;
 
   for (const gameweek of gameweekList) {
+    if (!gameweek.fixture_picker_id) {
+      skipped.push({
+        gameweek_id: gameweek.id,
+        gameweek_number: gameweek.gameweek_number,
+        reason: "no fixture picker assigned",
+      });
+      continue;
+    }
+
+    if (!eligiblePickerIds.has(gameweek.fixture_picker_id)) {
+      skipped.push({
+        gameweek_id: gameweek.id,
+        gameweek_number: gameweek.gameweek_number,
+        reason: "fixture picker is not an approved active league member",
+      });
+      continue;
+    }
+
     const currentFixtures = existingFixtureList.filter(
       (fixture) => fixture.gameweek_id === gameweek.id,
     );
