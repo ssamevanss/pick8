@@ -1,4 +1,4 @@
-import { FootballDataError } from "@/utils/football-data/client";
+import { getFootballDataSeasonQueryValue } from "@/utils/football-data/client";
 import {
   addDays,
   formatDateOnly,
@@ -7,6 +7,11 @@ import {
   validateDateWindow,
 } from "@/utils/external-fixture-import";
 import { createAdminClient } from "@/utils/supabase/admin";
+import {
+  createCronDiagnostics,
+  getCronErrorSummary,
+  getCronScope,
+} from "@/utils/cron-diagnostics";
 
 export const dynamic = "force-dynamic";
 
@@ -35,10 +40,6 @@ function verifyCronRequest(request: Request) {
     error: "Unauthorized",
     warning: null,
   };
-}
-
-function readDryRun(request: Request) {
-  return new URL(request.url).searchParams.get("dry_run") === "1";
 }
 
 async function getCompetitionCodes({
@@ -73,6 +74,9 @@ async function getCompetitionCodes({
 }
 
 export async function GET(request: Request) {
+  const route = "/api/cron/import-external-fixtures";
+  const scope = getCronScope(request);
+  const diagnostics = createCronDiagnostics({ route, dryRun: scope.dryRun });
   const auth = verifyCronRequest(request);
 
   if (!auth.ok) {
@@ -104,7 +108,7 @@ export async function GET(request: Request) {
   }
 
   const searchParams = new URL(request.url).searchParams;
-  const dryRun = readDryRun(request);
+  const dryRun = scope.dryRun;
   const now = new Date();
   const dateFrom = searchParams.get("date_from") ?? formatDateOnly(addDays(now, -2));
   const dateTo = searchParams.get("date_to") ?? formatDateOnly(addDays(now, 60));
@@ -116,15 +120,34 @@ export async function GET(request: Request) {
 
   const { seasons, error: seasonError } =
     await loadEligibleExternalFixtureImportSeasons({ supabase });
+  const scopedSeasons = seasons.filter(
+    (season) =>
+      (!scope.seasonId || season.id === scope.seasonId) &&
+      (!scope.competitionCode ||
+        season.base_competition_code === scope.competitionCode),
+  );
+
+  diagnostics.log("eligible-seasons", {
+    eligibleSeasonCount: scopedSeasons.length,
+    seasonIds: scopedSeasons.map((season) => season.id),
+    leagueIds: scopedSeasons.map((season) => season.league_id),
+    competitionCodes: scopedSeasons.map(
+      (season) => season.base_competition_code,
+    ),
+  });
 
   if (seasonError) {
     return Response.json(
       {
-        ok: true,
+        ok: false,
+        route,
+        phase: "eligible-seasons",
         skipped_run: true,
         reason: seasonError.message,
-        dry_run: dryRun,
-        provider_calls_made: 0,
+        dryRun,
+        eligibleSeasonCount: 0,
+        providerConfigCount: 0,
+        apiCallCount: 0,
         results: [],
       },
       { status: 500 },
@@ -132,14 +155,19 @@ export async function GET(request: Request) {
   }
 
   if (
-    seasons.length === 0
+    scopedSeasons.length === 0
   ) {
     return Response.json({
       ok: true,
+      route,
+      phase: "complete",
       skipped_run: true,
       reason: "no eligible active football-data season",
-      dry_run: dryRun,
-      provider_calls_made: 0,
+      dryRun,
+      eligibleSeasonCount: 0,
+      providerConfigCount: 0,
+      apiCallCount: 0,
+      elapsedMs: diagnostics.elapsedMs(),
       results: [],
     });
   }
@@ -147,12 +175,15 @@ export async function GET(request: Request) {
   try {
     const enabledCompetitionCodes = await getCompetitionCodes({
       supabase,
-      baseCompetitionCode: seasons[0].base_competition_code!,
-      includeEnabled: searchParams.get("include_enabled") === "1",
+      baseCompetitionCode: scopedSeasons[0].base_competition_code!,
+      includeEnabled:
+        !scope.competitionCode && searchParams.get("include_enabled") === "1",
     });
     const tasks = new Map(
-      seasons.map((season) => [
-        `${season.base_competition_code}:${season.provider_season ?? ""}`,
+      scopedSeasons.map((season) => [
+        `${season.base_competition_code}:${
+          getFootballDataSeasonQueryValue(season.provider_season) ?? "current"
+        }`,
         { season, competitionCode: season.base_competition_code! },
       ]),
     );
@@ -164,60 +195,123 @@ export async function GET(request: Request) {
         )
       ) {
         tasks.set(`enabled:${competitionCode}`, {
-          season: seasons[0],
+          season: scopedSeasons[0],
           competitionCode,
         });
       }
     }
 
+    const allTasks = [...tasks.values()];
+    const selectedTasks = scope.limitConfigs
+      ? allTasks.slice(0, scope.limitConfigs)
+      : allTasks;
     const results = [];
-    let providerCallsMade = 0;
+    let apiCallCount = 0;
+    let errorCount = 0;
+    let stoppedReason: string | null = null;
+    let failureStatus = 502;
 
-    for (const { season, competitionCode } of tasks.values()) {
-      const result = await importExternalFixturesForSeason({
-        supabase,
-        season,
-        competitionCode,
-        dateFrom,
-        dateTo,
-        dryRun,
-      });
-      providerCallsMade += result.provider_calls_made;
-      results.push(result);
+    diagnostics.log("provider-configs", {
+      eligibleSeasonCount: scopedSeasons.length,
+      providerConfigCount: allTasks.length,
+      configsAttempted: selectedTasks.length,
+    });
+
+    for (const { season, competitionCode } of selectedTasks) {
+      const configStartedAt = performance.now();
+      apiCallCount += 1;
+
+      try {
+        const result = await importExternalFixturesForSeason({
+          supabase,
+          season,
+          competitionCode,
+          dateFrom,
+          dateTo,
+          dryRun,
+        });
+        results.push({
+          ok: true,
+          seasonId: season.id,
+          leagueId: season.league_id,
+          competitionCode,
+          providerSeason: season.provider_season,
+          elapsedMs: Math.round(performance.now() - configStartedAt),
+          ...result,
+        });
+      } catch (error) {
+        errorCount += 1;
+        const errorSummary = getCronErrorSummary(error);
+        failureStatus =
+          errorSummary.providerStatus === 429 ||
+          errorSummary.providerStatus === 504
+            ? errorSummary.providerStatus
+            : 502;
+        diagnostics.logError("provider-config", error, {
+          seasonId: season.id,
+          leagueId: season.league_id,
+          competitionCode,
+          providerSeason: season.provider_season,
+        });
+        results.push({
+          ok: false,
+          seasonId: season.id,
+          leagueId: season.league_id,
+          competitionCode,
+          providerSeason: season.provider_season,
+          elapsedMs: Math.round(performance.now() - configStartedAt),
+          ...errorSummary,
+        });
+
+        if (errorSummary.providerStatus === 429) {
+          stoppedReason = "provider rate limited; remaining configs not attempted";
+          break;
+        }
+      }
     }
 
-    return Response.json({
-      ok: true,
+    const response = {
+      ok: errorCount === 0,
+      route,
+      phase: "complete",
       skipped_run: false,
-      dry_run: dryRun,
+      dryRun,
       window: { date_from: dateFrom, date_to: dateTo },
-      season_configurations: seasons.length,
+      eligibleSeasonCount: scopedSeasons.length,
+      providerConfigCount: allTasks.length,
+      configsAttempted: selectedTasks.length,
       competition_codes: [
-        ...new Set([...tasks.values()].map((task) => task.competitionCode)),
+        ...new Set(selectedTasks.map((task) => task.competitionCode)),
       ],
-      provider_calls_made: providerCallsMade,
+      apiCallCount,
+      errorCount,
+      stoppedReason,
+      elapsedMs: diagnostics.elapsedMs(),
       results,
+    };
+
+    return Response.json(response, {
+      status:
+        errorCount === 0
+          ? 200
+          : errorCount < selectedTasks.length
+            ? 207
+            : failureStatus,
     });
   } catch (error) {
-    if (error instanceof FootballDataError) {
-      return Response.json(
-        {
-          ok: false,
-          error: error.message,
-          provider_status: error.status,
-          x_requestcounter_reset: error.resetSeconds,
-        },
-        { status: error.status === 429 ? 429 : 502 },
-      );
-    }
+    diagnostics.logError("setup", error);
 
     return Response.json(
       {
         ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not import external fixtures.",
+        route,
+        phase: "setup",
+        dryRun,
+        eligibleSeasonCount: scopedSeasons.length,
+        providerConfigCount: 0,
+        apiCallCount: 0,
+        elapsedMs: diagnostics.elapsedMs(),
+        ...getCronErrorSummary(error),
       },
       { status: 500 },
     );

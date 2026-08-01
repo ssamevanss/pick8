@@ -187,6 +187,87 @@ passes the selected league's active season. Direct calls with no season, an
 archived season, or a season in an inactive league are rejected rather than
 falling back to a global active season.
 
+#### Targeted cron failure diagnostics
+
+Set `DEBUG_CRON=1` temporarily in the runtime environment to log safe phase
+timings, season/league ids, competition/provider configuration, call counts,
+skip reasons, and error stacks. Logs never include cron secrets, provider keys,
+authorization headers, invite codes, or email addresses. Remove or disable the
+flag after diagnosis. Provider calls time out after 15 seconds by default;
+`FOOTBALL_DATA_TIMEOUT_MS` may be set from 5000–30000 when diagnosing a slow
+provider.
+
+Provider/cache routes accept these optional query parameters:
+
+- `season_id=<uuid>` — one active season only.
+- `competition_code=PL` — active configs for one competition.
+- `limit_configs=1` — cap configs/seasons attempted in this invocation, up to 10.
+- `dry_run=1` — no cache/application writes or email sends.
+
+Run all current configurations locally:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "http://localhost:3000/api/cron/import-external-fixtures?dry_run=1"
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "http://localhost:3000/api/cron/refresh-external-fixtures?dry_run=1"
+```
+
+Isolate one local season or competition:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "http://localhost:3000/api/cron/import-external-fixtures?dry_run=1&season_id=<season_id>&limit_configs=1"
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "http://localhost:3000/api/cron/refresh-external-fixtures?dry_run=1&competition_code=PD&limit_configs=1"
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "http://localhost:3000/api/cron/refresh-standings?dry_run=1&competition_code=PD&limit_configs=1"
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "http://localhost:3000/api/cron/auto-pick-fixtures?dry_run=1&season_id=<season_id>"
+```
+
+Equivalent production dry-runs:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "https://whoyougot.ie/api/cron/import-external-fixtures?dry_run=1&limit_configs=1"
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "https://whoyougot.ie/api/cron/refresh-external-fixtures?dry_run=1&limit_configs=1"
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "https://whoyougot.ie/api/cron/refresh-standings?dry_run=1&limit_configs=1"
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "https://whoyougot.ie/api/cron/auto-pick-fixtures?dry_run=1&limit_configs=1"
+```
+
+Responses include `route`, `phase`, `eligibleSeasonCount`,
+`providerConfigCount`, `apiCallCount`, `elapsedMs`, and per-config/season
+results. A partial run returns HTTP 207 with both successes and failures. A
+provider 429 stops further calls for that route invocation. Dry-run fixture and
+standings samples are capped and omit raw provider payloads.
+
+The shared `seasons.provider_season` value is the provider's internal season id
+used to match cached rows. It must not be sent directly as football-data.org's
+competition `season=` query parameter, which expects a four-digit start year.
+Provider routes now omit internal ids and use the provider's current season;
+only an explicitly stored four-digit year is sent as `season=`.
+
+#### League-aware email links
+
+Picker-up-next, predictions-open, and 24-hour reminder emails use absolute URLs
+from `NEXT_PUBLIC_SITE_URL` and include league plus season context:
+
+```text
+https://whoyougot.ie/leagues/select?league=<league_id>&season=<season_id>&next=%2Fpredictions%3Fgameweek%3D<gameweek_id>
+https://whoyougot.ie/leagues/select?league=<league_id>&season=<season_id>&next=%2Fpick-fixtures%3Fgameweek%3D<gameweek_id>
+```
+
+The selector revalidates current membership and season ownership before setting
+`selected_league_id`. Removed/disabled members return safely to League Hub. If
+the linked season has since been archived, the selector opens that league's
+archived leaderboard instead of silently opening a newer active season. Weekly
+result/highlight email delivery is not currently implemented; the weekly
+preference is stored for future use only.
+
 ### Final bad-state checks
 
 - A league with no active season is a supported between-season state. Player

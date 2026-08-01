@@ -110,13 +110,36 @@ function getResetSeconds(headers: Headers) {
 }
 
 async function footballDataFetch(endpoint: string): Promise<FootballDataFetchResult> {
-  const response = await fetch(`${FOOTBALL_DATA_API_BASE}${endpoint}`, {
-    headers: {
-      "X-Auth-Token": getApiKey(),
-      Accept: "application/json",
-    },
-    cache: "no-store",
-  });
+  const configuredTimeout = Number(process.env.FOOTBALL_DATA_TIMEOUT_MS);
+  const timeoutMs =
+    Number.isFinite(configuredTimeout) && configuredTimeout >= 5_000
+      ? Math.min(configuredTimeout, 30_000)
+      : 15_000;
+  let response: Response;
+
+  try {
+    response = await fetch(`${FOOTBALL_DATA_API_BASE}${endpoint}`, {
+      headers: {
+        "X-Auth-Token": getApiKey(),
+        Accept: "application/json",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.name === "AbortError" || error.name === "TimeoutError")
+    ) {
+      throw new FootballDataError(
+        `football-data.org request timed out after ${timeoutMs}ms.`,
+        504,
+        null,
+      );
+    }
+
+    throw error;
+  }
   const resetSeconds = getResetSeconds(response.headers);
   let data: JsonRecord | null = null;
 
@@ -151,6 +174,19 @@ async function footballDataFetch(endpoint: string): Promise<FootballDataFetchRes
   }
 
   return { data, status: response.status, ok: true, resetSeconds };
+}
+
+export function getFootballDataSeasonQueryValue(
+  providerSeason: string | null | undefined,
+) {
+  const normalized = providerSeason?.trim();
+
+  // The cached provider_season is normally football-data.org's internal
+  // season id (for example "2518"). Competition endpoints instead expect a
+  // four-digit start year, so internal ids must never be sent as `season=`.
+  return normalized && /^(19|20)\d{2}$/.test(normalized)
+    ? normalized
+    : undefined;
 }
 
 function requireFootballDataSuccess(result: FootballDataFetchResult) {

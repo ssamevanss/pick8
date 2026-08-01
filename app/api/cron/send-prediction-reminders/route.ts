@@ -6,6 +6,10 @@ import {
 import { getSiteUrl } from "@/utils/email";
 import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
 import { createAdminClient } from "@/utils/supabase/admin";
+import {
+  createCronDiagnostics,
+  getCronScope,
+} from "@/utils/cron-diagnostics";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +31,29 @@ type FixtureRow = {
   external_provider: string | null;
   external_fixture_id: string | null;
 };
+
+function summarizeDeliveryResult(result: {
+  summaries: {
+    event_key: string;
+    email_type: string;
+    user_id: string;
+    status: string;
+    reason?: string;
+  }[];
+  error: string | null;
+}) {
+  return {
+    summaryCount: result.summaries.length,
+    summaries: result.summaries.slice(0, 20).map((summary) => ({
+      event_key: summary.event_key,
+      email_type: summary.email_type,
+      user_id: summary.user_id,
+      status: summary.status,
+      reason: summary.reason,
+    })),
+    error: result.error,
+  };
+}
 
 function verifyCronRequest(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
@@ -156,6 +183,9 @@ async function findNextActionablePickerGameweek({
 }
 
 export async function GET(request: Request) {
+  const route = "/api/cron/send-prediction-reminders";
+  const scope = getCronScope(request);
+  const diagnostics = createCronDiagnostics({ route, dryRun: scope.dryRun });
   const auth = verifyCronRequest(request);
 
   if (!auth.ok) {
@@ -170,13 +200,18 @@ export async function GET(request: Request) {
   }
 
   const url = new URL(request.url);
-  const isDryRun = url.searchParams.get("dry_run") === "1";
+  const isDryRun = scope.dryRun;
   const siteUrl = getSiteUrl(url.origin);
 
   if (!emailEnvironmentIsConfigured() && !isDryRun) {
     return Response.json({
       ok: false,
+      route,
+      phase: "configuration",
       dryRun: isDryRun,
+      eligibleSeasonCount: 0,
+      providerConfigCount: 0,
+      apiCallCount: 0,
       warning: auth.warning,
       error: "Email is not configured.",
       pickerUpNext: [],
@@ -189,6 +224,7 @@ export async function GET(request: Request) {
   try {
     supabase = createAdminClient();
   } catch (error) {
+    diagnostics.logError("admin-client", error);
     return Response.json(
       {
         ok: false,
@@ -209,6 +245,7 @@ export async function GET(request: Request) {
     .limit(1);
 
   if (emailLogPreflightError) {
+    diagnostics.logError("email-log-preflight", emailLogPreflightError);
     return Response.json(
       {
         ok: false,
@@ -224,33 +261,63 @@ export async function GET(request: Request) {
 
   const { data: activeSeasons, error: seasonError } = await supabase
     .from("seasons")
-    .select("id, name, leagues!inner(status)")
+    .select("id, league_id, name, leagues!inner(status)")
     .eq("status", "active")
     .eq("leagues.status", "active")
     .order("created_at", { ascending: true });
 
   if (seasonError) {
+    diagnostics.logError("eligible-seasons", seasonError);
     return Response.json(
-      { ok: false, dryRun: isDryRun, error: seasonError.message },
+      {
+        ok: false,
+        route,
+        phase: "eligible-seasons",
+        dryRun: isDryRun,
+        eligibleSeasonCount: 0,
+        providerConfigCount: 0,
+        apiCallCount: 0,
+        error: seasonError.message,
+      },
       { status: 500 },
     );
   }
 
-  if (!activeSeasons?.length) {
+  const filteredSeasons = (activeSeasons ?? []).filter(
+    (season) => !scope.seasonId || season.id === scope.seasonId,
+  );
+  const scopedSeasons = scope.limitConfigs
+    ? filteredSeasons.slice(0, scope.limitConfigs)
+    : filteredSeasons;
+
+  diagnostics.log("eligible-seasons", {
+    eligibleSeasonCount: filteredSeasons.length,
+    seasonsAttempted: scopedSeasons.length,
+    seasonIds: scopedSeasons.map((season) => season.id),
+    leagueIds: scopedSeasons.map((season) => season.league_id),
+  });
+
+  if (!scopedSeasons.length) {
     return Response.json({
       ok: true,
+      route,
+      phase: "complete",
       dryRun: isDryRun,
       warning: auth.warning,
       message: "No active season found.",
       pickerUpNext: [],
       predictionDeadlineReminders: [],
+      eligibleSeasonCount: 0,
+      providerConfigCount: 0,
+      apiCallCount: 0,
+      elapsedMs: diagnostics.elapsedMs(),
     });
   }
 
   const now = new Date();
   const seasonResults = [];
 
-  for (const activeSeason of activeSeasons) {
+  for (const activeSeason of scopedSeasons) {
     const { data: gameweeks, error: gameweeksError } = await supabase
       .from("gameweeks")
       .select("id, season_id, gameweek_number, name, fixture_picker_id")
@@ -258,6 +325,10 @@ export async function GET(request: Request) {
       .order("gameweek_number", { ascending: true });
 
     if (gameweeksError) {
+      diagnostics.logError("gameweeks", gameweeksError, {
+        seasonId: activeSeason.id,
+        leagueId: activeSeason.league_id,
+      });
       return Response.json(
         { ok: false, dryRun: isDryRun, error: gameweeksError.message },
         { status: 500 },
@@ -278,6 +349,10 @@ export async function GET(request: Request) {
         : { data: [], error: null };
 
     if (fixturesError) {
+      diagnostics.logError("fixtures", fixturesError, {
+        seasonId: activeSeason.id,
+        leagueId: activeSeason.league_id,
+      });
       return Response.json(
         { ok: false, dryRun: isDryRun, error: fixturesError.message },
         { status: 500 },
@@ -335,9 +410,21 @@ export async function GET(request: Request) {
           !result.predictionDeadlineResult.error,
       ),
     dryRun: isDryRun,
+    route,
+    phase: "complete",
+    eligibleSeasonCount: filteredSeasons.length,
+    providerConfigCount: 0,
+    apiCallCount: 0,
+    elapsedMs: diagnostics.elapsedMs(),
     warning: auth.warning,
     seasonsProcessed: seasonResults.length,
-    results: seasonResults,
+    results: seasonResults.map((result) => ({
+      season: result.season,
+      pickerResult: summarizeDeliveryResult(result.pickerResult),
+      predictionDeadlineResult: summarizeDeliveryResult(
+        result.predictionDeadlineResult,
+      ),
+    })),
     sentOrWouldSend: sentCount,
     errors: errorCount,
   });

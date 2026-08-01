@@ -7,6 +7,11 @@ import {
   syncExternalFixtureResults,
 } from "@/utils/external-result-sync";
 import { createAdminClient } from "@/utils/supabase/admin";
+import {
+  createCronDiagnostics,
+  getCronErrorSummary,
+  getCronScope,
+} from "@/utils/cron-diagnostics";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +43,9 @@ function verifyCronRequest(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const route = "/api/cron/sync-external-results";
+  const scope = getCronScope(request);
+  const diagnostics = createCronDiagnostics({ route, dryRun: scope.dryRun });
   const auth = verifyCronRequest(request);
 
   if (!auth.ok) {
@@ -52,11 +60,12 @@ export async function GET(request: Request) {
   }
 
   let adminSupabase: ReturnType<typeof createAdminClient>;
-  const dryRun = new URL(request.url).searchParams.get("dry_run") === "1";
+  const dryRun = scope.dryRun;
 
   try {
     adminSupabase = createAdminClient();
   } catch (error) {
+    diagnostics.logError("admin-client", error);
     return Response.json(
       {
         ok: false,
@@ -72,23 +81,49 @@ export async function GET(request: Request) {
   const { seasons, error: seasonError } = await getEligibleActiveSyncSeasons({
     supabase: adminSupabase,
   });
+  const filteredSeasons = seasons.filter(
+    (season) => !scope.seasonId || season.id === scope.seasonId,
+  );
+  const scopedSeasons = scope.limitConfigs
+    ? filteredSeasons.slice(0, scope.limitConfigs)
+    : filteredSeasons;
+
+  diagnostics.log("eligible-seasons", {
+    eligibleSeasonCount: filteredSeasons.length,
+    seasonsAttempted: scopedSeasons.length,
+    seasonIds: scopedSeasons.map((season) => season.id),
+    leagueIds: scopedSeasons.map((season) => season.league_id),
+  });
 
   if (seasonError) {
+    diagnostics.logError("eligible-seasons", seasonError);
     return Response.json(
       {
         ok: false,
+        route,
+        phase: "eligible-seasons",
+        dryRun,
+        eligibleSeasonCount: 0,
+        providerConfigCount: 0,
+        apiCallCount: 0,
         error: seasonError.message,
       },
       { status: 500 },
     );
   }
 
-  if (seasons.length === 0) {
+  if (scopedSeasons.length === 0) {
     return Response.json({
       ok: true,
+      route,
+      phase: "complete",
       skipped_run: true,
       reason: "no eligible active season",
-      dry_run: dryRun,
+      dryRun,
+      eligibleSeasonCount: 0,
+      providerConfigCount: 0,
+      apiCallCount: 0,
+      elapsedMs: diagnostics.elapsedMs(),
       fixtures_checked: 0,
       provider_ids: [],
       provider_status: 200,
@@ -103,7 +138,7 @@ export async function GET(request: Request) {
 
   try {
     const fixtureResults = await Promise.all(
-      seasons.map((season) =>
+      scopedSeasons.map((season) =>
         getCronSyncFixtures({
           supabase: adminSupabase,
           seasonId: season.id,
@@ -130,7 +165,7 @@ export async function GET(request: Request) {
     );
     const results = [];
 
-    for (const [index, season] of seasons.entries()) {
+    for (const [index, season] of scopedSeasons.entries()) {
       const fixtures = fixtureResults[index].fixtures;
 
       if (fixtures.length === 0) {
@@ -156,18 +191,34 @@ export async function GET(request: Request) {
 
     return Response.json({
       ok: true,
+      route,
+      phase: "complete",
       skipped_run: false,
-      dry_run: dryRun,
-      seasons_processed: seasons.length,
+      dryRun,
+      eligibleSeasonCount: filteredSeasons.length,
+      seasonsAttempted: scopedSeasons.length,
+      providerConfigCount: Math.ceil(sharedProviderIds.length / 20),
+      apiCallCount: providerSnapshot.apiCallCount,
+      elapsedMs: diagnostics.elapsedMs(),
       unique_provider_ids: sharedProviderIds.length,
       provider_api_call_count: providerSnapshot.apiCallCount,
       results,
     });
   } catch (error) {
+    diagnostics.logError("sync", error, {
+      eligibleSeasonCount: filteredSeasons.length,
+    });
     if (error instanceof FootballDataError) {
       return Response.json(
         {
           ok: false,
+          route,
+          phase: "provider-fetch",
+          dryRun,
+          eligibleSeasonCount: filteredSeasons.length,
+          providerConfigCount: 0,
+          apiCallCount: 0,
+          elapsedMs: diagnostics.elapsedMs(),
           ...getFootballDataErrorResponse(error),
         },
         { status: error.status === 429 ? 429 : 502 },
@@ -177,10 +228,14 @@ export async function GET(request: Request) {
     return Response.json(
       {
         ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not fetch football-data.org results.",
+        route,
+        phase: "sync",
+        dryRun,
+        eligibleSeasonCount: filteredSeasons.length,
+        providerConfigCount: 0,
+        apiCallCount: 0,
+        elapsedMs: diagnostics.elapsedMs(),
+        ...getCronErrorSummary(error),
       },
       { status: 500 },
     );

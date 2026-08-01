@@ -1,9 +1,14 @@
 import {
-  FootballDataError,
   getEligibleActiveStandingsSeasons,
   refreshTeamStandings,
 } from "@/utils/team-standings";
 import { createAdminClient } from "@/utils/supabase/admin";
+import { getFootballDataSeasonQueryValue } from "@/utils/football-data/client";
+import {
+  createCronDiagnostics,
+  getCronErrorSummary,
+  getCronScope,
+} from "@/utils/cron-diagnostics";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +40,9 @@ function verifyCronRequest(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const route = "/api/cron/refresh-standings";
+  const scope = getCronScope(request);
+  const diagnostics = createCronDiagnostics({ route, dryRun: scope.dryRun });
   const auth = verifyCronRequest(request);
 
   if (!auth.ok) {
@@ -67,75 +75,167 @@ export async function GET(request: Request) {
 
   const { seasons, error: seasonsError } =
     await getEligibleActiveStandingsSeasons({ supabase });
-  const dryRun = new URL(request.url).searchParams.get("dry_run") === "1";
+  const dryRun = scope.dryRun;
+  const scopedSeasons = seasons.filter(
+    (season) =>
+      (!scope.seasonId || season.id === scope.seasonId) &&
+      (!scope.competitionCode ||
+        season.base_competition_code === scope.competitionCode),
+  );
+
+  diagnostics.log("eligible-seasons", {
+    eligibleSeasonCount: scopedSeasons.length,
+    seasonIds: scopedSeasons.map((season) => season.id),
+    leagueIds: scopedSeasons.map((season) => season.league_id),
+    competitionCodes: scopedSeasons.map(
+      (season) => season.base_competition_code,
+    ),
+    providerSeasons: scopedSeasons.map((season) => season.provider_season),
+  });
 
   if (seasonsError) {
     return Response.json(
-      { ok: false, error: seasonsError.message },
+      {
+        ok: false,
+        route,
+        phase: "eligible-seasons",
+        dryRun,
+        eligibleSeasonCount: 0,
+        providerConfigCount: 0,
+        apiCallCount: 0,
+        error: seasonsError.message,
+      },
       { status: 500 },
     );
   }
 
-  if (seasons.length === 0) {
+  if (scopedSeasons.length === 0) {
     return Response.json({
       ok: true,
+      route,
+      phase: "complete",
       skipped_run: true,
       reason: "no eligible active football-data season",
-      dry_run: dryRun,
-      provider_calls_made: 0,
+      dryRun,
+      eligibleSeasonCount: 0,
+      providerConfigCount: 0,
+      apiCallCount: 0,
+      elapsedMs: diagnostics.elapsedMs(),
       results: [],
     });
   }
 
   try {
     const uniqueConfigurations = new Map(
-      seasons.map((season) => [
-        `${season.base_competition_code}:${season.provider_season ?? ""}`,
+      scopedSeasons.map((season) => [
+        `${season.base_competition_code}:${
+          getFootballDataSeasonQueryValue(season.provider_season) ?? "current"
+        }`,
         season,
       ]),
     );
+    const allConfigurations = [...uniqueConfigurations.values()];
+    const selectedConfigurations = scope.limitConfigs
+      ? allConfigurations.slice(0, scope.limitConfigs)
+      : allConfigurations;
     const results = [];
+    let errorCount = 0;
+    let apiCallCount = 0;
+    let stoppedReason: string | null = null;
+    let failureStatus = 502;
 
-    for (const season of uniqueConfigurations.values()) {
-      results.push(
-        await refreshTeamStandings({
+    diagnostics.log("provider-configs", {
+      eligibleSeasonCount: scopedSeasons.length,
+      providerConfigCount: allConfigurations.length,
+      configsAttempted: selectedConfigurations.length,
+    });
+
+    for (const season of selectedConfigurations) {
+      const configStartedAt = performance.now();
+      apiCallCount += 1;
+
+      try {
+        const result = await refreshTeamStandings({
           supabase,
           season,
           competitionCode: season.base_competition_code!,
           dryRun,
-        }),
-      );
+        });
+        results.push({
+          ok: true,
+          leagueId: season.league_id,
+          elapsedMs: Math.round(performance.now() - configStartedAt),
+          ...result,
+        });
+      } catch (error) {
+        errorCount += 1;
+        const errorSummary = getCronErrorSummary(error);
+        failureStatus =
+          errorSummary.providerStatus === 429 ||
+          errorSummary.providerStatus === 504
+            ? errorSummary.providerStatus
+            : 502;
+        diagnostics.logError("provider-config", error, {
+          seasonId: season.id,
+          leagueId: season.league_id,
+          competitionCode: season.base_competition_code,
+          providerSeason: season.provider_season,
+        });
+        results.push({
+          ok: false,
+          seasonId: season.id,
+          leagueId: season.league_id,
+          competitionCode: season.base_competition_code,
+          providerSeason: season.provider_season,
+          elapsedMs: Math.round(performance.now() - configStartedAt),
+          ...errorSummary,
+        });
+
+        if (errorSummary.providerStatus === 429) {
+          stoppedReason = "provider rate limited; remaining configs not attempted";
+          break;
+        }
+      }
     }
 
-    return Response.json({
-      ok: true,
+    const response = {
+      ok: errorCount === 0,
+      route,
+      phase: "complete",
       skipped_run: false,
-      active_seasons: seasons.length,
-      provider_configurations: uniqueConfigurations.size,
-      provider_calls_made: results.reduce(
-        (total, result) => total + result.provider_calls_made,
-        0,
-      ),
+      dryRun,
+      eligibleSeasonCount: scopedSeasons.length,
+      providerConfigCount: allConfigurations.length,
+      configsAttempted: selectedConfigurations.length,
+      apiCallCount,
+      errorCount,
+      stoppedReason,
+      elapsedMs: diagnostics.elapsedMs(),
       results,
+    };
+
+    return Response.json(response, {
+      status:
+        errorCount === 0
+          ? 200
+          : errorCount < selectedConfigurations.length
+            ? 207
+            : failureStatus,
     });
   } catch (error) {
-    if (error instanceof FootballDataError) {
-      return Response.json(
-        {
-          ok: false,
-          error: error.message,
-          provider_status: error.status,
-          x_requestcounter_reset: error.resetSeconds,
-        },
-        { status: error.status === 429 ? 429 : 502 },
-      );
-    }
+    diagnostics.logError("setup", error);
 
     return Response.json(
       {
         ok: false,
-        error:
-          error instanceof Error ? error.message : "Could not refresh standings.",
+        route,
+        phase: "setup",
+        dryRun,
+        eligibleSeasonCount: scopedSeasons.length,
+        providerConfigCount: 0,
+        apiCallCount: 0,
+        elapsedMs: diagnostics.elapsedMs(),
+        ...getCronErrorSummary(error),
       },
       { status: 500 },
     );

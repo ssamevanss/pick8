@@ -1,10 +1,15 @@
 import {
-  FootballDataError,
   fetchExternalFixtureRefreshProviderSnapshot,
   getEligibleActiveRefreshSeasons,
   refreshExternalFixtures,
 } from "@/utils/external-fixture-refresh";
 import { createAdminClient } from "@/utils/supabase/admin";
+import {
+  capItems,
+  createCronDiagnostics,
+  getCronErrorSummary,
+  getCronScope,
+} from "@/utils/cron-diagnostics";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +41,9 @@ function verifyCronRequest(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const route = "/api/cron/refresh-external-fixtures";
+  const scope = getCronScope(request);
+  const diagnostics = createCronDiagnostics({ route, dryRun: scope.dryRun });
   const auth = verifyCronRequest(request);
 
   if (!auth.ok) {
@@ -69,26 +77,56 @@ export async function GET(request: Request) {
   const { seasons, error: seasonError } = await getEligibleActiveRefreshSeasons({
     supabase: adminSupabase,
   });
+  const filteredSeasons = seasons.filter(
+    (season) =>
+      (!scope.seasonId || season.id === scope.seasonId) &&
+      (!scope.competitionCode ||
+        season.base_competition_code === scope.competitionCode),
+  );
+  const scopedSeasons = scope.limitConfigs
+    ? filteredSeasons.slice(0, scope.limitConfigs)
+    : filteredSeasons;
+
+  diagnostics.log("eligible-seasons", {
+    eligibleSeasonCount: filteredSeasons.length,
+    seasonsAttempted: scopedSeasons.length,
+    seasonIds: scopedSeasons.map((season) => season.id),
+    leagueIds: scopedSeasons.map((season) => season.league_id),
+    competitionCodes: scopedSeasons.map(
+      (season) => season.base_competition_code,
+    ),
+  });
 
   if (seasonError) {
     return Response.json(
       {
         ok: false,
+        route,
+        phase: "eligible-seasons",
+        dryRun: scope.dryRun,
+        eligibleSeasonCount: 0,
+        providerConfigCount: 0,
+        apiCallCount: 0,
         error: seasonError.message,
       },
       { status: 500 },
     );
   }
 
-  const dryRun = new URL(request.url).searchParams.get("dry_run") === "1";
+  const dryRun = scope.dryRun;
 
-  if (seasons.length === 0) {
+  if (scopedSeasons.length === 0) {
     return Response.json({
       ok: true,
+      route,
+      phase: "complete",
       skipped_run: true,
       reason: "no eligible active season",
-      dry_run: dryRun,
-      provider_calls_made: 0,
+      dryRun,
+      eligibleSeasonCount: 0,
+      providerConfigCount: 0,
+      apiCallCount: 0,
+      elapsedMs: diagnostics.elapsedMs(),
       external_fixtures_checked: 0,
       external_fixtures_updated: 0,
       selected_app_fixtures_checked: 0,
@@ -103,49 +141,105 @@ export async function GET(request: Request) {
   try {
     const providerSnapshot = await fetchExternalFixtureRefreshProviderSnapshot({
       supabase: adminSupabase,
-      seasons,
+      seasons: scopedSeasons,
     });
     const results = [];
+    let errorCount = 0;
 
-    for (const season of seasons) {
-      results.push(
-        await refreshExternalFixtures({
+    diagnostics.log("provider-snapshot", {
+      eligibleSeasonCount: filteredSeasons.length,
+      providerConfigCount:
+        providerSnapshot.byRequestKey.size +
+        providerSnapshot.errorsByRequestKey.size,
+      apiCallCount: providerSnapshot.providerCallCount,
+      failedProviderConfigs: providerSnapshot.errorsByRequestKey.size,
+    });
+
+    for (const season of scopedSeasons) {
+      const seasonStartedAt = performance.now();
+
+      try {
+        const result = await refreshExternalFixtures({
           supabase: adminSupabase,
           season,
           dryRun,
           providerSnapshot,
-        }),
-      );
+        });
+        results.push({
+          ...result,
+          ok: true,
+          elapsedMs: Math.round(performance.now() - seasonStartedAt),
+          planned_updates: capItems(result.planned_updates),
+          skipped: capItems(result.skipped),
+        });
+      } catch (error) {
+        errorCount += 1;
+        diagnostics.logError("season-apply", error, {
+          seasonId: season.id,
+          leagueId: season.league_id,
+          competitionCode: season.base_competition_code,
+          providerSeason: season.provider_season,
+        });
+        results.push({
+          ok: false,
+          seasonId: season.id,
+          leagueId: season.league_id,
+          competitionCode: season.base_competition_code,
+          providerSeason: season.provider_season,
+          elapsedMs: Math.round(performance.now() - seasonStartedAt),
+          ...getCronErrorSummary(error),
+        });
+      }
     }
 
-    return Response.json({
-      ok: true,
+    const providerConfigCount =
+      providerSnapshot.byRequestKey.size +
+      providerSnapshot.errorsByRequestKey.size;
+    const response = {
+      ok: errorCount === 0,
+      route,
+      phase: "complete",
       skipped_run: false,
-      dry_run: dryRun,
-      seasons_processed: seasons.length,
-      provider_calls_made: providerSnapshot.byRequestKey.size,
+      dryRun,
+      eligibleSeasonCount: filteredSeasons.length,
+      seasonsAttempted: scopedSeasons.length,
+      providerConfigCount,
+      apiCallCount: providerSnapshot.providerCallCount,
+      errorCount,
+      elapsedMs: diagnostics.elapsedMs(),
+      providerErrors: [...providerSnapshot.errorsByRequestKey.values()],
       results,
+    };
+    const providerFailureStatus = [
+      ...providerSnapshot.errorsByRequestKey.values(),
+    ].find(
+      (providerError) =>
+        providerError.providerStatus === 429 ||
+        providerError.providerStatus === 504,
+    )?.providerStatus;
+
+    return Response.json(response, {
+      status:
+        errorCount === 0
+          ? 200
+          : errorCount < scopedSeasons.length
+            ? 207
+            : (providerFailureStatus ?? 502),
     });
   } catch (error) {
-    if (error instanceof FootballDataError) {
-      return Response.json(
-        {
-          ok: false,
-          error: error.message,
-          provider_status: error.status,
-          x_requestcounter_reset: error.resetSeconds,
-        },
-        { status: error.status === 429 ? 429 : 502 },
-      );
-    }
+    diagnostics.logError("provider-snapshot", error);
 
     return Response.json(
       {
         ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not refresh external fixtures.",
+        route,
+        phase: "provider-snapshot",
+        dryRun,
+        eligibleSeasonCount: filteredSeasons.length,
+        providerConfigCount: 0,
+        apiCallCount: 0,
+        elapsedMs: diagnostics.elapsedMs(),
+        ...getCronErrorSummary(error),
       },
       { status: 500 },
     );

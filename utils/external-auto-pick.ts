@@ -193,10 +193,12 @@ export async function autoPickMissingFixtures({
 
   const { data: eligiblePickerRows, error: eligiblePickerError } = await supabase
     .from("league_memberships")
-    .select("user_id, profiles!inner(status)")
+    .select(
+      "user_id, profile:profiles!league_memberships_user_id_fkey!inner(status)",
+    )
     .eq("league_id", season.league_id)
     .eq("status", "active")
-    .eq("profiles.status", "approved");
+    .eq("profile.status", "approved");
 
   if (eligiblePickerError) {
     throw new Error(eligiblePickerError.message);
@@ -274,6 +276,23 @@ export async function autoPickMissingFixtures({
 
   const externalFixtureList =
     (externalFixtures as ExternalFixtureCandidate[] | null) ?? [];
+
+  if (externalFixtureList.length === 0) {
+    return {
+      dry_run: dryRun,
+      season,
+      gameweeks_checked: gameweekList.length,
+      cache_fixture_count: 0,
+      candidate_gameweeks: [],
+      created_count: 0,
+      updated_gameweeks: 0,
+      skipped: [
+        {
+          reason: `no cached future fixtures for ${season.base_competition_code}`,
+        },
+      ],
+    };
+  }
   const groups = getGroupMap(externalFixtureList);
   const candidateGameweeks = [];
   const skipped = [];
@@ -515,6 +534,8 @@ export async function autoPickMissingFixtures({
   return {
     dry_run: dryRun,
     season,
+    gameweeks_checked: gameweekList.length,
+    cache_fixture_count: externalFixtureList.length,
     deadline_buffer_hours: deadlineBufferHours,
     candidate_gameweeks: candidateGameweeks,
     created_count: createdCount,

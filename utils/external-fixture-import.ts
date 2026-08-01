@@ -1,14 +1,17 @@
 import {
   fetchCompetitionMatches,
+  getFootballDataSeasonQueryValue,
   normalizeFootballDataMatch,
   type NormalizedFootballDataFixture,
 } from "@/utils/football-data/client";
 import { createAdminClient } from "@/utils/supabase/admin";
+import { stripRawPayload } from "@/utils/cron-diagnostics";
 
 type AdminSupabaseClient = ReturnType<typeof createAdminClient>;
 
 export type ExternalFixtureImportSeason = {
   id: string;
+  league_id: string;
   name: string;
   status: string | null;
   base_provider: string | null;
@@ -43,6 +46,15 @@ export function validateDateWindow(dateFrom: string, dateTo: string) {
 
   if (dateFrom > dateTo) {
     return "date_from must be before or equal to date_to.";
+  }
+
+  const windowDays =
+    (Date.parse(`${dateTo}T00:00:00Z`) -
+      Date.parse(`${dateFrom}T00:00:00Z`)) /
+    (24 * 60 * 60 * 1000);
+
+  if (windowDays > 93) {
+    return "External fixture date windows cannot exceed 93 days.";
   }
 
   return null;
@@ -103,7 +115,7 @@ export async function loadExternalFixtureImportSeason({
   const { data: season, error } = await supabase
     .from("seasons")
     .select(
-      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
+      "id, league_id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
     )
     .eq("id", seasonId)
     .eq("status", "active")
@@ -131,7 +143,7 @@ export async function loadEligibleExternalFixtureImportSeasons({
   const { data, error } = await supabase
     .from("seasons")
     .select(
-      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
+      "id, league_id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
     )
     .eq("status", "active")
     .eq("base_provider", "football_data")
@@ -170,7 +182,7 @@ export async function importExternalFixturesForSeason({
     dateTo,
     season:
       competitionCode === season.base_competition_code
-        ? season.provider_season ?? undefined
+        ? getFootballDataSeasonQueryValue(season.provider_season)
         : undefined,
   });
   const fixtureMatches = matches as Record<string, unknown>[];
@@ -195,9 +207,9 @@ export async function importExternalFixturesForSeason({
       provider_request: providerRequest,
       provider_calls_made: 1,
       fetched_count: fixtures.length,
-      planned_updates: fixtures.slice(0, 10),
+      planned_updates: fixtures.slice(0, 5).map(stripRawPayload),
       skipped: [],
-      sample: fixtures.slice(0, 10),
+      sample: fixtures.slice(0, 3).map(stripRawPayload),
     };
   }
 

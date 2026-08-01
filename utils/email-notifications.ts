@@ -99,10 +99,12 @@ async function getSeasonActiveMemberIds({
 
   const { data: memberships, error } = await supabase
     .from("league_memberships")
-    .select("user_id, profiles!inner(status)")
+    .select(
+      "user_id, profile:profiles!league_memberships_user_id_fkey!inner(status)",
+    )
     .eq("league_id", season.league_id)
     .eq("status", "active")
-    .eq("profiles.status", "approved");
+    .eq("profile.status", "approved");
 
   return {
     userIds: ((memberships as { user_id: string }[] | null) ?? []).map(
@@ -113,18 +115,22 @@ async function getSeasonActiveMemberIds({
   };
 }
 
-function getLeagueRouteUrl({
+export function buildLeagueEmailUrl({
   siteUrl,
   leagueId,
+  seasonId,
   next,
 }: {
   siteUrl: string;
   leagueId: string;
+  seasonId: string;
   next: string;
 }) {
-  return `${siteUrl}/leagues/select?league=${encodeURIComponent(
-    leagueId,
-  )}&next=${encodeURIComponent(next)}`;
+  const url = new URL("/leagues/select", siteUrl);
+  url.searchParams.set("league", leagueId);
+  url.searchParams.set("season", seasonId);
+  url.searchParams.set("next", next);
+  return url.toString();
 }
 
 function escapeHtml(value: string) {
@@ -614,9 +620,10 @@ export async function sendPickerUpNextEmail({
   });
   const selectionStatus = getFixtureSelectionStatus(fixtures);
   const gameweekName = formatGameweekName(gameweek);
-  const buttonUrl = getLeagueRouteUrl({
+  const buttonUrl = buildLeagueEmailUrl({
     siteUrl,
     leagueId,
+    seasonId: gameweek.season_id,
     next: `/pick-fixtures?gameweek=${gameweek.id}`,
   });
   const fixtureText = selectionStatus.isComplete
@@ -732,9 +739,10 @@ export async function sendPredictionsOpenEmails({
   }
 
   const gameweekName = formatGameweekName(gameweek);
-  const buttonUrl = getLeagueRouteUrl({
+  const buttonUrl = buildLeagueEmailUrl({
     siteUrl,
     leagueId,
+    seasonId: gameweek.season_id,
     next: `/predictions?gameweek=${gameweek.id}`,
   });
   const fixtureLines = getFixtureLines(fixtures);
@@ -1005,9 +1013,10 @@ export async function sendPredictionDeadlineReminderEmails({
   for (const gameweek of candidateGameweeks) {
     const actionableFixtures = actionableByGameweek.get(gameweek.id) ?? [];
     const gameweekName = formatGameweekName(gameweek);
-    const buttonUrl = getLeagueRouteUrl({
+    const buttonUrl = buildLeagueEmailUrl({
       siteUrl,
       leagueId,
+      seasonId,
       next: `/predictions?gameweek=${gameweek.id}`,
     });
     const firstKickoff = actionableFixtures[0]?.kickoff_at;

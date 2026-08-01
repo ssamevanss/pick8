@@ -203,10 +203,12 @@ async function getLeagueMemberUserIdsExcept({
 }) {
   const { data: memberships, error } = await admin
     .from("league_memberships")
-    .select("user_id, profiles!inner(status)")
+    .select(
+      "user_id, profile:profiles!league_memberships_user_id_fkey!inner(status)",
+    )
     .eq("league_id", leagueId)
     .eq("status", "active")
-    .eq("profiles.status", "approved");
+    .eq("profile.status", "approved");
   const excluded = new Set(excludedUserIds.filter(Boolean));
 
   if (error) {

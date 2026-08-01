@@ -19,7 +19,8 @@ function safeDestination(value: string | null) {
 export async function GET(request: NextRequest) {
   const routeStartedAt = startServerTiming();
   const leagueId = request.nextUrl.searchParams.get("league");
-  const destination = safeDestination(request.nextUrl.searchParams.get("next"));
+  const seasonId = request.nextUrl.searchParams.get("season");
+  let destination = safeDestination(request.nextUrl.searchParams.get("next"));
   const supabase = await createClient();
   const {
     data: { user },
@@ -47,6 +48,27 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(
       new URL("/leagues?error=Membership+required", request.url),
     );
+  }
+
+  if (seasonId) {
+    const { data: season, error: seasonError } = await supabase
+      .from("seasons")
+      .select("id, status, show_in_archive")
+      .eq("id", seasonId)
+      .eq("league_id", leagueId)
+      .maybeSingle();
+
+    if (seasonError || !season) {
+      return NextResponse.redirect(
+        new URL("/leagues?error=Season+not+available", request.url),
+      );
+    }
+
+    if (season.status === "archived") {
+      destination = `/leaderboard?season=${encodeURIComponent(season.id)}`;
+    } else if (season.status !== "active") {
+      destination = "/leagues?error=Season+is+not+active";
+    }
   }
 
   const response = NextResponse.redirect(new URL(destination, request.url));

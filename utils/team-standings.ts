@@ -1,8 +1,10 @@
 import {
   fetchCompetitionStandings,
   FootballDataError,
+  getFootballDataSeasonQueryValue,
 } from "@/utils/football-data/client";
 import { createAdminClient } from "@/utils/supabase/admin";
+import { stripRawPayload } from "@/utils/cron-diagnostics";
 
 type AdminSupabaseClient = ReturnType<typeof createAdminClient>;
 type JsonRecord = Record<string, unknown>;
@@ -11,6 +13,7 @@ export { FootballDataError };
 
 export type StandingsRefreshSeason = {
   id: string;
+  league_id: string;
   name: string;
   status: string | null;
   base_provider: string | null;
@@ -42,7 +45,7 @@ export async function getEligibleActiveStandingsSeason({
 }) {
   const { data: activeSeason, error } = await supabase
     .from("seasons")
-    .select("id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)")
+    .select("id, league_id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)")
     .eq("id", seasonId)
     .eq("status", "active")
     .eq("leagues.status", "active")
@@ -69,7 +72,7 @@ export async function getEligibleActiveStandingsSeasons({
   const { data, error } = await supabase
     .from("seasons")
     .select(
-      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
+      "id, league_id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
     )
     .eq("status", "active")
     .eq("base_provider", "football_data")
@@ -100,7 +103,7 @@ export async function refreshTeamStandings({
     competitionCode,
     season:
       competitionCode === season.base_competition_code
-        ? season.provider_season ?? undefined
+        ? getFootballDataSeasonQueryValue(season.provider_season)
         : undefined,
   });
   const standings = Array.isArray(data?.standings)
@@ -168,7 +171,8 @@ export async function refreshTeamStandings({
     provider_calls_made: 1,
     fetched_count: rows.length,
     upserted_count: dryRun ? 0 : rows.length,
-    planned_updates: rows.slice(0, 10),
+    skipped_reason: rows.length === 0 ? "provider returned no total standings rows" : null,
+    planned_updates: rows.slice(0, 5).map(stripRawPayload),
     last_synced_at: dryRun ? null : syncedAt,
   };
 }

@@ -2439,11 +2439,13 @@ export async function saveGameweekPickerAssignments(formData: FormData) {
       const { data: eligiblePicker, error: eligiblePickerError } =
         await adminSupabase
           .from("league_memberships")
-          .select("id, profiles!inner(status)")
+          .select(
+            "id, profile:profiles!league_memberships_user_id_fkey!inner(status)",
+          )
           .eq("league_id", seasonRelation?.league_id ?? "")
           .eq("user_id", fixturePickerId)
           .eq("status", "active")
-          .eq("profiles.status", "approved")
+          .eq("profile.status", "approved")
           .maybeSingle();
 
       if (eligiblePickerError || !eligiblePicker) {
@@ -2983,10 +2985,12 @@ async function getApprovedPlayerIds({
 
   const { data: memberships, error } = await supabase
     .from("league_memberships")
-    .select("user_id, profiles!inner(id, display_name, status)")
+    .select(
+      "user_id, profile:profiles!league_memberships_user_id_fkey!inner(id, display_name, status)",
+    )
     .eq("league_id", season.league_id)
     .eq("status", "active")
-    .eq("profiles.status", "approved")
+    .eq("profile.status", "approved")
     .order("joined_at", { ascending: true });
 
   if (error) {
@@ -2995,14 +2999,14 @@ async function getApprovedPlayerIds({
 
   return ((memberships ?? []) as {
     user_id: string;
-    profiles:
+    profile:
       | { id: string; display_name: string; status: string }
       | { id: string; display_name: string; status: string }[]
       | null;
   }[]).flatMap((membership) => {
-    const profile = Array.isArray(membership.profiles)
-      ? membership.profiles[0]
-      : membership.profiles;
+    const profile = Array.isArray(membership.profile)
+      ? membership.profile[0]
+      : membership.profile;
 
     return profile
       ? [{ id: membership.user_id, display_name: profile.display_name }]

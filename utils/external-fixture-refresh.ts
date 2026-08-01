@@ -1,15 +1,21 @@
 import {
   fetchCompetitionMatches,
   FootballDataError,
+  getFootballDataSeasonQueryValue,
   normalizeFootballDataMatch,
   type NormalizedFootballDataFixture,
 } from "@/utils/football-data/client";
 import { createAdminClient } from "@/utils/supabase/admin";
+import {
+  getCronErrorSummary,
+  type CronErrorSummary,
+} from "@/utils/cron-diagnostics";
 
 type AdminSupabaseClient = ReturnType<typeof createAdminClient>;
 
 export type ExternalFixtureRefreshSeason = {
   id: string;
+  league_id: string;
   name: string;
   status: string | null;
   base_provider: string | null;
@@ -25,6 +31,11 @@ export type ExternalFixtureRefreshProviderSnapshot = {
     string,
     { fixtures: NormalizedFootballDataFixture[]; request: unknown }
   >;
+  errorsByRequestKey: Map<
+    string,
+    CronErrorSummary & { competitionCode: string; providerSeason?: string }
+  >;
+  providerCallCount: number;
 };
 
 type ExistingExternalFixtureRow = {
@@ -170,7 +181,7 @@ export async function fetchExternalFixtureRefreshProviderSnapshot({
     for (const competitionCode of competitionCodes) {
       const providerSeason =
         competitionCode === season.base_competition_code
-          ? season.provider_season ?? undefined
+          ? getFootballDataSeasonQueryValue(season.provider_season)
           : undefined;
       requests.set(getProviderRequestKey(competitionCode, providerSeason), {
         competitionCode,
@@ -181,23 +192,58 @@ export async function fetchExternalFixtureRefreshProviderSnapshot({
 
   const byRequestKey: ExternalFixtureRefreshProviderSnapshot["byRequestKey"] =
     new Map();
+  const errorsByRequestKey: ExternalFixtureRefreshProviderSnapshot["errorsByRequestKey"] =
+    new Map();
+  let providerCallCount = 0;
+  let rateLimitError: CronErrorSummary | null = null;
 
   for (const [requestKey, providerRequest] of requests) {
-    const { matches, request } = await fetchCompetitionMatches({
-      competitionCode: providerRequest.competitionCode,
-      dateFrom,
-      dateTo,
-      season: providerRequest.providerSeason,
-    });
-    byRequestKey.set(requestKey, {
-      request,
-      fixtures: matches.map((match) =>
-        normalizeFootballDataMatch(match, providerRequest.competitionCode),
-      ),
-    });
+    if (rateLimitError) {
+      errorsByRequestKey.set(requestKey, {
+        competitionCode: providerRequest.competitionCode,
+        providerSeason: providerRequest.providerSeason,
+        ...rateLimitError,
+        error: "Provider rate limited; config was not attempted.",
+      });
+      continue;
+    }
+
+    providerCallCount += 1;
+
+    try {
+      const { matches, request } = await fetchCompetitionMatches({
+        competitionCode: providerRequest.competitionCode,
+        dateFrom,
+        dateTo,
+        season: providerRequest.providerSeason,
+      });
+      byRequestKey.set(requestKey, {
+        request,
+        fixtures: matches.map((match) =>
+          normalizeFootballDataMatch(match, providerRequest.competitionCode),
+        ),
+      });
+    } catch (error) {
+      const errorSummary = getCronErrorSummary(error);
+      errorsByRequestKey.set(requestKey, {
+        competitionCode: providerRequest.competitionCode,
+        providerSeason: providerRequest.providerSeason,
+        ...errorSummary,
+      });
+
+      if (errorSummary.providerStatus === 429) {
+        rateLimitError = errorSummary;
+      }
+    }
   }
 
-  return { dateFrom, dateTo, byRequestKey };
+  return {
+    dateFrom,
+    dateTo,
+    byRequestKey,
+    errorsByRequestKey,
+    providerCallCount,
+  };
 }
 
 function isUsefulText(value: string | null | undefined) {
@@ -325,7 +371,7 @@ export async function getEligibleActiveRefreshSeason({
   const { data, error } = await supabase
     .from("seasons")
     .select(
-      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
+      "id, league_id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
     )
     .eq("id", seasonId)
     .eq("status", "active")
@@ -348,7 +394,7 @@ export async function getEligibleActiveRefreshSeasons({
   const { data, error } = await supabase
     .from("seasons")
     .select(
-      "id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
+      "id, league_id, name, status, base_provider, base_competition_code, provider_season, fixture_import_enabled, leagues!inner(status)",
     )
     .eq("status", "active")
     .eq("base_provider", "football_data")
@@ -406,11 +452,22 @@ export async function refreshExternalFixtures({
   for (const competitionCode of competitionCodes) {
     const providerSeason =
       competitionCode === season.base_competition_code
-        ? season.provider_season ?? undefined
+        ? getFootballDataSeasonQueryValue(season.provider_season)
         : undefined;
     const snapshotResult = providerSnapshot?.byRequestKey.get(
       getProviderRequestKey(competitionCode, providerSeason),
     );
+    const snapshotError = providerSnapshot?.errorsByRequestKey.get(
+      getProviderRequestKey(competitionCode, providerSeason),
+    );
+
+    if (snapshotError) {
+      throw new FootballDataError(
+        snapshotError.error,
+        snapshotError.providerStatus ?? 502,
+        snapshotError.retryAfterSeconds ?? null,
+      );
+    }
     const fetched = snapshotResult
       ? null
       : await fetchCompetitionMatches({

@@ -31,6 +31,7 @@ type LocalExternalFixture = {
 
 type SeasonRow = {
   id: string;
+  league_id: string;
   name: string;
   result_sync_enabled?: boolean | null;
 };
@@ -193,7 +194,7 @@ export async function getSeasonById({
 }) {
   const { data, error } = await supabase
     .from("seasons")
-    .select("id, name, result_sync_enabled, leagues!inner(status)")
+    .select("id, league_id, name, result_sync_enabled, leagues!inner(status)")
     .eq("id", seasonId)
     .eq("status", "active")
     .eq("leagues.status", "active")
@@ -219,7 +220,7 @@ export async function getEligibleActiveSyncSeasons({
 }) {
   const { data, error } = await supabase
     .from("seasons")
-    .select("id, name, result_sync_enabled, leagues!inner(status)")
+    .select("id, league_id, name, result_sync_enabled, leagues!inner(status)")
     .eq("status", "active")
     .eq("base_provider", "football_data")
     .eq("result_sync_enabled", true)
