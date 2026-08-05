@@ -1,7 +1,8 @@
 {
-  "name": "football-predictor",
+  "name": "pick8",
   "version": "0.1.0",
   "private": true,
+  "description": "A private Premier League matchday prediction competition",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

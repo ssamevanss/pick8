@@ -56,7 +56,7 @@ export default function InviteShareButtons({
     try {
       await navigator.share({
         title: `Join ${leagueName}`,
-        text: `Join my Who You Got? league with code ${code}.`,
+        text: `Join my Pick8 league with code ${code}.`,
         url: inviteLink(),
       });
     } catch (error) {

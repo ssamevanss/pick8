@@ -3,8 +3,8 @@ import { ToastProvider } from "@/components/toast/ToastProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Who You Got?",
-  description: "Private football prediction league",
+  title: "Pick8",
+  description: "A private Premier League matchday prediction competition",
   robots: {
     index: false,
     follow: false,

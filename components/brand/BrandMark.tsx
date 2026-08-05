@@ -18,14 +18,14 @@ export default function BrandMark({
         <div className="absolute inset-y-2 left-1/2 w-px bg-emerald-300/25" />
         <div className="absolute h-5 w-5 rounded-full border border-emerald-300/30" />
         <span className="relative text-[11px] font-black tracking-[-0.02em] text-emerald-200">
-          WYG
+          P8
         </span>
       </div>
 
       {!compact ? (
         <div className="min-w-0">
           <p className="truncate text-lg font-black tracking-tight text-white">
-            Who You Got?
+            Pick8
           </p>
         </div>
       ) : null}

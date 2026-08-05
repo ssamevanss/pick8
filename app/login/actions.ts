@@ -1,10 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
 import { createClient } from "@/utils/supabase/server";
-import { SELECTED_LEAGUE_COOKIE } from "@/utils/leagues";
-import { getLeagueLaunchDecision } from "@/utils/league-launch";
 
 function safeNext(value: string) {
   return value.startsWith("/") && !value.startsWith("//") ? value : "";
@@ -53,13 +50,6 @@ export async function login(formData: FormData) {
     );
   }
 
-  // `/leagues/launch` is an internal resolver, not a page the user should
-  // land on after a password sign-in. Resolve it here so the first visible
-  // authenticated URL is the final destination.
-  if (next && next !== "/leagues/launch") {
-    redirect(next);
-  }
-
   const user = data.user;
 
   if (!user) {
@@ -70,20 +60,29 @@ export async function login(formData: FormData) {
     );
   }
 
-  const decision = await getLeagueLaunchDecision(supabase, user.id);
-  const cookieStore = await cookies();
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("is_active")
+    .eq("id", user.id)
+    .maybeSingle();
 
-  if (decision.selectedLeagueId) {
-    cookieStore.set(SELECTED_LEAGUE_COOKIE, decision.selectedLeagueId, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 365,
-    });
-  } else {
-    cookieStore.delete(SELECTED_LEAGUE_COOKIE);
+  if (profileError || !profile) {
+    await supabase.auth.signOut();
+    redirectWithLoginError(
+      "Your Pick8 profile is not configured. Ask the administrator for help.",
+      email,
+      next,
+    );
   }
 
-  redirect(decision.destination);
+  if (!profile.is_active) {
+    await supabase.auth.signOut();
+    redirectWithLoginError(
+      "Your Pick8 account is inactive. Ask the administrator for help.",
+      email,
+      next,
+    );
+  }
+
+  redirect(next || "/dashboard");
 }

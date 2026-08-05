@@ -212,7 +212,7 @@ function getEmailTemplate({
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:18px;border:1px solid #dfe8dc;box-shadow:0 12px 34px rgba(23,35,26,0.10);overflow:hidden;">
             <tr>
               <td style="background:#102016;padding:22px 24px;text-align:center;">
-                <div style="color:#86efac;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Who You Got?</div>
+                <div style="color:#86efac;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Pick8</div>
                 <div style="margin-top:8px;color:#f8fafc;font-size:24px;font-weight:800;line-height:1.2;">${escapeHtml(title)}</div>
               </td>
             </tr>
@@ -636,7 +636,7 @@ export async function sendPickerUpNextEmail({
   const footer =
     "You received this because you are the assigned fixture picker for this gameweek.";
   const footerLinks = getPreferenceFooter(footer, siteUrl);
-  const text = `Who You Got?
+  const text = `Pick8
 
 ${intro}
 
@@ -753,7 +753,7 @@ export async function sendPredictionsOpenEmails({
   const footer =
     "You received this because you are an approved player in this league.";
   const footerLinks = getPreferenceFooter(footer, siteUrl);
-  const text = `Who You Got?
+  const text = `Pick8
 
 ${intro}
 

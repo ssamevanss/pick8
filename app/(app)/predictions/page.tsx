@@ -26,7 +26,7 @@ import {
 import { getProviderTeamIdentityFromRawPayload } from "@/utils/team-assets";
 import { getSeasonCompetitionMode } from "@/utils/football-competitions";
 import { savePredictions } from "./actions";
-import { getAppLeagueContext } from "@/utils/app-context";
+import { getAppLeagueContext } from "@/utils/legacy-app-context";
 import { logServerTiming, startServerTiming } from "@/utils/server-timing";
 
 type CompletedFixtureForForm = {

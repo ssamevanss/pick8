@@ -6,7 +6,7 @@ import LeaderboardChart, {
   type LeaderboardChartPlayer,
 } from "@/components/leaderboard/LeaderboardChart";
 import LeaderboardViewToggle from "@/components/leaderboard/LeaderboardViewToggle";
-import { getAppLeagueContext } from "@/utils/app-context";
+import { getAppLeagueContext } from "@/utils/legacy-app-context";
 import { logServerTiming, startServerTiming } from "@/utils/server-timing";
 
 type SearchParams = Promise<{

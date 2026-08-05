@@ -2,10 +2,17 @@ import "server-only";
 
 import { cache } from "react";
 import { createClient } from "@/utils/supabase/server";
-import { getSelectedLeagueForUser } from "@/utils/leagues";
-import { getActiveSeason } from "@/utils/seasons";
 import { withServerTiming } from "@/utils/server-timing";
-import { getPickerGameweekStatuses } from "@/utils/picker-eligibility";
+
+export type Pick8Profile = {
+  id: string;
+  email: string | null;
+  display_name: string;
+  is_admin: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
 
 export const getRequestAuthContext = cache(async () => {
   const supabase = await createClient();
@@ -16,91 +23,25 @@ export const getRequestAuthContext = cache(async () => {
     () => supabase.auth.getUser(),
     { area: "app-context" },
   );
-  const { data: profile } = user
+  const { data: profile, error: profileError } = user
     ? await withServerTiming(
         "profiles.current",
         () =>
           supabase
             .from("profiles")
-            .select("role, status")
+            .select(
+              "id, email, display_name, is_admin, is_active, created_at, updated_at",
+            )
             .eq("id", user.id)
             .maybeSingle(),
         { area: "app-context", userId: user.id },
       )
-    : { data: null };
-
-  return { supabase, user, profile };
-});
-
-export const getAppLeagueContext = cache(async () => {
-  const { supabase, user, profile } = await getRequestAuthContext();
-
-  if (!user) {
-    return {
-      supabase,
-      user,
-      profile,
-      selectedLeague: null,
-      leagues: [],
-      activeSeason: null,
-    };
-  }
-
-  const { selectedLeague, leagues } = await withServerTiming(
-    "leagues.selected-context",
-    () => getSelectedLeagueForUser(supabase, user.id),
-    { userId: user.id },
-  );
-  const { data: activeSeason } = selectedLeague
-    ? await withServerTiming(
-        "seasons.active",
-        () =>
-          getActiveSeason(
-            supabase,
-            "id, name, status, base_provider, base_competition_code, base_competition_name, base_competition_external_id, provider_season",
-            selectedLeague.id,
-          ),
-        { userId: user.id, leagueId: selectedLeague.id },
-      )
-    : { data: null };
+    : { data: null, error: null };
 
   return {
     supabase,
     user,
-    profile,
-    selectedLeague,
-    leagues,
-    activeSeason,
+    profile: profile as Pick8Profile | null,
+    profileError,
   };
-});
-
-export const getRequestPickerGameweekStatuses = cache(async () => {
-  const context = await getAppLeagueContext();
-
-  if (!context.user || !context.activeSeason) {
-    return [];
-  }
-
-  const userId = context.user.id;
-  const activeSeasonId = context.activeSeason.id;
-
-  return withServerTiming(
-    "picker.editable-gameweeks",
-    () =>
-      getPickerGameweekStatuses({
-        supabase: context.supabase,
-        userId,
-        activeSeasonId,
-      }),
-    { userId, leagueId: context.selectedLeague?.id },
-  );
-});
-
-export const getRequestEditablePickerGameweeks = cache(async () => {
-  const statuses = await getRequestPickerGameweekStatuses();
-
-  return statuses.filter(
-    (gameweek) =>
-      gameweek.isUnlocked && !gameweek.isClosed && !gameweek.hasPredictions,
-  );
 });

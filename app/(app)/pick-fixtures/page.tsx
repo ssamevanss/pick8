@@ -39,7 +39,7 @@ import { redirect } from "next/navigation";
 import {
   getAppLeagueContext,
   getRequestEditablePickerGameweeks,
-} from "@/utils/app-context";
+} from "@/utils/legacy-app-context";
 
 type PickerGameweek = PickerEligibleGameweek & Gameweek;
 

@@ -30,7 +30,7 @@ export async function requestPasswordReset(formData: FormData) {
 
   if (!siteUrl) {
     redirectWithEmail("/forgot-password", email, {
-      error: "Password reset is not configured yet. Ask the league admin to check setup.",
+      error: "Password reset is not configured yet. Ask the Pick8 administrator to check setup.",
     });
   }
 

@@ -32,11 +32,11 @@ export default async function ResetPasswordPage({
           <>
             <ToastTrigger
               title="Password updated"
-              description="You can continue to the league."
+              description="You can continue to Pick8."
               triggerKey={`reset:${params.updated}`}
             />
             <Link href="/dashboard" className="brand-button-primary mt-6 w-full">
-              Continue to league
+              Continue to Pick8
             </Link>
           </>
         ) : canReset ? (
