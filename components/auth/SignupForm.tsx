@@ -9,7 +9,7 @@ export default function SignupForm({ action, defaultDisplayName = "", defaultEma
   defaultEmail?: string;
 }) {
   return (
-    <form action={action} className="mt-6 space-y-4">
+    <form action={action} className="mt-6 space-y-4 text-left">
       <label className="block text-sm text-slate-300">Display name<input className="brand-input" name="display_name" required maxLength={80} autoComplete="name" defaultValue={defaultDisplayName} /></label>
       <label className="block text-sm text-slate-300">Email<input className="brand-input" name="email" type="email" required autoComplete="email" defaultValue={defaultEmail} /></label>
       <PasswordField label="Password" name="password" autoComplete="new-password" />

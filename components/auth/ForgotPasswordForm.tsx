@@ -12,7 +12,7 @@ export default function ForgotPasswordForm({
   defaultEmail = "",
 }: ForgotPasswordFormProps) {
   return (
-    <form action={action} className="mt-6 space-y-4">
+    <form action={action} className="mt-6 space-y-4 text-left">
       <div>
         <label className="text-sm text-slate-300" htmlFor="email">
           Email

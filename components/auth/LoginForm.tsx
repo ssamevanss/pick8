@@ -16,7 +16,7 @@ export default function LoginForm({
   next = "",
 }: LoginFormProps) {
   return (
-    <form action={action} className="mt-6 space-y-4">
+    <form action={action} className="mt-6 space-y-4 text-left">
       <input type="hidden" name="next" value={next} />
       <div>
         <label className="text-sm text-slate-300" htmlFor="email">

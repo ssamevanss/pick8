@@ -27,7 +27,7 @@ export default function ResetPasswordForm({ action }: ResetPasswordFormProps) {
   }
 
   return (
-    <form action={action} onSubmit={handleSubmit} className="mt-6 space-y-4">
+    <form action={action} onSubmit={handleSubmit} className="mt-6 space-y-4 text-left">
       {clientError ? (
         <p className="brand-alert-danger">{clientError}</p>
       ) : null}

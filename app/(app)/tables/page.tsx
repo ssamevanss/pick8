@@ -4,12 +4,19 @@ import { createAdminClient } from "@/utils/supabase/admin";
 import ReadOnlyMatchdayPicks from "@/components/picks/ReadOnlyMatchdayPicks";
 import MatchdaySelectNavigation from "@/components/picks/MatchdaySelectNavigation";
 import { buildMatchdayBreakdown } from "@/utils/pick8-matchday-breakdown";
+import {
+  buildStandings,
+  playerDisplayName,
+  resolveCurrentCompetition,
+  resolveCurrentMatchday,
+  type StandingsCompetition as Competition,
+  type StandingsEntry,
+  type StandingsMatchday as Matchday,
+  type StandingsProfile as Profile,
+} from "@/utils/pick8-standings";
 
 type View = "competition" | "overall" | "matchday";
-type Profile = { id: string; display_name: string };
-type Matchday = { id: string; matchday_number: number; status: string; locks_at: string | null };
-type Competition = { id: string; name: string; start_matchday: number; end_matchday: number; status: string };
-type Entry = { id: string; user_id: string; matchday_id: string; total_goals_prediction: number | null; submitted_at: string | null; calculated_score: number | null; score_calculated_at: string | null };
+type Entry = StandingsEntry & { total_goals_prediction: number | null; score_calculated_at: string | null };
 
 function formatDate(value: string | null) {
   if (!value) return "Not set";
@@ -25,88 +32,6 @@ function scoreLabel(score: number | null) {
   return score > 0 ? `+${score}` : String(score);
 }
 
-function displayName(profile: Profile) {
-  return profile.display_name.trim() || "Player";
-}
-
-function resolveCurrentMatchday(matchdays: Matchday[], now: number) {
-  const byNumber = [...matchdays].sort((a, b) => a.matchday_number - b.matchday_number);
-  const open = byNumber.find((matchday) => matchday.status === "open");
-  if (open) return open;
-  const upcoming = byNumber.find(
-    (matchday) =>
-      matchday.status === "upcoming" &&
-      matchday.locks_at !== null &&
-      new Date(matchday.locks_at).getTime() > now,
-  );
-  if (upcoming) return upcoming;
-  return [...byNumber]
-    .reverse()
-    .find((matchday) => ["locked", "scoring", "completed"].includes(matchday.status)) ?? null;
-}
-
-function resolveCurrentCompetition(
-  competitions: Competition[],
-  currentMatchday: Matchday | null,
-) {
-  const ordered = [...competitions].sort((a, b) => a.start_matchday - b.start_matchday);
-  return (
-    ordered.find((competition) => competition.status === "active") ??
-    (currentMatchday
-      ? ordered.find(
-          (competition) =>
-            competition.start_matchday <= currentMatchday.matchday_number &&
-            competition.end_matchday >= currentMatchday.matchday_number,
-        )
-      : null) ??
-    ordered.find((competition) => competition.status === "upcoming") ??
-    null
-  );
-}
-
-function buildStandings(
-  profiles: Profile[],
-  entries: Entry[],
-  matchdayById: Map<string, Matchday>,
-  range?: { start: number; end: number },
-) {
-  const rows = profiles.map((profile) => {
-    const scored = entries
-      .filter((entry) => {
-        const number = matchdayById.get(entry.matchday_id)?.matchday_number;
-        return (
-          entry.user_id === profile.id &&
-          entry.submitted_at !== null &&
-          entry.calculated_score !== null &&
-          number !== undefined &&
-          (!range || (number >= range.start && number <= range.end))
-        );
-      })
-      .sort(
-        (a, b) =>
-          (matchdayById.get(b.matchday_id)?.matchday_number ?? 0) -
-          (matchdayById.get(a.matchday_id)?.matchday_number ?? 0),
-      );
-    const points = scored.reduce((total, entry) => total + (entry.calculated_score ?? 0), 0);
-    return {
-      profile,
-      points,
-      played: scored.length,
-      latest: scored[0]?.calculated_score ?? null,
-      average: scored.length ? points / scored.length : 0,
-      rank: 0,
-    };
-  });
-  rows.sort(
-    (a, b) => b.points - a.points || displayName(a.profile).localeCompare(displayName(b.profile)),
-  );
-  rows.forEach((row, index) => {
-    row.rank = index > 0 && rows[index - 1].points === row.points
-      ? rows[index - 1].rank
-      : index + 1;
-  });
-  return rows;
-}
 
 function StandingsTable({
   rows,
@@ -125,7 +50,7 @@ function StandingsTable({
           {rows.map((row) => (
             <tr key={row.profile.id}>
               <td className="px-4 py-3"><span className="brand-pill">#{row.rank}</span></td>
-              <td className="px-4 py-3 font-bold text-white">{displayName(row.profile)}</td>
+              <td className="px-4 py-3 font-bold text-white">{playerDisplayName(row.profile)}</td>
               <td className="px-4 py-3 text-right font-black text-emerald-200">{scoreLabel(row.points)}</td>
               <td className="px-4 py-3 text-right text-slate-300">{row.played}</td>
               <td className="px-4 py-3 text-right text-slate-300">{latestColumn === "latest" ? scoreLabel(row.latest) : row.played ? row.average.toFixed(1) : "0.0"}</td>
@@ -238,7 +163,7 @@ export default async function TablesPage({
     <div className="space-y-6">
       <header className="brand-card p-5 sm:p-7"><p className="brand-eyebrow">{season.name}</p><h1 className="brand-title mt-2">Tables</h1><p className="brand-subtitle mt-2">Competition standings, overall scores, and locked-matchday picks.</p></header>
       <nav className="grid gap-2 sm:grid-cols-3" aria-label="Tables views">{tabs.map((tab) => <Link key={tab.key} href={`/tables?view=${tab.key}`} className={view === tab.key ? "brand-button-primary" : "brand-button-secondary"}>{tab.label}</Link>)}</nav>
-      {view === "competition" ? currentCompetition ? <section className="space-y-4"><div><p className="brand-eyebrow">Current competition</p><h2 className="mt-1 text-2xl font-black text-white">{currentCompetition.name}</h2><p className="mt-1 text-sm text-slate-400">Matchdays {currentCompetition.start_matchday}–{currentCompetition.end_matchday} · competition ranking uses standard ties (1, 1, 3).</p></div><StandingsTable rows={competitionRowsBuilt} latestColumn="latest" /></section> : <p className={profile.is_admin ? "brand-alert-warning" : "brand-card p-5 text-sm text-slate-300"}>{profile.is_admin ? "No competition is configured for the active season. Add one in Supabase before publishing competition standings." : "Competition standings are not configured yet. Overall and Matchday Breakdown remain available."}</p> : null}
+      {view === "competition" ? currentCompetition ? <section className="space-y-4"><div><p className="brand-eyebrow">Current competition</p><h2 className="mt-1 text-2xl font-black text-white">{currentCompetition.name}</h2></div><StandingsTable rows={competitionRowsBuilt} latestColumn="latest" /></section> : <p className={profile.is_admin ? "brand-alert-warning" : "brand-card p-5 text-sm text-slate-300"}>{profile.is_admin ? "No competition is configured for the active season. Refresh competitions from Admin." : "Competition standings are not configured yet. Overall and Matchday Breakdown remain available."}</p> : null}
       {view === "overall" ? <section className="space-y-4"><div><p className="brand-eyebrow">Season standings</p><h2 className="mt-1 text-2xl font-black text-white">Overall</h2><p className="mt-1 text-sm text-slate-400">Submitted entries with finalized scores only · standard tied ranking.</p></div><StandingsTable rows={overallRows} latestColumn="average" /></section> : null}
       {view === "matchday" ? selectedMatchday ? <><div className="brand-card p-4"><MatchdaySelectNavigation currentMatchday={selectedMatchday.matchday_number} matchdays={matchdays.map((matchday) => ({ number: matchday.matchday_number, label: `Matchday ${matchday.matchday_number} · ${matchday.status}` }))} /></div>{breakdown}</> : <p className="brand-card p-5 text-sm text-slate-300">No matchdays are available for this season.</p> : null}
     </div>

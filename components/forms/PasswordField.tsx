@@ -21,7 +21,7 @@ export default function PasswordField({
   const helperId = useId();
 
   return (
-    <div>
+    <div className="text-left">
       <label className="text-sm text-slate-300" htmlFor={name}>
         {label}
       </label>
