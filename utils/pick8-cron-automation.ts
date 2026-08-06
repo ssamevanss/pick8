@@ -8,6 +8,7 @@ import {
   syncWhoYouGotFixtures,
   type FixtureSyncSummary,
 } from "@/utils/who-you-got-fixture-sync";
+import { refreshPick8Competitions } from "@/utils/pick8-competitions";
 
 type Season = Pick<Tables<"seasons">, "id" | "name" | "provider_season">;
 type Matchday = Pick<
@@ -224,6 +225,7 @@ export async function runDailyFixtureSync() {
   const nextUpcoming = matchdays.filter((matchday) => matchday.status === "upcoming").slice(0, 3);
   const selected = uniqueMatchdays([...useful, ...nextUpcoming]);
   const result = await runSelectedMatchdays({ route, season, matchdays: selected, recalculate: "never" });
+  const competitionRefresh = await refreshPick8Competitions(season.id);
   const response = {
     ok: result.failures.length === 0,
     skipped: selected.length === 0,
@@ -231,6 +233,7 @@ export async function runDailyFixtureSync() {
     matchdaysAttempted: selected.map((matchday) => matchday.matchday_number),
     ...result,
     totals: totals(result.successes),
+    competitionRefresh,
     durationMs: Date.now() - startedAt,
   };
   logRun({ route, success: response.ok, matchdays: selected.length, durationMs: response.durationMs });

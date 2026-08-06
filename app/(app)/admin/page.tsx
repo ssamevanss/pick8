@@ -4,6 +4,7 @@ import { updateProfile } from "./profile-actions";
 import SubmitButton from "@/components/forms/SubmitButton";
 import FixtureSyncCard from "@/components/admin/FixtureSyncCard";
 import ScoreRecalculationCard from "@/components/admin/ScoreRecalculationCard";
+import CompetitionRefreshCard from "@/components/admin/CompetitionRefreshCard";
 
 export default async function AdminPage({
   searchParams,
@@ -51,6 +52,7 @@ export default async function AdminPage({
       ) : null}
 
       <FixtureSyncCard />
+      <CompetitionRefreshCard />
       <ScoreRecalculationCard
         seasons={(seasonRows ?? []).map((season) => ({ id: season.id, name: season.name }))}
         matchdays={(matchdayRows ?? []).map((matchday) => ({ id: matchday.id, seasonId: matchday.season_id, number: matchday.matchday_number, status: matchday.status }))}

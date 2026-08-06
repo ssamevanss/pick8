@@ -395,6 +395,52 @@ legacy gameplay RLS audit described in the architecture document.
 
 ## Running locally
 
+## Pick8 private signup and mini-competition automation
+
+Pick8 permits private self-service account creation at `/signup`. Configure the
+server-only `PICK8_SIGNUP_CODE`; never use a `NEXT_PUBLIC_` prefix, log it, put
+it in a URL, or store it in Supabase. Signup uses `supabase.auth.signUp` and
+passes `display_name` as Auth metadata. The existing `auth.users` trigger owns
+profile creation with ordinary active-player defaults. With email confirmation
+enabled, the player verifies their email before login. With it disabled, the
+new session continues to `/dashboard`.
+
+Forgot/reset password does not use the signup code. `/forgot-password` asks
+Supabase Auth to email a recovery link through `/auth/callback?next=/reset-password`;
+the callback exchanges the code before `/reset-password` updates the password.
+Expired links display a recovery error and allow a new request.
+
+An idempotent server-only generator maintains these season ranges: 1–5, 6–10,
+11–15, 16–20, 21–25, 26–30, 31–35, and 36–38. It creates missing ranges only,
+preserves existing names and financial configuration, and reconciles
+`upcoming`, `active`, and `completed` statuses. A range is completed only when
+every expected matchday exists and is completed. It runs after successful
+administrator fixture sync, after the daily fixture-sync cron, and from the
+administrator **Refresh Competitions** action.
+
+Production responsibilities:
+
+- Vercel calls `/api/cron/sync-fixtures` daily. It refreshes useful open,
+  scoring, and near-future matchdays, including teams, kickoff, statuses,
+  scores, and crests, then refreshes competitions.
+- An external scheduler calls `/api/cron/sync-results` no more frequently than
+  every five minutes. The route checks local state first and contacts Who You
+  Got only for relevant live, recent, or scoring matchdays.
+- Vercel calls `/api/cron/reconcile-results` each morning to revisit recent or
+  scoring matchdays and safely recalculate missed or corrected results.
+- Browser pages read local Supabase data and do not poll Who You Got.
+
+Required Vercel variables are `PICK8_SIGNUP_CODE`, the existing Supabase
+variables, the existing Who You Got API variables, and `CRON_SECRET`.
+
+Supabase Authentication URL Configuration must use the canonical production
+site URL and allow both its `/auth/callback` URL and
+`http://localhost:3000/auth/callback`. The same callback handles email
+confirmation and password recovery. This repository currently documents
+`https://whoyougot.ie` as `NEXT_PUBLIC_SITE_URL`; verify that it remains the
+canonical deployed Pick8 URL before release rather than substituting a guessed
+domain. Add approved Vercel preview callbacks only when preview auth is needed.
+
 From the project root:
 
 ```bash
@@ -417,7 +463,7 @@ NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
 NEXT_PUBLIC_SITE_URL=https://whoyougot.ie
 SUPABASE_SECRET_KEY=...
-LEAGUE_SIGNUP_CODE=...
+PICK8_SIGNUP_CODE=...
 ```
 
 Never expose `SUPABASE_SECRET_KEY` in client-side code.

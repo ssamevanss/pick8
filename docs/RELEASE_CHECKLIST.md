@@ -187,6 +187,22 @@ Minimum acceptable standard:
 
 ## 9. Environment And Database Checks
 
+### Pick8 MVP auth and automation
+
+- [ ] Set server-only `PICK8_SIGNUP_CODE` in Vercel without exposing its value.
+- [ ] Verify signup with email confirmation enabled and disabled; profiles must
+  be trigger-created as active non-admin players with the entered display name.
+- [ ] Verify `/forgot-password` → recovery email → `/auth/callback` →
+  `/reset-password`, including an expired-link error.
+- [ ] Confirm Supabase allows the canonical production `/auth/callback` and
+  `http://localhost:3000/auth/callback` for confirmation and recovery.
+- [ ] Verify all eight competition ranges exist and Refresh Competitions is
+  idempotent without changing custom names, fees, or contributions.
+- [ ] Confirm daily fixture sync refreshes competitions, morning reconciliation
+  runs from Vercel, and the external scheduler calls `/api/cron/sync-results`
+  no more frequently than every five minutes.
+- [ ] Confirm ordinary pages read local data and do not poll Who You Got.
+
 Confirm local and Vercel environment variables:
 
 ```env
@@ -194,7 +210,7 @@ NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 NEXT_PUBLIC_SITE_URL
 SUPABASE_SECRET_KEY
-LEAGUE_SIGNUP_CODE
+PICK8_SIGNUP_CODE
 RESEND_API_KEY
 REMINDER_EMAIL_FROM
 CRON_SECRET

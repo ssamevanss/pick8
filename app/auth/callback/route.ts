@@ -9,10 +9,13 @@ export async function GET(request: NextRequest) {
     next.startsWith("/") && !next.startsWith("//")
       ? next
       : "/dashboard";
+  const errorPath = safeNext === "/reset-password"
+    ? "/reset-password?error=That password reset link is invalid or expired. Request a new one."
+    : "/login?error=That sign-in link is invalid or expired.";
 
   if (!code) {
     return NextResponse.redirect(
-      new URL("/login?error=That sign-in link is missing or expired.", requestUrl.origin),
+      new URL(errorPath, requestUrl.origin),
     );
   }
 
@@ -21,7 +24,7 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     return NextResponse.redirect(
-      new URL("/login?error=That sign-in link is missing or expired.", requestUrl.origin),
+      new URL(errorPath, requestUrl.origin),
     );
   }
 

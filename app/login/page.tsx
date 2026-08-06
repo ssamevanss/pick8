@@ -3,6 +3,7 @@ import LoginForm from "@/components/auth/LoginForm";
 import { login } from "./actions";
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 
 function safeNext(value: string | undefined) {
   return value?.startsWith("/") && !value.startsWith("//") ? value : "";
@@ -11,7 +12,7 @@ function safeNext(value: string | undefined) {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ error?: string; email?: string; next?: string }>;
+  searchParams?: Promise<{ error?: string; email?: string; next?: string; created?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
   const next = safeNext(params.next);
@@ -40,6 +41,7 @@ export default async function LoginPage({
             {params.error}
           </p>
         ) : null}
+        {params.created ? <p className="brand-alert-success mt-4">Account created. You can sign in now.</p> : null}
 
         <LoginForm
           action={login}
@@ -47,9 +49,7 @@ export default async function LoginPage({
           next={next}
         />
 
-        <p className="mt-4 text-center text-sm text-slate-400">
-          Accounts are created by the Pick8 administrator.
-        </p>
+        <p className="mt-4 text-center text-sm text-slate-400">New to Pick8? <Link href="/signup" className="font-semibold text-emerald-300">Create Account</Link></p>
       </div>
     </main>
   );

@@ -6,6 +6,8 @@ import {
   syncWhoYouGotFixtures,
   type FixtureSyncSummary,
 } from "@/utils/who-you-got-fixture-sync";
+import { createAdminClient } from "@/utils/supabase/admin";
+import { refreshPick8Competitions } from "@/utils/pick8-competitions";
 
 export type FixtureSyncActionState = {
   ok: boolean;
@@ -26,6 +28,10 @@ export async function syncFixturesAction(
   const matchday = Number(String(formData.get("matchday") ?? "").trim());
   try {
     const summary = await syncWhoYouGotFixtures({ season, matchday });
+    const admin = createAdminClient();
+    const { data: syncedSeason, error: seasonError } = await admin.from("seasons").select("id").eq("provider_season", summary.season).single();
+    if (seasonError || !syncedSeason) throw new Error("The synced season could not be loaded for competition refresh.");
+    await refreshPick8Competitions(syncedSeason.id);
     return {
       ok: true,
       message: `Season ${summary.season}/${String((summary.season + 1) % 100).padStart(2, "0")} matchday ${summary.matchday} synced.`,
