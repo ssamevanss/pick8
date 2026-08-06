@@ -1,16 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/cron/send-prediction-reminders",
-      "schedule": "0 8 * * *"
-    },
-    {
       "path": "/api/cron/sync-fixtures",
       "schedule": "15 2 * * *"
-    },
-    {
-      "path": "/api/cron/sync-results",
-      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/cron/reconcile-results",
