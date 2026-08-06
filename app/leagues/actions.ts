@@ -3,13 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { createClient } from "@/utils/supabase/server";
+import { createClient } from "@/utils/supabase/legacy-server";
 import {
   requireLeagueAdmin,
   requireLeagueMembership,
   SELECTED_LEAGUE_COOKIE,
 } from "@/utils/leagues";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 import { getFootballDataCompetitionOption } from "@/utils/football-competitions";
 
 const SUPPORTED_LEAGUE_COMPETITIONS = new Set([

@@ -15,21 +15,13 @@ export default async function SettingsPage() {
       </header>
 
       <section className="brand-card p-5 sm:p-6">
-        <dl className="grid gap-4 sm:grid-cols-2">
+        <dl>
           <div>
             <dt className="text-xs font-bold uppercase tracking-wider text-slate-500">
               Display name
             </dt>
             <dd className="mt-1 font-semibold text-white">
-              {profile?.display_name}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              Email
-            </dt>
-            <dd className="mt-1 font-semibold text-white">
-              {profile?.email ?? "Not available"}
+              {profile?.display_name?.trim() || "Player"}
             </dd>
           </div>
         </dl>

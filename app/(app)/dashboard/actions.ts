@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createClient } from "@/utils/supabase/server";
+import { createClient } from "@/utils/supabase/legacy-server";
 import { getActiveSeason } from "@/utils/seasons";
 import { getSelectedLeagueForUser } from "@/utils/leagues";
 

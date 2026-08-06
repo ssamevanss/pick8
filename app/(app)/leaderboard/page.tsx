@@ -83,10 +83,10 @@ type PredictionPointsRow = {
 
 function getDisplayName(entry: LeaderboardEntry) {
   if (Array.isArray(entry.profiles)) {
-    return entry.profiles[0]?.display_name ?? "Unknown player";
+    return entry.profiles[0]?.display_name?.trim() || "Player";
   }
 
-  return entry.profiles?.display_name ?? "Unknown player";
+  return entry.profiles?.display_name?.trim() || "Player";
 }
 
 function getMovement(entry: LeaderboardEntry, isArchivedSeason: boolean) {

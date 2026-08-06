@@ -2,13 +2,18 @@ import "server-only";
 
 import { cache } from "react";
 import { getRequestAuthContext } from "@/utils/app-context";
+import type { createClient as createLegacyClient } from "@/utils/supabase/legacy-server";
 import { getSelectedLeagueForUser } from "@/utils/leagues";
 import { getActiveSeason } from "@/utils/seasons";
 import { withServerTiming } from "@/utils/server-timing";
 import { getPickerGameweekStatuses } from "@/utils/picker-eligibility";
 
 export const getAppLeagueContext = cache(async () => {
-  const { supabase, user, profile } = await getRequestAuthContext();
+  const { supabase: pick8Supabase, user, profile } =
+    await getRequestAuthContext();
+  const supabase = pick8Supabase as unknown as Awaited<
+    ReturnType<typeof createLegacyClient>
+  >;
 
   if (!user) {
     return {

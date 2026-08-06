@@ -2,7 +2,7 @@ import {
   autoPickMissingFixtures,
   getEligibleActiveAutoPickSeasons,
 } from "@/utils/external-auto-pick";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 import {
   capItems,
   createCronDiagnostics,

@@ -6,7 +6,7 @@ import {
   loadEligibleExternalFixtureImportSeasons,
   validateDateWindow,
 } from "@/utils/external-fixture-import";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 import {
   createCronDiagnostics,
   getCronErrorSummary,

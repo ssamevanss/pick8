@@ -3,16 +3,9 @@ import "server-only";
 import { cache } from "react";
 import { createClient } from "@/utils/supabase/server";
 import { withServerTiming } from "@/utils/server-timing";
+import type { Tables } from "@/types/database.types";
 
-export type Pick8Profile = {
-  id: string;
-  email: string | null;
-  display_name: string;
-  is_admin: boolean;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-};
+export type Pick8Profile = Tables<"profiles">;
 
 export const getRequestAuthContext = cache(async () => {
   const supabase = await createClient();
@@ -41,7 +34,7 @@ export const getRequestAuthContext = cache(async () => {
   return {
     supabase,
     user,
-    profile: profile as Pick8Profile | null,
+    profile,
     profileError,
   };
 });

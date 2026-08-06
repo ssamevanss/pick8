@@ -5,7 +5,7 @@ import {
 } from "@/utils/email-notifications";
 import { getSiteUrl } from "@/utils/email";
 import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 import {
   createCronDiagnostics,
   getCronScope,

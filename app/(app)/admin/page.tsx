@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { getRequestAuthContext, type Pick8Profile } from "@/utils/app-context";
 import { updateProfile } from "./profile-actions";
 import SubmitButton from "@/components/forms/SubmitButton";
+import FixtureSyncCard from "@/components/admin/FixtureSyncCard";
+import ScoreRecalculationCard from "@/components/admin/ScoreRecalculationCard";
 
 export default async function AdminPage({
   searchParams,
@@ -22,6 +24,10 @@ export default async function AdminPage({
     )
     .order("display_name", { ascending: true });
   const profiles = (data as Pick8Profile[] | null) ?? [];
+  const [{ data: seasonRows }, { data: matchdayRows }] = await Promise.all([
+    supabase.from("seasons").select("id, name").order("provider_season", { ascending: false }),
+    supabase.from("matchdays").select("id, season_id, matchday_number, status").order("matchday_number", { ascending: true }),
+  ]);
 
   return (
     <>
@@ -30,7 +36,8 @@ export default async function AdminPage({
         <h1 className="brand-title mt-2">Profiles</h1>
         <p className="brand-subtitle mt-2">
           Manage access, administrator privileges, and display names for the
-          private Pick8 group.
+          private Pick8 group. Set a recognisable display name for every player
+          before activating their account; this is the name shown throughout Pick8.
         </p>
       </header>
 
@@ -42,6 +49,12 @@ export default async function AdminPage({
       {params.saved ? (
         <p className="brand-alert-success mb-4">Profile saved.</p>
       ) : null}
+
+      <FixtureSyncCard />
+      <ScoreRecalculationCard
+        seasons={(seasonRows ?? []).map((season) => ({ id: season.id, name: season.name }))}
+        matchdays={(matchdayRows ?? []).map((matchday) => ({ id: matchday.id, seasonId: matchday.season_id, number: matchday.matchday_number, status: matchday.status }))}
+      />
 
       <div className="space-y-4">
         {profiles.map((item) => {
@@ -59,6 +72,7 @@ export default async function AdminPage({
                     id={`display-name-${item.id}`}
                     name="display_name"
                     defaultValue={item.display_name}
+                    placeholder="Enter the player's display name"
                     required
                     maxLength={80}
                     className="brand-input"

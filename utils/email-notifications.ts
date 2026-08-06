@@ -1,6 +1,6 @@
 import { getReminderEmailConfig, getSiteUrl, sendEmail } from "@/utils/email";
 import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 
 type AdminSupabaseClient = ReturnType<typeof createAdminClient>;
 

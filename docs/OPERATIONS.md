@@ -1553,6 +1553,48 @@ Only update dependencies if there is a clear reason, such as security fixes or n
 
 ## Monitoring
 
+### Pick8 fixture and result automation
+
+Vercel invokes three authenticated GET routes. Schedules are UTC:
+
+- `/api/cron/sync-fixtures` at `02:15` daily (approximately 02:15 Dublin in winter and 03:15 in summer). It syncs every open/scoring matchday plus the next three upcoming matchdays.
+- `/api/cron/sync-results` every five minutes. It makes no Who You Got request unless a matchday is scoring, has a live/paused fixture, has an unfinished local result near kickoff (30 minutes ahead through four hours behind), or has a finished fixture whose matchday is not completed.
+- `/api/cron/reconcile-results` at `05:30` daily. It re-syncs and recalculates matchdays with fixtures from the previous two complete UTC calendar days, plus any matchday still scoring. This is the correction safety net for late provider changes.
+
+Required production environment variables:
+
+```text
+CRON_SECRET
+WHO_YOU_GOT_API_URL
+WHO_YOU_GOT_API_KEY
+NEXT_PUBLIC_SUPABASE_URL
+SUPABASE_SECRET_KEY
+```
+
+All three cron endpoints require exactly `Authorization: Bearer <CRON_SECRET>`. They do not accept query-string secrets. A missing header returns 401, an incorrect value returns 403, and a missing server configuration fails closed.
+
+Manual verification (replace placeholders locally; never paste real values into tickets or logs):
+
+```bash
+curl -H 'Authorization: Bearer <CRON_SECRET>' \
+  https://<deployment>/api/cron/sync-fixtures
+curl -H 'Authorization: Bearer <CRON_SECRET>' \
+  https://<deployment>/api/cron/sync-results
+curl -H 'Authorization: Bearer <CRON_SECRET>' \
+  https://<deployment>/api/cron/reconcile-results
+```
+
+Responses and structured runtime logs report the route, season/matchday, duration, fixture counts, recalculation state, and isolated failures. They never include either secret. A successful no-op response has `skipped: true` and explains why. One matchday failure does not prevent later matchdays in the invocation from running.
+
+The automation deduplicates matchdays and uses a process-local in-flight guard, so a single invocation cannot process the same matchday twice. This is best-effort only: separate serverless instances can overlap because no distributed database lock was added. The sync/upsert and scoring code is idempotent, but operators should avoid manually triggering a route while its scheduled invocation is running. A durable cross-instance lease can be added later if operational evidence warrants a schema change.
+
+Troubleshooting:
+
+- 401 means the bearer header was omitted; 403 means its value does not match `CRON_SECRET`; 500 before processing commonly means a required server environment variable is absent.
+- An individual failure appears in the response `failures` array and in the structured runtime log. Other selected matchdays still run.
+- Repeated Who You Got authentication, missing-mapping, or upstream failures should be checked against the Who You Got service configuration and availability. Pick8 never bypasses the shared Who You Got API to contact its football provider directly.
+- A normal no-op is not an incident: result polling deliberately skips the remote dependency outside useful fixture windows.
+
 Current lightweight monitoring:
 
 - Hosting runtime logs

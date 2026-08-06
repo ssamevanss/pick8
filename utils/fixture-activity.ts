@@ -1,5 +1,5 @@
-import { createAdminClient } from "@/utils/supabase/admin";
-import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
+import { createClient } from "@/utils/supabase/legacy-server";
 import { upsertActivityNotification } from "@/utils/activity";
 import { sendPredictionsOpenEmails } from "@/utils/email-notifications";
 import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
@@ -41,10 +41,10 @@ type ActioningProfileRow = {
 
 function getPickerDisplayName(gameweek: GameweekWithPickerRow) {
   if (Array.isArray(gameweek.profiles)) {
-    return gameweek.profiles[0]?.display_name ?? "Someone";
+    return gameweek.profiles[0]?.display_name?.trim() || "Player";
   }
 
-  return gameweek.profiles?.display_name ?? "Someone";
+  return gameweek.profiles?.display_name?.trim() || "Player";
 }
 
 function formatGameweekName(gameweek: {

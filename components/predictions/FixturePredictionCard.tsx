@@ -42,10 +42,10 @@ function formatKickoff(kickoffAt: string) {
 
 function getPredictionDisplayName(prediction: Prediction) {
   if (Array.isArray(prediction.profiles)) {
-    return prediction.profiles[0]?.display_name ?? "Unknown player";
+    return prediction.profiles[0]?.display_name?.trim() || "Player";
   }
 
-  return prediction.profiles?.display_name ?? "Unknown player";
+  return prediction.profiles?.display_name?.trim() || "Player";
 }
 
 function sortPredictions(a: Prediction, b: Prediction) {

@@ -10,7 +10,7 @@ import {
   normalizeFootballDataMatch,
 } from "@/utils/football-data/client";
 import { getPredictionScoringScoreFromProviderPayload } from "@/utils/provider-score";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 
 type AdminSupabaseClient = ReturnType<typeof createAdminClient>;
 

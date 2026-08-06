@@ -2,8 +2,8 @@ import {
   autoPickMissingFixtures,
   getEligibleActiveAutoPickSeason,
 } from "@/utils/external-auto-pick";
-import { createAdminClient } from "@/utils/supabase/admin";
-import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
+import { createClient } from "@/utils/supabase/legacy-server";
 
 export const dynamic = "force-dynamic";
 

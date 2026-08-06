@@ -64,8 +64,8 @@ export default function AppShell({ children, isAdmin }: AppShellProps) {
     : primaryItems;
 
   return (
-    <main className="app-surface min-h-dvh text-white">
-      <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 pb-28 pt-4 sm:pb-12 sm:pt-6">
+    <div className="app-surface flex h-dvh min-h-dvh flex-col overflow-y-auto overscroll-y-contain pb-[var(--mobile-nav-clearance)] scroll-pb-[var(--mobile-nav-clearance)] text-white sm:h-auto sm:overflow-visible sm:pb-0 sm:scroll-pb-0">
+      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 pt-4 sm:pb-12 sm:pt-6">
         <header className="mb-6 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#0b1627]/80 px-3 py-3 shadow-xl shadow-black/20 backdrop-blur sm:px-4">
           <BrandMark />
 
@@ -84,15 +84,15 @@ export default function AppShell({ children, isAdmin }: AppShellProps) {
           </Link>
         </header>
 
-        <div className="min-w-0 flex-1">{children}</div>
+        <main className="min-w-0 flex-1">{children}</main>
       </div>
 
       <nav
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 backdrop-blur-xl sm:static sm:mx-auto sm:mt-[-5.5rem] sm:max-w-5xl sm:border-0 sm:bg-transparent sm:px-4 sm:pb-3"
+        className="fixed inset-x-0 bottom-0 z-50 w-full min-h-[calc(var(--mobile-nav-height)+env(safe-area-inset-bottom))] border-t border-white/15 bg-[#07101f] px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-[0_-12px_28px_rgba(0,0,0,0.45)] sm:static sm:min-h-0 sm:border-0 sm:bg-transparent sm:px-4 sm:pb-3 sm:shadow-none"
         aria-label="Primary"
       >
         <div
-          className="mx-auto grid max-w-5xl gap-1 sm:gap-2"
+          className="mx-auto grid w-full max-w-6xl gap-1 sm:gap-2"
           style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
         >
           {items.map((item) => (
@@ -106,6 +106,6 @@ export default function AppShell({ children, isAdmin }: AppShellProps) {
           ))}
         </div>
       </nav>
-    </main>
+    </div>
   );
 }

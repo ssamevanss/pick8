@@ -5,7 +5,7 @@ import {
   getExternalFixtureGroupKey,
   type ExternalFixtureRow,
 } from "@/utils/external-fixtures";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 import { upsertFixturesPickedActivity } from "@/utils/fixture-activity";
 
 type AdminSupabaseClient = ReturnType<typeof createAdminClient>;
@@ -55,7 +55,7 @@ function getPickerName(gameweek: AutoPickGameweek) {
     ? gameweek.profiles[0]
     : gameweek.profiles;
 
-  return profile?.display_name ?? "the assigned picker";
+  return profile?.display_name?.trim() || "Player";
 }
 
 function deterministicShuffle<T>(items: T[], seed: string) {

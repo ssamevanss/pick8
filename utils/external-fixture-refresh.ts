@@ -5,7 +5,7 @@ import {
   normalizeFootballDataMatch,
   type NormalizedFootballDataFixture,
 } from "@/utils/football-data/client";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 import {
   getCronErrorSummary,
   type CronErrorSummary,

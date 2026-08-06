@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import type { createClient } from "@/utils/supabase/server";
+import type { createClient } from "@/utils/supabase/legacy-server";
 import { withServerTiming } from "@/utils/server-timing";
 
 export const SELECTED_LEAGUE_COOKIE = "selected_league_id";

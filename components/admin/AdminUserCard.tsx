@@ -56,6 +56,7 @@ export default function AdminUserCard({
             <input
               name="display_name"
               defaultValue={user.display_name}
+              placeholder="Enter the player's display name"
               required
               className="mt-1 w-full rounded-lg bg-slate-900 px-3 py-2 outline-none ring-1 ring-slate-800"
             />

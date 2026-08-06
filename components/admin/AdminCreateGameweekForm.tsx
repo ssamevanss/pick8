@@ -73,7 +73,7 @@ export default function AdminCreateGameweekForm({
               <option value="">No picker</option>
               {profiles.map((profile) => (
                 <option key={profile.id} value={profile.id}>
-                  {profile.display_name}
+                  {profile.display_name.trim() || "Player"}
                 </option>
               ))}
             </select>

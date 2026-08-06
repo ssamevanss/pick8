@@ -4,7 +4,7 @@ import {
   normalizeFootballDataMatch,
   type NormalizedFootballDataFixture,
 } from "@/utils/football-data/client";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 import { stripRawPayload } from "@/utils/cron-diagnostics";
 
 type AdminSupabaseClient = ReturnType<typeof createAdminClient>;

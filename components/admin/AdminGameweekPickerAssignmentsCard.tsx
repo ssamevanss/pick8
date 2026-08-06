@@ -159,7 +159,7 @@ export default function AdminGameweekPickerAssignmentsCard({
                       <option value="unassigned">Unassigned</option>
                       {approvedProfiles.map((profile) => (
                         <option key={profile.id} value={profile.id}>
-                          {profile.display_name}
+                          {profile.display_name.trim() || "Player"}
                         </option>
                       ))}
                     </select>

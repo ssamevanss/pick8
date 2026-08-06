@@ -2,7 +2,7 @@ import {
   getEligibleActiveStandingsSeasons,
   refreshTeamStandings,
 } from "@/utils/team-standings";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 import { getFootballDataSeasonQueryValue } from "@/utils/football-data/client";
 import {
   createCronDiagnostics,

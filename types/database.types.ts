@@ -14,6 +14,264 @@ export type Database = {
   }
   public: {
     Tables: {
+      competitions: {
+        Row: {
+          created_at: string
+          end_matchday: number
+          entry_fee: number | null
+          id: string
+          name: string
+          overall_contribution: number | null
+          season_id: string
+          start_matchday: number
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          end_matchday: number
+          entry_fee?: number | null
+          id?: string
+          name: string
+          overall_contribution?: number | null
+          season_id: string
+          start_matchday: number
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          end_matchday?: number
+          entry_fee?: number | null
+          id?: string
+          name?: string
+          overall_contribution?: number | null
+          season_id?: string
+          start_matchday?: number
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "competitions_season_id_fkey"
+            columns: ["season_id"]
+            isOneToOne: false
+            referencedRelation: "seasons"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      entries: {
+        Row: {
+          calculated_score: number | null
+          created_at: string
+          id: string
+          locked_at: string | null
+          matchday_id: string
+          score_calculated_at: string | null
+          submitted_at: string | null
+          total_goals_prediction: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          calculated_score?: number | null
+          created_at?: string
+          id?: string
+          locked_at?: string | null
+          matchday_id: string
+          score_calculated_at?: string | null
+          submitted_at?: string | null
+          total_goals_prediction?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          calculated_score?: number | null
+          created_at?: string
+          id?: string
+          locked_at?: string | null
+          matchday_id?: string
+          score_calculated_at?: string | null
+          submitted_at?: string | null
+          total_goals_prediction?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "entries_matchday_id_fkey"
+            columns: ["matchday_id"]
+            isOneToOne: false
+            referencedRelation: "matchdays"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "entries_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      entry_selections: {
+        Row: {
+          category: string
+          created_at: string
+          entry_id: string
+          fixture_id: string
+          id: string
+          is_correct: boolean | null
+          points_awarded: number | null
+          selected_team_side: string | null
+          updated_at: string
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          entry_id: string
+          fixture_id: string
+          id?: string
+          is_correct?: boolean | null
+          points_awarded?: number | null
+          selected_team_side?: string | null
+          updated_at?: string
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          entry_id?: string
+          fixture_id?: string
+          id?: string
+          is_correct?: boolean | null
+          points_awarded?: number | null
+          selected_team_side?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "entry_selections_entry_id_fkey"
+            columns: ["entry_id"]
+            isOneToOne: false
+            referencedRelation: "entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "entry_selections_fixture_id_fkey"
+            columns: ["fixture_id"]
+            isOneToOne: false
+            referencedRelation: "fixtures"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fixtures: {
+        Row: {
+          away_score: number | null
+          away_team_crest_url: string | null
+          away_team_id: number | null
+          away_team_name: string
+          created_at: string
+          external_fixture_id: string
+          home_score: number | null
+          home_team_crest_url: string | null
+          home_team_id: number | null
+          home_team_name: string
+          id: string
+          kickoff_at: string
+          last_synced_at: string | null
+          matchday_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          away_score?: number | null
+          away_team_crest_url?: string | null
+          away_team_id?: number | null
+          away_team_name: string
+          created_at?: string
+          external_fixture_id: string
+          home_score?: number | null
+          home_team_crest_url?: string | null
+          home_team_id?: number | null
+          home_team_name: string
+          id?: string
+          kickoff_at: string
+          last_synced_at?: string | null
+          matchday_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          away_score?: number | null
+          away_team_crest_url?: string | null
+          away_team_id?: number | null
+          away_team_name?: string
+          created_at?: string
+          external_fixture_id?: string
+          home_score?: number | null
+          home_team_crest_url?: string | null
+          home_team_id?: number | null
+          home_team_name?: string
+          id?: string
+          kickoff_at?: string
+          last_synced_at?: string | null
+          matchday_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fixtures_matchday_id_fkey"
+            columns: ["matchday_id"]
+            isOneToOne: false
+            referencedRelation: "matchdays"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      matchdays: {
+        Row: {
+          created_at: string
+          id: string
+          locks_at: string | null
+          matchday_number: number
+          opens_at: string | null
+          season_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          locks_at?: string | null
+          matchday_number: number
+          opens_at?: string | null
+          season_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          locks_at?: string | null
+          matchday_number?: number
+          opens_at?: string | null
+          season_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "matchdays_season_id_fkey"
+            columns: ["season_id"]
+            isOneToOne: false
+            referencedRelation: "seasons"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           created_at: string
@@ -44,11 +302,61 @@ export type Database = {
         }
         Relationships: []
       }
+      seasons: {
+        Row: {
+          created_at: string
+          ends_at: string | null
+          id: string
+          is_active: boolean
+          name: string
+          provider_season: number
+          starts_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          ends_at?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          provider_season: number
+          starts_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          ends_at?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          provider_season?: number
+          starts_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      can_access_pick8_season: {
+        Args: { check_season_id: string; check_user_id?: string }
+        Returns: boolean
+      }
+      can_edit_pick8_entry: {
+        Args: { check_entry_id: string; check_user_id?: string }
+        Returns: boolean
+      }
+      can_read_pick8_entry: {
+        Args: { check_entry_id: string; check_user_id?: string }
+        Returns: boolean
+      }
+      can_submit_pick8_matchday: {
+        Args: { check_matchday_id: string; check_user_id?: string }
+        Returns: boolean
+      }
+      is_pick8_active: { Args: { check_user_id?: string }; Returns: boolean }
       is_pick8_admin: { Args: { check_user_id?: string }; Returns: boolean }
     }
     Enums: {

@@ -1,8 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createAdminClient } from "@/utils/supabase/admin";
-import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
+import { createClient } from "@/utils/supabase/legacy-server";
 import {
   formatGroupedActorText,
   upsertGroupedUserNotification,
@@ -175,10 +175,10 @@ function getProfileDisplayName(
     | undefined,
 ) {
   if (Array.isArray(profile)) {
-    return profile[0]?.display_name ?? "Someone";
+    return profile[0]?.display_name?.trim() || "Player";
   }
 
-  return profile?.display_name ?? "Someone";
+  return profile?.display_name?.trim() || "Player";
 }
 
 async function getActorName(userId: string) {

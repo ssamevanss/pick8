@@ -2,8 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createClient } from "@/utils/supabase/server";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createClient } from "@/utils/supabase/legacy-server";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
 import { getKickoffIso } from "@/utils/fixtures";
 import { getActiveSeason } from "@/utils/seasons";
 import { getSelectedLeagueForUser } from "@/utils/leagues";
@@ -1637,10 +1637,10 @@ function getProfileDisplayName(
     | null,
 ) {
   if (Array.isArray(profiles)) {
-    return profiles[0]?.display_name ?? "Unknown player";
+    return profiles[0]?.display_name?.trim() || "Player";
   }
 
-  return profiles?.display_name ?? "Unknown player";
+  return profiles?.display_name?.trim() || "Player";
 }
 
 type SeasonStatus = "draft" | "active" | "archived";

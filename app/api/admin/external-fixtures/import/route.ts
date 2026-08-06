@@ -9,8 +9,8 @@ import {
   loadExternalFixtureImportSeason,
   validateDateWindow,
 } from "@/utils/external-fixture-import";
-import { createAdminClient } from "@/utils/supabase/admin";
-import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
+import { createClient } from "@/utils/supabase/legacy-server";
 
 export const dynamic = "force-dynamic";
 

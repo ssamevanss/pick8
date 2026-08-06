@@ -38,10 +38,10 @@ type ActivityCommentsSectionProps = {
 
 function getCommentDisplayName(comment: ActivityComment) {
   if (Array.isArray(comment.profiles)) {
-    return comment.profiles[0]?.display_name ?? "Someone";
+    return comment.profiles[0]?.display_name?.trim() || "Player";
   }
 
-  return comment.profiles?.display_name ?? "Someone";
+  return comment.profiles?.display_name?.trim() || "Player";
 }
 
 function makeProfile(displayName: string): CommentProfile {

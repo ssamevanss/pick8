@@ -1,4 +1,4 @@
-import { createClient } from "@/utils/supabase/server";
+import { createClient } from "@/utils/supabase/legacy-server";
 import { getFixtureSelectionStatus } from "@/utils/fixture-selection";
 
 type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;

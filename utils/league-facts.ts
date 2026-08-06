@@ -1,5 +1,5 @@
-import { createAdminClient } from "@/utils/supabase/admin";
-import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/legacy-admin";
+import { createClient } from "@/utils/supabase/legacy-server";
 import { upsertActivityNotification } from "@/utils/activity";
 
 type SupabaseLikeClient =
@@ -128,10 +128,10 @@ function getDisplayName(
     | null,
 ) {
   if (Array.isArray(profile)) {
-    return profile[0]?.display_name ?? "Someone";
+    return profile[0]?.display_name?.trim() || "Player";
   }
 
-  return profile?.display_name ?? "Someone";
+  return profile?.display_name?.trim() || "Player";
 }
 
 function getResult(homeScore: number, awayScore: number) {

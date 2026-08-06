@@ -1,0 +1,122 @@
+import "server-only";
+
+import {
+  calculateCompletedMatchdayGoalTotal,
+  isMatchdayReadyForFinalScoring,
+} from "@/utils/pick8-scoring";
+import type {
+  BreakdownEntry,
+  BreakdownFixture,
+  BreakdownMatchday,
+  BreakdownPlayer,
+  BreakdownProfile,
+  BreakdownSelection,
+} from "@/utils/pick8-breakdown-types";
+
+export type {
+  BreakdownEntry,
+  BreakdownFixture,
+  BreakdownMatchday,
+  BreakdownPlayer,
+  BreakdownProfile,
+  BreakdownSelection,
+} from "@/utils/pick8-breakdown-types";
+
+export function isMatchdayVisibleToAll(matchday: BreakdownMatchday, now: number) {
+  return (
+    ["locked", "scoring", "completed"].includes(matchday.status) ||
+    (matchday.locks_at !== null && now >= new Date(matchday.locks_at).getTime())
+  );
+}
+
+export function resolveDefaultPicksMatchday(
+  matchdays: BreakdownMatchday[],
+  now: number,
+) {
+  const ordered = [...matchdays].sort(
+    (a, b) => a.matchday_number - b.matchday_number,
+  );
+  return (
+    ordered.find((matchday) => matchday.status === "open") ??
+    ordered.find(
+      (matchday) =>
+        matchday.status === "upcoming" &&
+        matchday.locks_at !== null &&
+        new Date(matchday.locks_at).getTime() > now,
+    ) ??
+    [...ordered]
+      .reverse()
+      .find((matchday) => ["completed", "scoring"].includes(matchday.status)) ??
+    null
+  );
+}
+
+export function buildMatchdayBreakdown({
+  matchday,
+  profiles,
+  entries,
+  selections,
+  fixtures,
+  viewerId,
+  now,
+  includeAdminDrafts = false,
+}: {
+  matchday: BreakdownMatchday;
+  profiles: BreakdownProfile[];
+  entries: BreakdownEntry[];
+  selections: BreakdownSelection[];
+  fixtures: BreakdownFixture[];
+  viewerId: string;
+  now: number;
+  includeAdminDrafts?: boolean;
+}) {
+  const visibleToAll = isMatchdayVisibleToAll(matchday, now);
+  const finalReady = isMatchdayReadyForFinalScoring(fixtures);
+  const actualGoals = calculateCompletedMatchdayGoalTotal(fixtures);
+  const visibleProfiles = includeAdminDrafts || visibleToAll
+    ? profiles
+    : profiles.filter((profile) => profile.id === viewerId);
+  const players: BreakdownPlayer[] = visibleProfiles.map((player) => {
+    const namedPlayer = {
+      ...player,
+      display_name: player.display_name.trim() || "Player",
+    };
+    const candidate = entries.find(
+      (entry) => entry.matchday_id === matchday.id && entry.user_id === player.id,
+    );
+    const entry = includeAdminDrafts || player.id === viewerId
+      ? candidate ?? null
+      : candidate?.submitted_at
+        ? candidate
+        : null;
+    const entrySelections = entry
+      ? selections.filter((selection) => selection.entry_id === entry.id)
+      : [];
+    const selectionPoints = entrySelections.reduce(
+      (total, selection) => total + (selection.points_awarded ?? 0),
+      0,
+    );
+    return {
+      player: namedPlayer,
+      entry,
+      selections: entrySelections,
+      totalGoalsPoints:
+        entry?.calculated_score === null || entry?.calculated_score === undefined
+          ? null
+          : entry.calculated_score - selectionPoints,
+    };
+  });
+  const hasFinalScores = players.some(
+    ({ entry }) => entry?.calculated_score !== null && entry?.calculated_score !== undefined,
+  );
+  players.sort((a, b) => {
+    if (hasFinalScores) {
+      if (a.entry?.calculated_score === null || a.entry?.calculated_score === undefined) return 1;
+      if (b.entry?.calculated_score === null || b.entry?.calculated_score === undefined) return -1;
+      return b.entry.calculated_score - a.entry.calculated_score ||
+        a.player.display_name.localeCompare(b.player.display_name);
+    }
+    return a.player.display_name.localeCompare(b.player.display_name);
+  });
+  return { visibleToAll, finalReady, actualGoals, players };
+}
