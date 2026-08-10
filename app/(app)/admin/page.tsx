@@ -5,6 +5,13 @@ import SubmitButton from "@/components/forms/SubmitButton";
 import FixtureSyncCard from "@/components/admin/FixtureSyncCard";
 import ScoreRecalculationCard from "@/components/admin/ScoreRecalculationCard";
 import CompetitionRefreshCard from "@/components/admin/CompetitionRefreshCard";
+import MatchdaySyncModeCard from "@/components/admin/MatchdaySyncModeCard";
+import ManualMatchdayTestCard from "@/components/admin/ManualMatchdayTestCard";
+import {
+  MATCHDAY_2_TEST_ID,
+  MATCHDAY_3_TEST_FIXTURE_IDS,
+  MATCHDAY_3_TEST_NUMBER,
+} from "@/utils/pick8-manual-test";
 
 export default async function AdminPage({
   searchParams,
@@ -25,10 +32,33 @@ export default async function AdminPage({
     )
     .order("display_name", { ascending: true });
   const profiles = (data as Pick8Profile[] | null) ?? [];
-  const [{ data: seasonRows }, { data: matchdayRows }] = await Promise.all([
+  const [{ data: seasonRows }, { data: matchdayRows }, { data: entryRows }, { data: fixtureRows }] = await Promise.all([
     supabase.from("seasons").select("id, name").order("provider_season", { ascending: false }),
-    supabase.from("matchdays").select("id, season_id, matchday_number, status").order("matchday_number", { ascending: true }),
+    supabase.from("matchdays").select("id, season_id, matchday_number, status, fixture_sync_mode").order("matchday_number", { ascending: true }),
+    supabase.from("entries").select("matchday_id, submitted_at, calculated_score"),
+    supabase.from("fixtures").select("matchday_id, kickoff_at, external_fixture_id"),
   ]);
+  const seasonNameById = new Map((seasonRows ?? []).map((season) => [season.id, season.name]));
+  const now = new Date().getTime();
+  const matchday3 = (matchdayRows ?? []).find(
+    (matchday) => matchday.matchday_number === MATCHDAY_3_TEST_NUMBER,
+  );
+  const matchday3FixtureIds = (fixtureRows ?? [])
+    .filter((fixture) => fixture.matchday_id === matchday3?.id)
+    .map((fixture) => fixture.external_fixture_id)
+    .sort();
+  const expectedMatchday3FixtureIds = [...MATCHDAY_3_TEST_FIXTURE_IDS].sort();
+  const matchday3Exact = Boolean(matchday3) &&
+    matchday3?.fixture_sync_mode === "manual" &&
+    matchday3FixtureIds.length === expectedMatchday3FixtureIds.length &&
+    matchday3FixtureIds.every((id, index) => id === expectedMatchday3FixtureIds[index]);
+  const matchday3State = !matchday3
+    ? "missing" as const
+    : !matchday3Exact
+      ? "unexpected" as const
+      : matchday3.status === "completed"
+        ? "completed" as const
+        : "ready" as const;
 
   return (
     <>
@@ -48,11 +78,26 @@ export default async function AdminPage({
         </p>
       ) : null}
       {params.saved ? (
-        <p className="brand-alert-success mb-4">Profile saved.</p>
+        <p className="brand-alert-success mb-4">{params.saved === "fixture-mode" ? "Fixture sync mode saved." : "Profile saved."}</p>
       ) : null}
 
       <FixtureSyncCard />
+      <MatchdaySyncModeCard matchdays={(matchdayRows ?? []).map((matchday) => ({
+        id: matchday.id,
+        number: matchday.matchday_number,
+        seasonName: seasonNameById.get(matchday.season_id) ?? "Season",
+        status: matchday.status,
+        mode: matchday.fixture_sync_mode,
+        canChange:
+          !["locked", "scoring", "completed"].includes(matchday.status) &&
+          !(fixtureRows ?? []).some((fixture) => fixture.matchday_id === matchday.id && Date.parse(fixture.kickoff_at) <= now) &&
+          !(entryRows ?? []).some((entry) => entry.matchday_id === matchday.id && (entry.submitted_at !== null || entry.calculated_score !== null)),
+      }))} />
       <CompetitionRefreshCard />
+      <ManualMatchdayTestCard
+        matchday2Available={(matchdayRows ?? []).some((matchday) => matchday.id === MATCHDAY_2_TEST_ID && matchday.fixture_sync_mode === "manual" && matchday.status !== "completed")}
+        matchday3State={matchday3State}
+      />
       <ScoreRecalculationCard
         seasons={(seasonRows ?? []).map((season) => ({ id: season.id, name: season.name }))}
         matchdays={(matchdayRows ?? []).map((matchday) => ({ id: matchday.id, seasonId: matchday.season_id, number: matchday.matchday_number, status: matchday.status }))}

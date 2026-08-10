@@ -73,6 +73,8 @@ export default function FixtureSyncCard() {
               <div><dt className="opacity-70">Inserted</dt><dd>{state.summary.inserted}</dd></div>
               <div><dt className="opacity-70">Updated</dt><dd>{state.summary.updated}</dd></div>
               <div><dt className="opacity-70">Unchanged</dt><dd>{state.summary.unchanged}</dd></div>
+              <div><dt className="opacity-70">Stale rows removed</dt><dd>{state.summary.removed}</dd></div>
+              <div><dt className="opacity-70">Entries returned to draft</dt><dd>{state.summary.invalidatedEntries}</dd></div>
               <div className="col-span-2 sm:col-span-3">
                 <dt className="opacity-70">Sync timestamp</dt>
                 <dd>{new Date(state.summary.syncedAt).toLocaleString()}</dd>
@@ -82,7 +84,7 @@ export default function FixtureSyncCard() {
           {state.summary?.potentialRemovals.length ? (
             <p className="mt-3 text-sm">
               {state.summary.potentialRemovals.length} local fixture(s) were not
-              returned and were left unchanged as possible removals or postponements.
+              returned and require explicit reconciliation.
             </p>
           ) : null}
         </div>

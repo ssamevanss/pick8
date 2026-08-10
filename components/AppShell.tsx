@@ -14,7 +14,6 @@ const primaryItems = [
   { href: "/dashboard", label: "Dashboard", mobileLabel: "Home" },
   { href: "/my-picks", label: "My Picks", mobileLabel: "Picks" },
   { href: "/tables", label: "Tables", mobileLabel: "Tables" },
-  { href: "/rules", label: "Rules", mobileLabel: "Rules" },
 ];
 
 function isCurrentRoute(pathname: string, href: string) {
@@ -70,18 +69,19 @@ export default function AppShell({ children, isAdmin }: AppShellProps) {
           <BrandMark />
 
           <nav className="hidden items-center gap-1 sm:flex" aria-label="Account">
-            {isAdmin ? <NavLink href="/admin" label="Admin" /> : null}
+            <NavLink href="/rules" label="Rules" />
             <NavLink href="/settings" label="Settings" />
             <NavLink href="/logout" label="Sign out" />
           </nav>
 
-          <Link
-            href="/logout"
-            prefetch={false}
-            className="brand-button-secondary sm:hidden"
-          >
-            Sign out
-          </Link>
+          <details className="group relative sm:hidden">
+            <summary className="brand-button-secondary cursor-pointer list-none [&::-webkit-details-marker]:hidden">Menu</summary>
+            <nav className="absolute right-0 top-[calc(100%+0.5rem)] z-50 grid min-w-40 gap-1 rounded-xl border border-white/15 bg-[#07101f] p-2 shadow-2xl shadow-black/50" aria-label="Account menu">
+              <NavLink href="/rules" label="Rules" />
+              <NavLink href="/settings" label="Settings" />
+              <NavLink href="/logout" label="Sign out" />
+            </nav>
+          </details>
         </header>
 
         <main className="min-w-0 flex-1">{children}</main>

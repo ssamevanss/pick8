@@ -234,6 +234,7 @@ export type Database = {
       matchdays: {
         Row: {
           created_at: string
+          fixture_sync_mode: string
           id: string
           locks_at: string | null
           matchday_number: number
@@ -244,6 +245,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          fixture_sync_mode?: string
           id?: string
           locks_at?: string | null
           matchday_number: number
@@ -254,6 +256,7 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          fixture_sync_mode?: string
           id?: string
           locks_at?: string | null
           matchday_number?: number
@@ -340,6 +343,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_pick8_manual_test_matchday3: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       can_access_pick8_season: {
         Args: { check_season_id: string; check_user_id?: string }
         Returns: boolean
@@ -358,6 +365,10 @@ export type Database = {
       }
       is_pick8_active: { Args: { check_user_id?: string }; Returns: boolean }
       is_pick8_admin: { Args: { check_user_id?: string }; Returns: boolean }
+      finish_pick8_manual_test_matchday3: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
     }
     Enums: {
       [_ in never]: never

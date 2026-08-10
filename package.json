@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "spike:football-data": "node --experimental-strip-types scripts/spike-football-data.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
     "lint": "eslint"
   },
   "dependencies": {

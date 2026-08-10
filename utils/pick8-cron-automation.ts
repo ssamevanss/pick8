@@ -9,12 +9,17 @@ import {
   type FixtureSyncSummary,
 } from "@/utils/who-you-got-fixture-sync";
 import { refreshPick8Competitions } from "@/utils/pick8-competitions";
+import {
+  getFixtureAutomationPlan,
+  providerManagedMatchdays,
+  type FixtureSyncMode,
+} from "@/utils/pick8-fixture-sync-mode";
 
 type Season = Pick<Tables<"seasons">, "id" | "name" | "provider_season">;
 type Matchday = Pick<
   Tables<"matchdays">,
   "id" | "matchday_number" | "status" | "locks_at"
->;
+> & { fixture_sync_mode: FixtureSyncMode };
 type Fixture = Pick<Tables<"fixtures">, "matchday_id" | "kickoff_at" | "status">;
 
 type MatchdayFailure = { matchday: number; error: string };
@@ -70,7 +75,7 @@ async function loadMatchdays(seasonId: string) {
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("matchdays")
-    .select("id, matchday_number, status, locks_at")
+    .select("id, matchday_number, status, locks_at, fixture_sync_mode")
     .eq("season_id", seasonId)
     .order("matchday_number", { ascending: true });
   if (error) throw new Error(`Loading matchdays failed: ${error.message}`);
@@ -110,6 +115,36 @@ async function syncMatchday({
   inFlightMatchdays.add(key);
   const startedAt = Date.now();
   try {
+    const operation = recalculate === "never" ? "fixtures" : "results";
+    const automationPlan = getFixtureAutomationPlan(
+      matchday.fixture_sync_mode as "provider" | "manual",
+      operation,
+    );
+    if (automationPlan === "skip") return null;
+    if (automationPlan === "score_local_state") {
+      const scoring = await recalculateMatchdayScores({
+        seasonId: season.id,
+        matchdayId: matchday.id,
+      });
+      return {
+        matchday: matchday.matchday_number,
+        sync: {
+          season: season.provider_season,
+          matchday: matchday.matchday_number,
+          matchdayStatus: matchday.status,
+          received: 0,
+          inserted: 0,
+          updated: 0,
+          unchanged: 0,
+          removed: 0,
+          invalidatedEntries: 0,
+          potentialRemovals: [],
+          syncedAt: new Date().toISOString(),
+        },
+        recalculated: true,
+        scoring,
+      };
+    }
     const sync = await syncWhoYouGotFixtures({
       season: season.provider_season,
       matchday: matchday.matchday_number,
@@ -135,6 +170,8 @@ async function syncMatchday({
       inserted: sync.inserted,
       updated: sync.updated,
       unchanged: sync.unchanged,
+      removed: sync.removed,
+      invalidatedEntries: sync.invalidatedEntries,
       potentialRemovals: sync.potentialRemovals.length,
       recalculated: Boolean(scoring),
     });
@@ -195,10 +232,12 @@ function totals(runs: MatchdayRun[]) {
       inserted: total.inserted + run.sync.inserted,
       updated: total.updated + run.sync.updated,
       unchanged: total.unchanged + run.sync.unchanged,
+      removed: total.removed + run.sync.removed,
+      invalidatedEntries: total.invalidatedEntries + run.sync.invalidatedEntries,
       potentialRemovals: total.potentialRemovals + run.sync.potentialRemovals.length,
       recalculated: total.recalculated + Number(run.recalculated),
     }),
-    { received: 0, inserted: 0, updated: 0, unchanged: 0, potentialRemovals: 0, recalculated: 0 },
+    { received: 0, inserted: 0, updated: 0, unchanged: 0, removed: 0, invalidatedEntries: 0, potentialRemovals: 0, recalculated: 0 },
   );
 }
 
@@ -223,7 +262,7 @@ export async function runDailyFixtureSync() {
     ["open", "scoring"].includes(matchday.status),
   );
   const nextUpcoming = matchdays.filter((matchday) => matchday.status === "upcoming").slice(0, 3);
-  const selected = uniqueMatchdays([...useful, ...nextUpcoming]);
+  const selected = providerManagedMatchdays(uniqueMatchdays([...useful, ...nextUpcoming]));
   const result = await runSelectedMatchdays({ route, season, matchdays: selected, recalculate: "never" });
   const competitionRefresh = await refreshPick8Competitions(season.id);
   const response = {

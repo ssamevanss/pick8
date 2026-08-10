@@ -17,6 +17,18 @@ export function resolveDashboardMatchday(matchdays: StandingsMatchday[], now: nu
   return ordered.find((matchday) => matchday.status === "open") ?? ordered.find((matchday) => matchday.status === "upcoming" && matchday.locks_at !== null && Date.parse(matchday.locks_at) > now) ?? ordered.find((matchday) => matchday.status === "scoring") ?? [...ordered].reverse().find((matchday) => matchday.status === "completed") ?? null;
 }
 
+export function playerMatchdayLifecycle(
+  matchday: Pick<StandingsMatchday, "status" | "locks_at">,
+  now: number,
+) {
+  if (matchday.status === "completed") return "Completed";
+  if (
+    ["locked", "scoring"].includes(matchday.status) ||
+    (matchday.locks_at !== null && Date.parse(matchday.locks_at) <= now)
+  ) return "In progress";
+  return "Open";
+}
+
 export function resolveCurrentCompetition(competitions: StandingsCompetition[], currentMatchday: StandingsMatchday | null) {
   const ordered = [...competitions].sort((a, b) => a.start_matchday - b.start_matchday);
   return ordered.find((competition) => competition.status === "active") ?? (currentMatchday ? ordered.find((competition) => competition.start_matchday <= currentMatchday.matchday_number && competition.end_matchday >= currentMatchday.matchday_number) : null) ?? ordered.find((competition) => competition.status === "upcoming") ?? null;

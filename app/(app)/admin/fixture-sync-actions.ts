@@ -1,5 +1,7 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { getRequestAuthContext } from "@/utils/app-context";
 import {
   FixtureSyncError,
@@ -8,6 +10,7 @@ import {
 } from "@/utils/who-you-got-fixture-sync";
 import { createAdminClient } from "@/utils/supabase/admin";
 import { refreshPick8Competitions } from "@/utils/pick8-competitions";
+import { isFixtureSyncMode } from "@/utils/pick8-fixture-sync-mode";
 
 export type FixtureSyncActionState = {
   ok: boolean;
@@ -43,4 +46,23 @@ export async function syncFixturesAction(
     }
     return { ok: false, message: "Fixture sync failed unexpectedly." };
   }
+}
+
+export async function updateMatchdayFixtureSyncMode(formData: FormData) {
+  const { supabase, user, profile } = await getRequestAuthContext();
+  if (!user || !profile?.is_admin || !profile.is_active) {
+    redirect("/dashboard?error=Admin+access+required");
+  }
+  const matchdayId = String(formData.get("matchday_id") ?? "").trim();
+  const mode = String(formData.get("fixture_sync_mode") ?? "").trim();
+  if (!matchdayId || !isFixtureSyncMode(mode)) {
+    redirect("/admin?error=Invalid+fixture+sync+mode");
+  }
+  const { error } = await supabase
+    .from("matchdays")
+    .update({ fixture_sync_mode: mode, updated_at: new Date().toISOString() })
+    .eq("id", matchdayId);
+  if (error) redirect(`/admin?error=${encodeURIComponent(error.message)}`);
+  revalidatePath("/admin");
+  redirect("/admin?saved=fixture-mode");
 }

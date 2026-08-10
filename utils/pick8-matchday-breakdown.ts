@@ -4,6 +4,10 @@ import {
   calculateCompletedMatchdayGoalTotal,
   isMatchdayReadyForFinalScoring,
 } from "@/utils/pick8-scoring";
+import {
+  hasFixtureKickedOff,
+  isPick8SelectionVisible,
+} from "@/utils/pick8-fixture-state";
 import type {
   BreakdownEntry,
   BreakdownFixture,
@@ -22,10 +26,14 @@ export type {
   BreakdownSelection,
 } from "@/utils/pick8-breakdown-types";
 
-export function isMatchdayVisibleToAll(matchday: BreakdownMatchday, now: number) {
+export function isMatchdayVisibleToAll(
+  matchday: BreakdownMatchday,
+  fixtures: BreakdownFixture[],
+  now: number,
+) {
   return (
     ["locked", "scoring", "completed"].includes(matchday.status) ||
-    (matchday.locks_at !== null && now >= new Date(matchday.locks_at).getTime())
+    fixtures.some((fixture) => hasFixtureKickedOff(fixture.kickoff_at, now))
   );
 }
 
@@ -70,7 +78,7 @@ export function buildMatchdayBreakdown({
   now: number;
   includeAdminDrafts?: boolean;
 }) {
-  const visibleToAll = isMatchdayVisibleToAll(matchday, now);
+  const visibleToAll = isMatchdayVisibleToAll(matchday, fixtures, now);
   const finalReady = isMatchdayReadyForFinalScoring(fixtures);
   const actualGoals = calculateCompletedMatchdayGoalTotal(fixtures);
   const visibleProfiles = includeAdminDrafts || visibleToAll
@@ -90,7 +98,18 @@ export function buildMatchdayBreakdown({
         ? candidate
         : null;
     const entrySelections = entry
-      ? selections.filter((selection) => selection.entry_id === entry.id)
+      ? selections.filter((selection) => {
+          if (selection.entry_id !== entry.id) return false;
+          if (player.id === viewerId || includeAdminDrafts) return true;
+          const fixture = fixtures.find((item) => item.id === selection.fixture_id);
+          return fixture ? isPick8SelectionVisible({
+            viewerId,
+            ownerId: player.id,
+            submittedAt: entry.submitted_at,
+            kickoffAt: fixture.kickoff_at,
+            now,
+          }) : false;
+        })
       : [];
     const selectionPoints = entrySelections.reduce(
       (total, selection) => total + (selection.points_awarded ?? 0),

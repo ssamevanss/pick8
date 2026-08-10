@@ -71,7 +71,7 @@ export default async function TablesPage({
   const view: View = ["competition", "overall", "matchday"].includes(params.view ?? "")
     ? (params.view as View)
     : "competition";
-  const { user, profile } = await getRequestAuthContext();
+  const { supabase, user, profile } = await getRequestAuthContext();
   if (!user || !profile?.is_active) return null;
   const requestNow = new Date().getTime();
 
@@ -135,7 +135,7 @@ export default async function TablesPage({
     const [{ data: fixtures }, { data: selections }] = await Promise.all([
       admin.from("fixtures").select("id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score").eq("matchday_id", selectedMatchday.id).order("kickoff_at"),
       breakdownEntryIds.length
-        ? admin.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", breakdownEntryIds)
+        ? supabase.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", breakdownEntryIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
     const fixtureRows = fixtures ?? [];
@@ -147,14 +147,13 @@ export default async function TablesPage({
       fixtures: fixtureRows,
       viewerId: user.id,
       now: requestNow,
-      includeAdminDrafts: profile.is_admin,
     });
 
     breakdown = (
       <div className="space-y-5">
         {!sharedBreakdown.visibleToAll && !profile.is_admin ? <p className="brand-alert-warning">This matchday has not locked. Only your picks are visible.</p> : null}
         <p className="text-sm text-slate-400">Locks {formatDate(selectedMatchday.locks_at)}</p>
-        <ReadOnlyMatchdayPicks matchday={selectedMatchday} fixtures={fixtureRows} players={sharedBreakdown.players} actualGoals={sharedBreakdown.actualGoals} finalReady={sharedBreakdown.finalReady} currentPlayerId={user.id} />
+        <ReadOnlyMatchdayPicks matchday={selectedMatchday} fixtures={fixtureRows} players={sharedBreakdown.players} actualGoals={sharedBreakdown.actualGoals} finalReady={sharedBreakdown.finalReady} currentPlayerId={user.id} now={requestNow} />
       </div>
     );
   }

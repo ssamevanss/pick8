@@ -233,9 +233,19 @@ export async function recalculateMatchdayScores({
   const { data: entries, error: entriesError } = await supabase
     .from("entries")
     .select("id, total_goals_prediction")
-    .eq("matchday_id", matchdayId);
+    .eq("matchday_id", matchdayId)
+    .not("submitted_at", "is", null);
   if (entriesError) databaseFailure("Reading entries", entriesError.message);
   const entryRows = entries ?? [];
+
+  // Drafts are never competition entries. Clear any score left by an older
+  // recalculation path so they cannot leak into tables or result labels.
+  const { error: draftResetError } = await supabase
+    .from("entries")
+    .update({ calculated_score: null, score_calculated_at: null, updated_at: recalculatedAt })
+    .eq("matchday_id", matchdayId)
+    .is("submitted_at", null);
+  if (draftResetError) databaseFailure("Resetting draft scores", draftResetError.message);
   const entryIds = entryRows.map((entry) => entry.id);
   const { data: selections, error: selectionsError } = entryIds.length
     ? await supabase

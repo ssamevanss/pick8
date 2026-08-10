@@ -2,6 +2,9 @@ import "server-only";
 
 import { createAdminClient } from "@/utils/supabase/admin";
 import type { Tables, TablesInsert } from "@/types/database.types";
+import { logicalPick8FixtureKey } from "@/utils/pick8-fixture-identity";
+import { earliestFixtureKickoff } from "@/utils/pick8-fixture-state";
+import { shouldSyncProviderFixtures } from "@/utils/pick8-fixture-sync-mode";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const FIXTURE_STATUSES = new Set([
@@ -35,6 +38,7 @@ type SourceFixture = {
   status: FixtureStatus;
   homeScore: number | null;
   awayScore: number | null;
+  sourceMatchday: number | null;
 };
 
 export type FixtureSyncSummary = {
@@ -45,6 +49,8 @@ export type FixtureSyncSummary = {
   inserted: number;
   updated: number;
   unchanged: number;
+  removed: number;
+  invalidatedEntries: number;
   potentialRemovals: string[];
   syncedAt: string;
 };
@@ -53,6 +59,7 @@ export class FixtureSyncError extends Error {
   constructor(
     public readonly code:
       | "validation"
+      | "manual_matchday"
       | "configuration"
       | "authentication"
       | "missing_mapping"
@@ -156,6 +163,10 @@ function parseFixture(value: unknown, index: number): SourceFixture {
   const awayScore = scoreValue(fixture, "away");
   const homeTeamCrestUrl = crestUrlValue(fixture.homeTeamCrestUrl);
   const awayTeamCrestUrl = crestUrlValue(fixture.awayTeamCrestUrl);
+  const sourceMatchdayValue = first(fixture, ["matchday", "matchday_number", "matchdayNumber"]);
+  const sourceMatchday = sourceMatchdayValue === null
+    ? null
+    : integerValue(sourceMatchdayValue);
 
   if (
     !externalFixtureId ||
@@ -170,6 +181,7 @@ function parseFixture(value: unknown, index: number): SourceFixture {
     away.id === undefined ||
     homeScore === undefined ||
     awayScore === undefined ||
+    (sourceMatchdayValue !== null && sourceMatchday === undefined) ||
     homeTeamCrestUrl === undefined ||
     awayTeamCrestUrl === undefined
   ) {
@@ -191,10 +203,11 @@ function parseFixture(value: unknown, index: number): SourceFixture {
     status,
     homeScore,
     awayScore,
+    sourceMatchday: sourceMatchday ?? null,
   };
 }
 
-function parseFixtures(payload: unknown) {
+function parseFixtures(payload: unknown, expectedMatchday: number) {
   const root = record(payload);
   const values = Array.isArray(payload) ? payload : root?.fixtures;
   if (!Array.isArray(values) || values.length === 0) {
@@ -211,6 +224,15 @@ function parseFixtures(payload: unknown) {
       "Who You Got returned duplicate fixture IDs.",
     );
   }
+  const mismatched = fixtures.filter(
+    (fixture) => fixture.sourceMatchday !== null && fixture.sourceMatchday !== expectedMatchday,
+  );
+  if (mismatched.length > 0) {
+    throw new FixtureSyncError(
+      "invalid_response",
+      `Who You Got returned ${mismatched.length} fixture(s) outside matchday ${expectedMatchday}.`,
+    );
+  }
   return fixtures;
 }
 
@@ -221,10 +243,14 @@ function seasonName(startYear: number) {
 function deriveMatchdayStatus(
   fixtures: SourceFixture[],
   existingStatus: string | null,
+  now = Date.now(),
 ) {
   const statuses = fixtures.map((fixture) => fixture.status);
+  const hasStartedFixture = fixtures.some(
+    (fixture) => Date.parse(fixture.kickoffAt) <= now,
+  );
   if (statuses.every((status) => status === "scheduled" || status === "timed")) {
-    return "upcoming";
+    return hasStartedFixture ? "scoring" : "upcoming";
   }
   if (statuses.some((status) => status === "in_play" || status === "paused")) {
     return "scoring";
@@ -308,7 +334,21 @@ async function fetchFixtures(season: number, matchday: number) {
       "Who You Got returned invalid JSON.",
     );
   }
-  return parseFixtures(payload);
+  return parseFixtures(payload, matchday);
+}
+
+function logicalFixtureKey(fixture: {
+  home_team_id: number | null;
+  away_team_id: number | null;
+  home_team_name: string;
+  away_team_name: string;
+}) {
+  return logicalPick8FixtureKey({
+    homeTeamId: fixture.home_team_id,
+    awayTeamId: fixture.away_team_id,
+    homeTeamName: fixture.home_team_name,
+    awayTeamName: fixture.away_team_name,
+  });
 }
 
 function databaseError(operation: string, message: string) {
@@ -333,7 +373,6 @@ export async function syncWhoYouGotFixtures(input: {
     );
   }
 
-  const fixtures = await fetchFixtures(input.season, input.matchday);
   const supabase = createAdminClient();
   const syncedAt = new Date().toISOString();
 
@@ -381,27 +420,38 @@ export async function syncWhoYouGotFixtures(input: {
 
   const { data: existingMatchday, error: matchdayReadError } = await supabase
     .from("matchdays")
-    .select("id, status")
+    .select("id, status, fixture_sync_mode")
     .eq("season_id", seasonId)
     .eq("matchday_number", input.matchday)
     .maybeSingle();
   if (matchdayReadError) throw databaseError("Reading matchday", matchdayReadError.message);
+  if (
+    existingMatchday &&
+    !shouldSyncProviderFixtures(existingMatchday.fixture_sync_mode as "provider" | "manual")
+  ) {
+    throw new FixtureSyncError(
+      "manual_matchday",
+      `Matchday ${input.matchday} is manually managed and cannot be provider-synced.`,
+    );
+  }
+
+  const fixtures = await fetchFixtures(input.season, input.matchday);
 
   const matchdayStatus = deriveMatchdayStatus(
     fixtures,
     existingMatchday?.status ?? null,
   );
-  const locksAt = fixtures.reduce(
-    (earliest, fixture) =>
-      fixture.kickoffAt < earliest ? fixture.kickoffAt : earliest,
-    fixtures[0].kickoffAt,
+  const locksAt = earliestFixtureKickoff(
+    fixtures.map((fixture) => ({ kickoff_at: fixture.kickoffAt })),
   );
+  if (!locksAt) throw databaseError("Deriving matchday deadline", "No valid fixture kickoff was returned.");
   const { data: matchday, error: matchdayError } = await supabase
     .from("matchdays")
     .upsert(
       {
         season_id: seasonId,
         matchday_number: input.matchday,
+        fixture_sync_mode: "provider",
         status: matchdayStatus,
         locks_at: locksAt,
         updated_at: syncedAt,
@@ -416,17 +466,28 @@ export async function syncWhoYouGotFixtures(input: {
   const { data: existingRows, error: fixtureReadError } = await supabase
     .from("fixtures")
     .select(
-      "external_fixture_id, matchday_id, home_team_id, away_team_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score",
+      "id, external_fixture_id, matchday_id, home_team_id, away_team_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score",
     )
     .in("external_fixture_id", externalIds);
   if (fixtureReadError) throw databaseError("Reading fixtures", fixtureReadError.message);
   const existingById = new Map(
     (existingRows ?? []).map((fixture) => [fixture.external_fixture_id, fixture]),
   );
+  const { data: existingMatchdayRows, error: matchdayFixtureReadError } = await supabase
+    .from("fixtures")
+    .select("id, external_fixture_id, matchday_id, home_team_id, away_team_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score")
+    .eq("matchday_id", matchday.id);
+  if (matchdayFixtureReadError) {
+    throw databaseError("Reading matchday fixtures", matchdayFixtureReadError.message);
+  }
+  const existingByLogicalFixture = new Map(
+    (existingMatchdayRows ?? []).map((fixture) => [logicalFixtureKey(fixture), fixture]),
+  );
 
   const inserts: TablesInsert<"fixtures">[] = [];
   const updates: Array<Pick<
     Tables<"fixtures">,
+    | "id"
     | "external_fixture_id"
     | "matchday_id"
     | "home_team_id"
@@ -444,7 +505,13 @@ export async function syncWhoYouGotFixtures(input: {
   let unchanged = 0;
 
   for (const fixture of fixtures) {
-    const existing = existingById.get(fixture.externalFixtureId);
+    const existing = existingById.get(fixture.externalFixtureId) ??
+      existingByLogicalFixture.get(logicalFixtureKey({
+        home_team_id: fixture.homeTeamId,
+        away_team_id: fixture.awayTeamId,
+        home_team_name: fixture.homeTeamName,
+        away_team_name: fixture.awayTeamName,
+      }));
     if (!existing) {
       inserts.push({
         matchday_id: matchday.id,
@@ -462,6 +529,7 @@ export async function syncWhoYouGotFixtures(input: {
         last_synced_at: syncedAt,
       });
     } else if (
+      existing.external_fixture_id !== fixture.externalFixtureId ||
       existing.matchday_id !== matchday.id ||
       existing.home_team_id !== fixture.homeTeamId ||
       existing.away_team_id !== fixture.awayTeamId ||
@@ -475,6 +543,7 @@ export async function syncWhoYouGotFixtures(input: {
       existing.away_score !== fixture.awayScore
     ) {
       updates.push({
+        id: existing.id,
         external_fixture_id: fixture.externalFixtureId,
         matchday_id: matchday.id,
         home_team_id: fixture.homeTeamId,
@@ -502,6 +571,7 @@ export async function syncWhoYouGotFixtures(input: {
     const { error } = await supabase
       .from("fixtures")
       .update({
+        external_fixture_id: fixture.external_fixture_id,
         matchday_id: fixture.matchday_id,
         home_team_id: fixture.home_team_id,
         away_team_id: fixture.away_team_id,
@@ -516,7 +586,7 @@ export async function syncWhoYouGotFixtures(input: {
         last_synced_at: syncedAt,
         updated_at: syncedAt,
       })
-      .eq("external_fixture_id", fixture.external_fixture_id);
+      .eq("id", fixture.id);
     if (error) throw databaseError("Updating fixture", error.message);
   }
   if (unchangedExternalIds.length) {
@@ -533,9 +603,59 @@ export async function syncWhoYouGotFixtures(input: {
     .eq("matchday_id", matchday.id);
   if (missingReadError) throw databaseError("Checking missing fixtures", missingReadError.message);
   const receivedIds = new Set(externalIds);
-  const potentialRemovals = (matchdayFixtures ?? [])
+  const staleExternalIds = (matchdayFixtures ?? [])
     .map((fixture) => fixture.external_fixture_id)
     .filter((id) => !receivedIds.has(id));
+
+  let removed = 0;
+  let invalidatedEntries = 0;
+  const potentialRemovals: string[] = [];
+  if (staleExternalIds.length) {
+    const { data: referencedRows, error: referenceError } = await supabase
+      .from("entry_selections")
+      .select("entry_id, fixture_id, fixtures!inner(external_fixture_id)")
+      .in("fixtures.external_fixture_id", staleExternalIds);
+    if (referenceError) throw databaseError("Checking stale fixture selections", referenceError.message);
+    const affectedEntryIds = [
+      ...new Set((referencedRows ?? []).map((row) => row.entry_id)),
+    ];
+    const staleFixtureIds = (existingMatchdayRows ?? [])
+      .filter((fixture) => staleExternalIds.includes(fixture.external_fixture_id))
+      .map((fixture) => fixture.id);
+
+    // The provider set is authoritative. A removed provider fixture cannot be
+    // mapped safely to a different match, so any affected submission becomes
+    // a truthful draft before its invalid selections and fixture are removed.
+    if (affectedEntryIds.length) {
+      const { error: entryResetError } = await supabase
+        .from("entries")
+        .update({
+          submitted_at: null,
+          calculated_score: null,
+          score_calculated_at: null,
+          updated_at: syncedAt,
+        })
+        .in("id", affectedEntryIds)
+        .eq("matchday_id", matchday.id);
+      if (entryResetError) throw databaseError("Invalidating stale fixture entries", entryResetError.message);
+      invalidatedEntries = affectedEntryIds.length;
+    }
+    if (staleFixtureIds.length) {
+      const { error: selectionRemovalError } = await supabase
+        .from("entry_selections")
+        .delete()
+        .in("fixture_id", staleFixtureIds);
+      if (selectionRemovalError) throw databaseError("Removing stale fixture selections", selectionRemovalError.message);
+
+      const { error: removalError } = await supabase
+        .from("fixtures")
+        .delete()
+        .eq("matchday_id", matchday.id)
+        .in("id", staleFixtureIds);
+      if (removalError) throw databaseError("Removing stale fixtures", removalError.message);
+      removed = staleFixtureIds.length;
+    }
+  }
 
   return {
     season: input.season,
@@ -545,6 +665,8 @@ export async function syncWhoYouGotFixtures(input: {
     inserted: inserts.length,
     updated: updates.length,
     unchanged,
+    removed,
+    invalidatedEntries,
     potentialRemovals,
     syncedAt,
   };

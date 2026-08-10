@@ -12,12 +12,20 @@ import {
   type BreakdownProfile,
   type BreakdownSelection,
 } from "@/utils/pick8-matchday-breakdown";
+import {
+  earliestFixtureKickoff,
+  isFixtureSelectionEditable,
+} from "@/utils/pick8-fixture-state";
+import { playerMatchdayLifecycle } from "@/utils/pick8-standings";
 
 function formatDateTime(value: string | null) {
   if (!value) return "Not set";
   return new Intl.DateTimeFormat("en-AU", {
-    dateStyle: "medium",
-    timeStyle: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
     timeZone: "Australia/Melbourne",
   }).format(new Date(value));
 }
@@ -71,21 +79,38 @@ export default async function MyPicksPage({
     admin.from("entries").select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at").eq("matchday_id", selectedMatchday.id),
   ]);
   const fixtures = (fixtureRows ?? []) as BreakdownFixture[];
+  const effectiveLocksAt = earliestFixtureKickoff(fixtures) ?? selectedMatchday.locks_at;
   const profiles = (profileRows ?? []) as BreakdownProfile[];
   const entries = (entryRows ?? []) as BreakdownEntry[];
   const entryIds = entries.map((entry) => entry.id);
   const { data: selectionRows } = entryIds.length
-    ? await admin.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", entryIds)
+    ? await supabase.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", entryIds)
     : { data: [] };
   const selections = (selectionRows ?? []) as BreakdownSelection[];
-  const editable =
+  const initialSubmissionWindowOpen =
     ["open", "upcoming"].includes(selectedMatchday.status) &&
-    selectedMatchday.locks_at !== null &&
-    now < new Date(selectedMatchday.locks_at).getTime();
+    effectiveLocksAt !== null &&
+    now < new Date(effectiveLocksAt).getTime();
   const ownEntry = entries.find((entry) => entry.user_id === user.id) ?? null;
   const ownSelections = ownEntry
     ? selections.filter((selection) => selection.entry_id === ownEntry.id)
     : [];
+  const hasFutureFixture = fixtures.some((fixture) =>
+    isFixtureSelectionEditable(fixture, now),
+  );
+  const canEditSubmittedEntry = Boolean(ownEntry?.submitted_at) && hasFutureFixture;
+  const showEntryEditor =
+    effectiveLocksAt !== null &&
+    (initialSubmissionWindowOpen || canEditSubmittedEntry);
+  const matchdayUnderway = fixtures.some(
+    (fixture) => now >= Date.parse(fixture.kickoff_at),
+  );
+  const lifecycleLabel = playerMatchdayLifecycle(selectedMatchday, now);
+  const entryLabel = ownEntry?.submitted_at
+    ? "Submitted"
+    : ownEntry
+      ? "Draft — Not submitted"
+      : "Not started";
   const breakdown = buildMatchdayBreakdown({
     matchday: selectedMatchday,
     profiles,
@@ -95,13 +120,25 @@ export default async function MyPicksPage({
     viewerId: user.id,
     now,
   });
+  const fixtureSlate = (
+    <ReadOnlyMatchdayPicks
+      matchday={selectedMatchday}
+      fixtures={fixtures}
+      players={breakdown.players}
+      actualGoals={breakdown.actualGoals}
+      finalReady={breakdown.finalReady}
+      currentPlayerId={user.id}
+      showPlayers={false}
+      now={now}
+    />
+  );
 
   return (
     <div className="space-y-6">
       <header className="brand-card p-5 sm:p-7">
         <p className="brand-eyebrow">{season.name}</p>
         <div className="mt-2 grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-          <div><h1 className="brand-title">Matchday {selectedMatchday.matchday_number}</h1><p className="brand-subtitle mt-2">Locks {formatDateTime(selectedMatchday.locks_at)} Melbourne time</p><span className="brand-pill mt-3 capitalize">{editable ? "Editable · Current picks" : `${selectedMatchday.status} · Previous matchday`}</span></div>
+          <div><h1 className="brand-title">Matchday {selectedMatchday.matchday_number}</h1><p className="brand-subtitle mt-2">{matchdayUnderway ? "Initial submissions closed · Matchday in progress" : `Initial submission locks ${formatDateTime(effectiveLocksAt)} Melbourne time`}</p><span className="brand-pill mt-3">{lifecycleLabel} · {entryLabel}</span></div>
           <MatchdaySelectNavigation
             currentMatchday={selectedMatchday.matchday_number}
             matchdays={matchdays.map((matchday) => ({ number: matchday.matchday_number, label: `Matchday ${matchday.matchday_number} · ${matchday.status}` }))}
@@ -109,28 +146,35 @@ export default async function MyPicksPage({
         </div>
       </header>
 
-      {editable && selectedMatchday.locks_at ? (
+      {effectiveLocksAt && ownEntry?.submitted_at ? (
         <MatchdayEntryForm
           matchdayId={selectedMatchday.id}
-          locksAt={selectedMatchday.locks_at}
+          locksAt={effectiveLocksAt}
           fixtures={fixtures.map((fixture): PickFixture => ({ id: fixture.id, homeTeamName: fixture.home_team_name, awayTeamName: fixture.away_team_name, homeTeamCrestUrl: fixture.home_team_crest_url, awayTeamCrestUrl: fixture.away_team_crest_url, kickoffAt: fixture.kickoff_at, status: fixture.status }))}
           initialSelections={ownSelections.map((selection) => ({ category: selection.category, fixtureId: selection.fixture_id, selectedTeamSide: selection.selected_team_side }))}
           initialTotalGoals={ownEntry?.total_goals_prediction ?? null}
-          initiallyEditable
-          initiallySubmitted={Boolean(ownEntry?.submitted_at)}
+          initiallyEditable={canEditSubmittedEntry}
+          initiallySubmitted
+          initiallySubmittedAt={ownEntry.submitted_at}
+          initiallyHasEntry
+          fixtureSlate={fixtureSlate}
+        />
+      ) : showEntryEditor && effectiveLocksAt ? (
+        <MatchdayEntryForm
+          matchdayId={selectedMatchday.id}
+          locksAt={effectiveLocksAt}
+          fixtures={fixtures.map((fixture): PickFixture => ({ id: fixture.id, homeTeamName: fixture.home_team_name, awayTeamName: fixture.away_team_name, homeTeamCrestUrl: fixture.home_team_crest_url, awayTeamCrestUrl: fixture.away_team_crest_url, kickoffAt: fixture.kickoff_at, status: fixture.status }))}
+          initialSelections={ownSelections.map((selection) => ({ category: selection.category, fixtureId: selection.fixture_id, selectedTeamSide: selection.selected_team_side }))}
+          initialTotalGoals={ownEntry?.total_goals_prediction ?? null}
+          initiallyEditable={initialSubmissionWindowOpen}
+          initiallySubmitted={false}
+          initiallySubmittedAt={null}
           initiallyHasEntry={Boolean(ownEntry)}
         />
       ) : (
         <>
           {!breakdown.visibleToAll ? <p className="brand-alert-warning">This matchday has not locked. Only your picks are visible.</p> : null}
-          <ReadOnlyMatchdayPicks
-            matchday={selectedMatchday}
-            fixtures={fixtures}
-            players={breakdown.players}
-            actualGoals={breakdown.actualGoals}
-            finalReady={breakdown.finalReady}
-            currentPlayerId={user.id}
-          />
+          {fixtureSlate}
         </>
       )}
     </div>

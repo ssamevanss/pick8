@@ -49,3 +49,24 @@ export default function TeamIdentity({
     </span>
   );
 }
+
+export function TeamCrest({
+  name,
+  crestUrl = null,
+  className = "h-6 w-6 text-[8px]",
+}: {
+  name: string;
+  crestUrl?: string | null;
+  className?: string;
+}) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const failed = crestUrl !== null && crestUrl === failedUrl;
+  return (
+    <span className={`grid shrink-0 place-items-center overflow-hidden rounded-full border border-white/10 bg-slate-900 text-amber-200 ${className}`}>
+      {crestUrl && !failed ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={crestUrl} alt={`${name} crest`} className="h-full w-full object-contain p-0.5" loading="lazy" onError={() => setFailedUrl(crestUrl)} />
+      ) : <span className="font-black" aria-label={`${name} crest unavailable`}>{initials(name)}</span>}
+    </span>
+  );
+}
