@@ -4,29 +4,19 @@ import { revalidatePath } from "next/cache";
 import { getRequestAuthContext } from "@/utils/app-context";
 import {
   earliestFixtureKickoff,
+  isInitialPick8EntryWindowOpen,
   isFixtureSelectionEditable,
 } from "@/utils/pick8-fixture-state";
 import {
   getDuplicatePick8Categories,
   getMissingPick8Categories,
+  isPick8Category,
+  parsePick8DraftSelections,
   PICK8_CATEGORIES,
-  type Pick8Category,
+  type Pick8DraftSelection,
 } from "@/utils/pick8-entry-validation";
 
-const CATEGORY_RULES = {
-  home_win: ["home"],
-  away_win: ["away"],
-  draw: [null],
-  team_win: ["home", "away"],
-  team_lose: ["home", "away"],
-  team_score: ["home", "away"],
-  clean_sheet: ["home", "away"],
-} as const;
-
 const REQUIRED_CATEGORIES = PICK8_CATEGORIES;
-
-type Category = Pick8Category;
-type TeamSide = "home" | "away" | null;
 
 export type PickEntryActionState = {
   ok: boolean;
@@ -35,50 +25,8 @@ export type PickEntryActionState = {
   submittedAt?: string | null;
 };
 
-type SubmittedSelection = {
-  category: Category;
-  fixtureId: string;
-  selectedTeamSide: TeamSide;
-};
-
 function failure(message: string): PickEntryActionState {
   return { ok: false, message };
-}
-
-function isCategory(value: string): value is Category {
-  return Object.hasOwn(CATEGORY_RULES, value);
-}
-
-function parseSelections(formData: FormData, eligibleFixtureIds: string[]) {
-  const selections: SubmittedSelection[] = [];
-
-  for (const fixtureId of eligibleFixtureIds) {
-    const category = String(
-      formData.get(`fixture_category_${fixtureId}`) ?? "",
-    ).trim();
-    if (!category) continue;
-    if (!isCategory(category)) {
-      return { error: "One or more fixture categories are invalid." } as const;
-    }
-    const sideValue = String(
-      formData.get(`fixture_side_${fixtureId}`) ?? "",
-    ).trim();
-    let selectedTeamSide: TeamSide;
-    if (category === "home_win") selectedTeamSide = "home";
-    else if (category === "away_win") selectedTeamSide = "away";
-    else if (category === "draw") selectedTeamSide = null;
-    else if (sideValue === "home" || sideValue === "away") {
-      selectedTeamSide = sideValue;
-    } else {
-      return { error: "Choose a team for every team-based category." } as const;
-    }
-    if (!CATEGORY_RULES[category].includes(selectedTeamSide as never)) {
-      return { error: "One or more category/team selections are invalid." } as const;
-    }
-    selections.push({ category, fixtureId, selectedTeamSide });
-  }
-
-  return { selections } as const;
 }
 
 export async function savePickEntry(
@@ -115,9 +63,6 @@ export async function savePickEntry(
     .eq("matchday_id", matchdayId);
   if (fixturesError) return failure("Fixtures could not be verified.");
   const effectiveLocksAt = earliestFixtureKickoff(eligibleFixtures ?? []) ?? matchday.locks_at;
-  const lockTime = effectiveLocksAt
-    ? new Date(effectiveLocksAt).getTime()
-    : Number.NaN;
   const editableFixtureIds = (eligibleFixtures ?? [])
     .filter((fixture) => isFixtureSelectionEditable(fixture, requestNow))
     .map((fixture) => fixture.id);
@@ -129,9 +74,7 @@ export async function savePickEntry(
     .eq("matchday_id", matchdayId)
     .maybeSingle();
   if (entryReadError) return failure("Your entry could not be loaded.");
-  const initialWindowOpen =
-    (matchday.status === "open" || matchday.status === "upcoming") &&
-    Number.isFinite(lockTime) && requestNow < lockTime;
+  const initialWindowOpen = isInitialPick8EntryWindowOpen(matchday.status, effectiveLocksAt, requestNow);
   if (!existingEntry?.submitted_at && !initialWindowOpen) {
     return failure("The submission deadline has passed. Existing submitted picks remain viewable.");
   }
@@ -159,18 +102,18 @@ export async function savePickEntry(
     : { data: [], error: null };
   if (selectionsReadError) return failure("Your saved selections could not be loaded.");
 
-  const parsed = parseSelections(formData, editableFixtureIds);
+  const parsed = parsePick8DraftSelections(formData, editableFixtureIds);
   if ("error" in parsed) {
     return failure(parsed.error ?? "One or more selections are malformed.");
   }
   const editableFixtureIdSet = new Set(editableFixtureIds);
-  const preservedSelections: SubmittedSelection[] = (existingSelections ?? [])
+  const preservedSelections: Pick8DraftSelection[] = (existingSelections ?? [])
     .filter((selection) => !editableFixtureIdSet.has(selection.fixture_id))
-    .filter((selection) => isCategory(selection.category))
+    .filter((selection) => isPick8Category(selection.category))
     .map((selection) => ({
-      category: selection.category as Category,
+      category: selection.category as Pick8DraftSelection["category"],
       fixtureId: selection.fixture_id,
-      selectedTeamSide: selection.selected_team_side as TeamSide,
+      selectedTeamSide: selection.selected_team_side as Pick8DraftSelection["selectedTeamSide"],
     }));
   const mergedSelections = [...preservedSelections, ...parsed.selections];
   if (getDuplicatePick8Categories(mergedSelections).length) {
@@ -207,7 +150,10 @@ export async function savePickEntry(
       })
       .select("id")
       .single();
-    if (error) return failure("Your entry could not be created.");
+    if (error) {
+      console.error("Pick8 draft entry creation failed", { matchdayId, userId: user.id, error });
+      return failure("Your draft could not be created. Your selections are still shown; please try again.");
+    }
     entryId = data.id;
   }
 
@@ -218,7 +164,7 @@ export async function savePickEntry(
     .filter(() => !existingEntry?.submitted_at)
     .filter((existing) => editableFixtureIdSet.has(existing.fixture_id))
     .filter((existing) => {
-      const submitted = isCategory(existing.category)
+      const submitted = isPick8Category(existing.category)
         ? submittedByCategory.get(existing.category)
         : undefined;
       return (
@@ -249,7 +195,10 @@ export async function savePickEntry(
       })),
       { onConflict: "entry_id,category" },
     );
-    if (error) return failure("Your fixture selections could not be saved.");
+    if (error) {
+      console.error("Pick8 draft selection save failed", { matchdayId, userId: user.id, entryId, error });
+      return failure("Your fixture selections could not be saved. They are still shown in this form; please try again.");
+    }
   }
 
   // Mark submission only after every selection write succeeds, so a partial
@@ -269,6 +218,7 @@ export async function savePickEntry(
     .eq("id", entryId)
     .eq("user_id", user.id);
   if (entryUpdateError) {
+    console.error("Pick8 entry update failed", { matchdayId, userId: user.id, entryId, intent, error: entryUpdateError });
     if (entryUpdateError.message.includes("Entry must have all seven fixture selections and Total Goals before submission")) {
       return failure(
         "This entry is incomplete and could not be submitted. Complete all seven fixture picks and Total Goals, then try again.",

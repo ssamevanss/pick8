@@ -10,6 +10,7 @@ import {
   fixtureLifecycleLabel,
   isFixtureSelectionEditable,
 } from "@/utils/pick8-fixture-state";
+import { restorePick8DraftChoices } from "@/utils/pick8-entry-validation";
 
 export type PickFixture = { id: string; homeTeamName: string; awayTeamName: string; homeTeamCrestUrl: string | null; awayTeamCrestUrl: string | null; kickoffAt: string; status: string };
 type Category = "home_win" | "away_win" | "draw" | "team_win" | "team_lose" | "team_score" | "clean_sheet";
@@ -30,12 +31,7 @@ const CATEGORY_BY_KEY = new Map(CATEGORIES.map((category) => [category.key, cate
 const initialActionState: PickEntryActionState = { ok: false, message: "" };
 
 function buildInitialChoices(fixtures: PickFixture[], initialSelections: InitialSelection[]) {
-  return Object.fromEntries(fixtures.map((fixture) => {
-    const saved = initialSelections.find((item) => item.fixtureId === fixture.id);
-    const category = CATEGORY_BY_KEY.has(saved?.category as Category) ? saved?.category as Category : "";
-    const side = saved?.selectedTeamSide === "home" || saved?.selectedTeamSide === "away" ? saved.selectedTeamSide : "";
-    return [fixture.id, { category, side }];
-  })) as Record<string, FixtureChoice>;
+  return restorePick8DraftChoices(fixtures.map((fixture) => fixture.id), initialSelections) as Record<string, FixtureChoice>;
 }
 
 function remainingLabel(locksAt: string, now: number) {
@@ -216,41 +212,44 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
             const fixtureComplete = Boolean(choice.category && !duplicated && (!category?.needsTeam || choice.side));
             return (
               <div key={fixture.id} className={`grid gap-3 p-3 sm:grid-cols-[7rem_minmax(0,1fr)_minmax(11rem,14rem)_minmax(9rem,12rem)] sm:items-center sm:px-5 ${duplicated ? "bg-red-500/10 ring-1 ring-inset ring-red-400/50" : fixtureComplete ? "bg-emerald-400/[0.04]" : ""}`}>
+                <input type="hidden" name={`fixture_category_${fixture.id}`} value={choice.category} />
+                <input type="hidden" name={`fixture_side_${fixture.id}`} value={choice.side} />
                 <div className="flex items-center justify-between gap-2 text-xs sm:block"><span className="font-semibold text-slate-300">{formatPick8Kickoff(fixture.kickoffAt)}</span><span className={`sm:mt-1 sm:block ${unavailable ? "text-amber-300" : fixtureState === "live" ? "text-emerald-300" : "text-slate-500"}`}>{fixtureLifecycleLabel(fixtureState)}{!fixtureEditable && choice.category && !unavailable ? " · pick locked" : ""}</span></div>
                 <div className="grid min-w-0 gap-1.5">
                   <TeamIdentity name={fixture.homeTeamName} crestUrl={fixture.homeTeamCrestUrl} />
                   <TeamIdentity name={fixture.awayTeamName} crestUrl={fixture.awayTeamCrestUrl} />
                 </div>
-                <label><span className="sr-only">Category for {fixture.homeTeamName} v {fixture.awayTeamName}</span><select name={`fixture_category_${fixture.id}`} value={choice.category} disabled={!fixtureEditable || pending || unavailable} aria-invalid={duplicated} className={`brand-input mt-0 ${duplicated ? "border-red-400/80 bg-red-950/40" : ""}`} onChange={(event) => changeCategory(fixture.id, event.target.value as Category | "")}><option value="">Not selected</option>{CATEGORIES.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label>
+                <label><span className="sr-only">Category for {fixture.homeTeamName} v {fixture.awayTeamName}</span><select value={choice.category} disabled={!fixtureEditable || pending || unavailable} aria-invalid={duplicated} className={`brand-input mt-0 ${duplicated ? "border-red-400/80 bg-red-950/40" : ""}`} onChange={(event) => changeCategory(fixture.id, event.target.value as Category | "")}><option value="">Not selected</option>{CATEGORIES.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label>
                 {category?.needsTeam ? (
-                  <label><span className="sr-only">Team for {category.label}</span><select name={`fixture_side_${fixture.id}`} value={choice.side} disabled={!fixtureEditable || pending} className="brand-input mt-0" onChange={(event) => setChoices((current) => ({ ...current, [fixture.id]: { ...current[fixture.id], side: event.target.value as TeamSide } }))}><option value="">Choose team</option><option value="home">{fixture.homeTeamName}</option><option value="away">{fixture.awayTeamName}</option></select></label>
-                ) : <input type="hidden" name={`fixture_side_${fixture.id}`} value={choice.side} />}
+                  <label><span className="sr-only">Team for {category.label}</span><select value={choice.side} disabled={!fixtureEditable || pending} className="brand-input mt-0" onChange={(event) => setChoices((current) => ({ ...current, [fixture.id]: { ...current[fixture.id], side: event.target.value as TeamSide } }))}><option value="">Choose team</option><option value="home">{fixture.homeTeamName}</option><option value="away">{fixture.awayTeamName}</option></select></label>
+                ) : null}
               </div>
             );
           })}
           {!fixtures.length ? <p className="p-5 text-sm text-slate-400">No fixtures have been synced for this matchday.</p> : null}
-          <div className={`grid gap-3 p-4 sm:grid-cols-[7rem_minmax(0,1fr)_minmax(9rem,12rem)] sm:items-center sm:px-5 ${totalGoalsComplete ? "bg-emerald-400/[0.04]" : ""}`}>
-            <div className="flex items-center justify-between gap-2 text-xs sm:block">
-              <span className={`font-bold ${totalGoalsComplete ? "text-emerald-200" : "text-slate-300"}`}>Selection 8 of 8</span>
-              <span className={`sm:mt-1 sm:block ${totalGoalsComplete ? "text-emerald-300" : "text-slate-500"}`}>{totalGoalsComplete ? "Completed" : "Required"}</span>
+          <div className={`p-4 sm:p-5 ${totalGoalsComplete ? "bg-emerald-400/[0.07]" : "bg-white/[0.02]"}`}>
+            <input type="hidden" name="total_goals" value={totalGoals} />
+            <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0" id="total-goals-description">
+                <p className={`text-xs font-black uppercase tracking-wide ${totalGoalsComplete ? "text-emerald-200" : "text-slate-300"}`}>8. Total Goals</p>
+                <h3 className="mt-1 text-lg font-black text-white">Total goals across all {fixtures.length} {fixtures.length === 1 ? "match" : "matches"}</h3>
+                <p className="mt-1 text-sm text-slate-400">Your mandatory eighth selection · Locks at first kickoff.</p>
+              </div>
+              <span className={`brand-pill shrink-0 ${totalGoalsComplete ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200" : "border-amber-300/30 bg-amber-300/10 text-amber-100"}`}>{totalGoalsComplete ? "Completed" : "Required"}</span>
             </div>
-            <div id="total-goals-description">
-              <h3 className="font-black text-white">Total Goals</h3>
-              <p className="mt-1 text-sm text-slate-300">Predict the total goals across all {fixtures.length} matchday {fixtures.length === 1 ? "fixture" : "fixtures"}.</p>
-              <p className="mt-1 text-xs text-slate-500">Locks at first kickoff.</p>
-            </div>
-            <label className="block">
-              <span className="sr-only">Total Goals prediction</span>
+            <label className="mt-4 block min-w-0 max-w-xs">
+              <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-400">Your prediction</span>
               <input
-                className={`brand-input mt-0 h-14 w-full text-center text-2xl font-black ${totalGoalsComplete ? "border-emerald-400/50 bg-emerald-400/10 text-white" : ""}`}
+                className={`brand-input mt-0 h-16 min-w-0 max-w-full text-center text-3xl font-black ${totalGoalsComplete ? "border-emerald-400/50 bg-emerald-400/10 text-white" : "border-white/20"}`}
                 type="number"
-                name="total_goals"
                 min="0"
                 max="100"
                 step="1"
                 inputMode="numeric"
+                placeholder="e.g. 27"
                 value={totalGoals}
                 disabled={!editable || pending || !entryWindowOpen}
+                aria-required="true"
                 aria-describedby="total-goals-description"
                 onChange={(event) => setTotalGoals(event.target.value)}
               />

@@ -25,6 +25,15 @@ export function earliestFixtureKickoff(
   return kickoffs.length ? new Date(Math.min(...kickoffs)).toISOString() : null;
 }
 
+export function isInitialPick8EntryWindowOpen(
+  matchdayStatus: string,
+  locksAt: string | null,
+  now = Date.now(),
+) {
+  const lockTime = locksAt ? fixtureKickoffMs(locksAt) : null;
+  return matchdayStatus !== "completed" && lockTime !== null && now < lockTime;
+}
+
 export function getFixtureLifecycle(
   fixture: { kickoff_at: string; status: string },
   now = Date.now(),
@@ -40,6 +49,27 @@ export function isFixtureSelectionEditable(
   now = Date.now(),
 ) {
   return getFixtureLifecycle(fixture, now) === "upcoming";
+}
+
+export function resolveMatchdayScoringStatus({
+  currentStatus,
+  fixtures,
+  finalScoringReady,
+  now = Date.now(),
+}: {
+  currentStatus: string;
+  fixtures: Array<{ kickoff_at: string; status: string }>;
+  finalScoringReady: boolean;
+  now?: number;
+}) {
+  if (finalScoringReady) return "completed";
+  const hasStarted = fixtures.some((fixture) =>
+    LIVE_STATUSES.has(fixture.status) ||
+    FINISHED_STATUSES.has(fixture.status) ||
+    hasFixtureKickedOff(fixture.kickoff_at, now),
+  );
+  if (hasStarted) return "scoring";
+  return currentStatus === "upcoming" ? "upcoming" : "open";
 }
 
 export function isPick8SelectionVisible({

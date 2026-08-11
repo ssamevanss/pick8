@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createAdminClient } from "@/utils/supabase/admin";
+import { resolveMatchdayScoringStatus } from "@/utils/pick8-fixture-state";
 
 export type SelectionCategory =
   | "home_win"
@@ -14,6 +15,7 @@ export type TeamSide = "home" | "away" | null;
 
 export type ScoringFixture = {
   id: string;
+  kickoff_at: string;
   status: string;
   home_score: number | null;
   away_score: number | null;
@@ -213,7 +215,7 @@ export async function recalculateMatchdayScores({
   const recalculatedAt = new Date().toISOString();
   const { data: matchday, error: matchdayError } = await supabase
     .from("matchdays")
-    .select("id, season_id, matchday_number")
+    .select("id, season_id, matchday_number, status")
     .eq("id", matchdayId)
     .eq("season_id", seasonId)
     .maybeSingle();
@@ -222,7 +224,7 @@ export async function recalculateMatchdayScores({
 
   const { data: fixtureRows, error: fixtureError } = await supabase
     .from("fixtures")
-    .select("id, status, home_score, away_score")
+    .select("id, kickoff_at, status, home_score, away_score")
     .eq("matchday_id", matchdayId);
   if (fixtureError) databaseFailure("Reading fixtures", fixtureError.message);
   const fixtures = (fixtureRows ?? []) as ScoringFixture[];
@@ -307,7 +309,12 @@ export async function recalculateMatchdayScores({
   const { error: statusError } = await supabase
     .from("matchdays")
     .update({
-      status: finalScoringReady ? "completed" : "scoring",
+      status: resolveMatchdayScoringStatus({
+        currentStatus: matchday.status,
+        fixtures,
+        finalScoringReady,
+        now: Date.parse(recalculatedAt),
+      }),
       updated_at: recalculatedAt,
     })
     .eq("id", matchdayId)

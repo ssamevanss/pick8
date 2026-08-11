@@ -4,14 +4,18 @@ import {
   getFixtureLifecycle,
   earliestFixtureKickoff,
   formatPick8Kickoff,
+  isInitialPick8EntryWindowOpen,
   isFixtureSelectionEditable,
   isPick8SelectionVisible,
   isSubmittedFixturePickRevealable,
+  resolveMatchdayScoringStatus,
 } from "../utils/pick8-fixture-state.ts";
 import {
   isCompletePick8Entry,
   getPick8EntryState,
+  parsePick8DraftSelections,
   PICK8_CATEGORIES,
+  restorePick8DraftChoices,
 } from "../utils/pick8-entry-validation.ts";
 import { logicalPick8FixtureKey } from "../utils/pick8-fixture-identity.ts";
 import {
@@ -90,6 +94,15 @@ test("initial deadline closes at the first configured fixture kickoff", () => {
   assert.equal(earliestFixtureKickoff([]), null);
 });
 
+test("an early results refresh cannot move a matchday to scoring before kickoff", () => {
+  const fixture = { kickoff_at: kickoffAt, status: "scheduled" };
+  assert.equal(resolveMatchdayScoringStatus({ currentStatus: "open", fixtures: [fixture], finalScoringReady: false, now: kickoff - 1 }), "open");
+  assert.equal(resolveMatchdayScoringStatus({ currentStatus: "open", fixtures: [fixture], finalScoringReady: false, now: kickoff }), "scoring");
+  assert.equal(resolveMatchdayScoringStatus({ currentStatus: "scoring", fixtures: [fixture], finalScoringReady: false, now: kickoff - 1 }), "open");
+  assert.equal(isInitialPick8EntryWindowOpen("scoring", kickoffAt, kickoff - 1), true);
+  assert.equal(isInitialPick8EntryWindowOpen("scoring", kickoffAt, kickoff), false);
+});
+
 test("submission requires seven unique categories, seven fixtures and Total Goals", () => {
   const complete = PICK8_CATEGORIES.map((category, index) => ({ category, fixtureId: `fixture-${index}` }));
   assert.equal(isCompletePick8Entry(complete, 25), true);
@@ -102,6 +115,29 @@ test("entry state is derived only from row existence and submitted_at", () => {
   assert.equal(getPick8EntryState(null), "not_started");
   assert.equal(getPick8EntryState({ submitted_at: null }), "draft");
   assert.equal(getPick8EntryState({ submitted_at: "2026-10-01T00:00:00Z" }), "submitted");
+});
+
+test("an incomplete seven-pick draft survives form serialization and reload", () => {
+  const fixtureIds = Array.from({ length: 10 }, (_, index) => `fixture-${index + 1}`);
+  const formData = new FormData();
+  PICK8_CATEGORIES.forEach((category, index) => {
+    formData.set(`fixture_category_${fixtureIds[index]}`, category);
+    formData.set(`fixture_side_${fixtureIds[index]}`, category === "draw" ? "" : index % 2 ? "away" : "home");
+  });
+
+  const parsed = parsePick8DraftSelections(formData, fixtureIds);
+  assert.ok("selections" in parsed);
+  assert.equal(parsed.selections.length, 7);
+  assert.equal(formData.get("total_goals"), null);
+  assert.equal(isCompletePick8Entry(parsed.selections, null), false);
+
+  const restored = restorePick8DraftChoices(fixtureIds, parsed.selections);
+  assert.equal(Object.values(restored).filter((choice) => choice.category).length, 7);
+  PICK8_CATEGORIES.forEach((category, index) => {
+    assert.equal(restored[fixtureIds[index]]?.category, category);
+  });
+
+  assert.equal(isCompletePick8Entry(parsed.selections, 27), true);
 });
 
 test("fixture automation never provider-syncs a manual matchday", () => {

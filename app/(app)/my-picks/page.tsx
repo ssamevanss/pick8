@@ -14,6 +14,7 @@ import {
 } from "@/utils/pick8-matchday-breakdown";
 import {
   earliestFixtureKickoff,
+  isInitialPick8EntryWindowOpen,
   isFixtureSelectionEditable,
 } from "@/utils/pick8-fixture-state";
 import { playerMatchdayLifecycle } from "@/utils/pick8-standings";
@@ -87,10 +88,7 @@ export default async function MyPicksPage({
     ? await supabase.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", entryIds)
     : { data: [] };
   const selections = (selectionRows ?? []) as BreakdownSelection[];
-  const initialSubmissionWindowOpen =
-    ["open", "upcoming"].includes(selectedMatchday.status) &&
-    effectiveLocksAt !== null &&
-    now < new Date(effectiveLocksAt).getTime();
+  const initialSubmissionWindowOpen = isInitialPick8EntryWindowOpen(selectedMatchday.status, effectiveLocksAt, now);
   const ownEntry = entries.find((entry) => entry.user_id === user.id) ?? null;
   const ownSelections = ownEntry
     ? selections.filter((selection) => selection.entry_id === ownEntry.id)
