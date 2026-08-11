@@ -72,6 +72,18 @@ export function resolveMatchdayScoringStatus({
   return currentStatus === "upcoming" ? "upcoming" : "open";
 }
 
+export function canFinalizeBeforeConfiguredKickoffs({
+  allowAcceleratedTestCompletion = false,
+  fixtureSyncMode,
+  isAcceleratedTest,
+}: {
+  allowAcceleratedTestCompletion?: boolean;
+  fixtureSyncMode: string;
+  isAcceleratedTest: boolean;
+}) {
+  return allowAcceleratedTestCompletion && fixtureSyncMode === "manual" && isAcceleratedTest;
+}
+
 export function isPick8SelectionVisible({
   viewerId,
   ownerId,

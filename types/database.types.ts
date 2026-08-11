@@ -236,6 +236,7 @@ export type Database = {
           created_at: string
           fixture_sync_mode: string
           id: string
+          is_accelerated_test: boolean
           locks_at: string | null
           matchday_number: number
           opens_at: string | null
@@ -247,6 +248,7 @@ export type Database = {
           created_at?: string
           fixture_sync_mode?: string
           id?: string
+          is_accelerated_test?: boolean
           locks_at?: string | null
           matchday_number: number
           opens_at?: string | null
@@ -258,6 +260,7 @@ export type Database = {
           created_at?: string
           fixture_sync_mode?: string
           id?: string
+          is_accelerated_test?: boolean
           locks_at?: string | null
           matchday_number?: number
           opens_at?: string | null
@@ -343,6 +346,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_pick8_accelerated_test_matchday: {
+        Args: { target_matchday_number: number }
+        Returns: Json
+      }
       create_pick8_manual_test_matchday3: {
         Args: Record<PropertyKey, never>
         Returns: Json
@@ -365,6 +372,14 @@ export type Database = {
       }
       is_pick8_active: { Args: { check_user_id?: string }; Returns: boolean }
       is_pick8_admin: { Args: { check_user_id?: string }; Returns: boolean }
+      prepare_pick8_accelerated_test_completion: {
+        Args: { confirmed: boolean; target_matchday_number: number }
+        Returns: Json
+      }
+      replace_submitted_pick8_selections: {
+        Args: { check_entry_id: string; check_selections: Json }
+        Returns: undefined
+      }
       finish_pick8_manual_test_matchday3: {
         Args: Record<PropertyKey, never>
         Returns: Json

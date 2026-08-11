@@ -8,11 +8,15 @@ import {
   isFixtureSelectionEditable,
   isPick8SelectionVisible,
   isSubmittedFixturePickRevealable,
+  canFinalizeBeforeConfiguredKickoffs,
   resolveMatchdayScoringStatus,
 } from "../utils/pick8-fixture-state.ts";
 import {
   isCompletePick8Entry,
   getPick8EntryState,
+  getDuplicatePick8Categories,
+  buildPick8EditorSnapshot,
+  copyPick8EditorSnapshot,
   parsePick8DraftSelections,
   PICK8_CATEGORIES,
   restorePick8DraftChoices,
@@ -24,11 +28,17 @@ import {
   shouldSyncProviderFixtures,
 } from "../utils/pick8-fixture-sync-mode.ts";
 import {
+  acceleratedTestFinalScorePlan,
+  canUseAcceleratedTestCompletion,
   MATCHDAY_2_FINAL_SCORE_PLAN,
   MATCHDAY_3_FINAL_SCORE_PLAN,
   MATCHDAY_3_TEST_FIXTURE_IDS,
+  MATCHDAY_4_FINAL_SCORE_PLAN,
+  MATCHDAY_4_TEST_FIXTURE_IDS,
   manualTestFinalGoalTotal,
 } from "../utils/pick8-manual-test.ts";
+import { scorePick8TotalGoals } from "../utils/pick8-scoring-rules.ts";
+import { resolveCategoryMenuPlacement } from "../utils/category-select-position.ts";
 import {
   buildStandings,
   playerMatchdayLifecycle,
@@ -140,6 +150,60 @@ test("an incomplete seven-pick draft survives form serialization and reload", ()
   assert.equal(isCompletePick8Entry(parsed.selections, 27), true);
 });
 
+test("draft parsing permits temporary duplicate categories but completion rejects them", () => {
+  const formData = new FormData();
+  formData.set("fixture_category_one", "draw");
+  formData.set("fixture_category_two", "draw");
+  const parsed = parsePick8DraftSelections(formData, ["one", "two"]);
+  assert.ok("selections" in parsed);
+  assert.deepEqual(getDuplicatePick8Categories(parsed.selections), ["draw"]);
+  assert.equal(isCompletePick8Entry(parsed.selections, 25), false);
+});
+
+test("submitted editor restores refreshed persisted values across repeated edit and cancel cycles", () => {
+  const fixtureIds = ["one", "two"];
+  const refreshed = buildPick8EditorSnapshot(fixtureIds, [
+    { category: "draw", fixtureId: "one", selectedTeamSide: null },
+    { category: "team_score", fixtureId: "two", selectedTeamSide: "away" },
+  ], 31);
+
+  const firstEdit = copyPick8EditorSnapshot(refreshed);
+  firstEdit.choices.one = { category: "home_win", side: "home" };
+  firstEdit.totalGoals = "28";
+
+  const afterCancel = copyPick8EditorSnapshot(refreshed);
+  assert.deepEqual(afterCancel.choices.one, { category: "draw", side: "" });
+  assert.deepEqual(afterCancel.choices.two, { category: "team_score", side: "away" });
+  assert.equal(afterCancel.totalGoals, "31");
+
+  const secondEdit = copyPick8EditorSnapshot(refreshed);
+  assert.deepEqual(secondEdit, afterCancel);
+  assert.notEqual(secondEdit.choices, afterCancel.choices);
+});
+
+test("category menu prefers a full-height direction and scrolls only as fallback", () => {
+  assert.deepEqual(resolveCategoryMenuPlacement({
+    fullHeight: 330,
+    availableBelow: 400,
+    availableAbove: 500,
+  }), { direction: "down", maxHeight: null });
+  assert.deepEqual(resolveCategoryMenuPlacement({
+    fullHeight: 330,
+    availableBelow: 200,
+    availableAbove: 350,
+  }), { direction: "up", maxHeight: null });
+  assert.deepEqual(resolveCategoryMenuPlacement({
+    fullHeight: 330,
+    availableBelow: 180,
+    availableAbove: 240,
+  }), { direction: "up", maxHeight: 240 });
+  assert.deepEqual(resolveCategoryMenuPlacement({
+    fullHeight: 330,
+    availableBelow: 260.8,
+    availableAbove: 190,
+  }), { direction: "down", maxHeight: 260 });
+});
+
 test("fixture automation never provider-syncs a manual matchday", () => {
   assert.equal(shouldSyncProviderFixtures("manual"), false);
   assert.equal(getFixtureAutomationPlan("manual", "fixtures"), "skip");
@@ -175,6 +239,55 @@ test("manual Matchday 3 uses the exact synthetic fixture set and final-score pla
     MATCHDAY_3_TEST_FIXTURE_IDS,
   );
   assert.equal(new Set(MATCHDAY_3_TEST_FIXTURE_IDS).size, 10);
+});
+
+test("ordinary scoring cannot bypass future kickoffs for real or synthetic matchdays", () => {
+  assert.equal(canFinalizeBeforeConfiguredKickoffs({
+    allowAcceleratedTestCompletion: true,
+    fixtureSyncMode: "provider",
+    isAcceleratedTest: false,
+  }), false);
+  assert.equal(canFinalizeBeforeConfiguredKickoffs({
+    allowAcceleratedTestCompletion: false,
+    fixtureSyncMode: "manual",
+    isAcceleratedTest: true,
+  }), false);
+});
+
+test("only the confirmed authorised accelerated action can complete a marked synthetic matchday early", () => {
+  const common = {
+    fixtureSyncMode: "manual",
+    isAcceleratedTest: true,
+    matchdayNumber: 3,
+    fixtureIds: MATCHDAY_3_TEST_FIXTURE_IDS,
+  };
+  assert.equal(canUseAcceleratedTestCompletion({ ...common, isAuthorizedAdmin: false, confirmed: true }), false);
+  assert.equal(canUseAcceleratedTestCompletion({ ...common, isAuthorizedAdmin: true, confirmed: false }), false);
+  assert.equal(canUseAcceleratedTestCompletion({ ...common, isAuthorizedAdmin: true, confirmed: true }), true);
+  assert.equal(canFinalizeBeforeConfiguredKickoffs({
+    allowAcceleratedTestCompletion: true,
+    fixtureSyncMode: common.fixtureSyncMode,
+    isAcceleratedTest: common.isAcceleratedTest,
+  }), true);
+});
+
+test("accelerated finals feed the same Total Goals scoring rule as normal finals", () => {
+  assert.deepEqual(
+    MATCHDAY_4_FINAL_SCORE_PLAN.map(({ homeScore, awayScore }) => [homeScore, awayScore]),
+    MATCHDAY_3_FINAL_SCORE_PLAN.map(({ homeScore, awayScore }) => [homeScore, awayScore]),
+  );
+  const actualGoals = acceleratedTestFinalScorePlan(4).reduce((total, fixture) => total + fixture.homeScore + fixture.awayScore, 0);
+  assert.equal(scorePick8TotalGoals({ prediction: actualGoals, actualGoals, finalScoringReady: true }), 10);
+  assert.equal(scorePick8TotalGoals({ prediction: actualGoals - 1, actualGoals, finalScoringReady: true }), 0);
+});
+
+test("completed Matchday 3 allows Manual Matchday 4 to become current", () => {
+  assert.equal(MATCHDAY_4_TEST_FIXTURE_IDS.length, 10);
+  const matchdays = [
+    { id: "md3", matchday_number: 3, status: "completed", locks_at: "2026-08-12T10:00:00Z" },
+    { id: "md4", matchday_number: 4, status: "open", locks_at: "2026-08-14T10:00:00Z" },
+  ];
+  assert.equal(resolveDashboardMatchday(matchdays, Date.parse("2026-08-13T00:00:00Z"))?.id, "md4");
 });
 
 test("completed Matchday 2 yields current-matchday priority to upcoming Matchday 3", () => {

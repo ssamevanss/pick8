@@ -7,24 +7,27 @@ import {
   type ScoreRecalculationSummary,
 } from "@/utils/pick8-scoring";
 import { createAdminClient } from "@/utils/supabase/admin";
+import { refreshPick8Competitions } from "@/utils/pick8-competitions";
 import {
   MATCHDAY_2_FINAL_SCORE_PLAN,
   MATCHDAY_2_TEST_ENTRY_ID,
   MATCHDAY_2_TEST_ID,
+  canUseAcceleratedTestCompletion,
   manualTestFinalGoalTotal,
 } from "@/utils/pick8-manual-test";
 
-type ManualMatchday3RpcResult = {
+type ManualMatchdayRpcResult = {
   matchday_id?: unknown;
   season_id?: unknown;
+  matchday_number?: unknown;
   created?: unknown;
   fixture_count?: unknown;
   locks_at?: unknown;
 };
 
-function manualMatchday3Result(value: unknown): ManualMatchday3RpcResult {
+function manualMatchdayResult(value: unknown): ManualMatchdayRpcResult {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as ManualMatchday3RpcResult
+    ? value as ManualMatchdayRpcResult
     : {};
 }
 
@@ -62,23 +65,29 @@ export async function recalculateScoresAction(
   }
 }
 
-export async function createManualMatchday3Test(
+export async function createManualMatchdayTest(
   _previousState: ScoreActionState,
-  _formData: FormData,
+  formData: FormData,
 ): Promise<ScoreActionState> {
   void _previousState;
-  void _formData;
   const { user, profile } = await getRequestAuthContext();
   if (!user || !profile?.is_active || !profile.is_admin) {
     return { ok: false, message: "Active administrator access is required." };
   }
 
+  const matchdayNumber = Number(formData.get("test_matchday_number"));
+  if (!Number.isInteger(matchdayNumber) || matchdayNumber < 3 || matchdayNumber > 99) {
+    return { ok: false, message: "Choose a valid accelerated test matchday." };
+  }
+
   const admin = createAdminClient();
-  const { data, error } = await admin.rpc("create_pick8_manual_test_matchday3");
+  const { data, error } = await admin.rpc("create_pick8_accelerated_test_matchday", {
+    target_matchday_number: matchdayNumber,
+  });
   if (error) return { ok: false, message: error.message };
-  const result = manualMatchday3Result(data);
-  if (typeof result.matchday_id !== "string" || result.fixture_count !== 10) {
-    return { ok: false, message: "Manual Matchday 3 creation returned an invalid result." };
+  const result = manualMatchdayResult(data);
+  if (typeof result.matchday_id !== "string" || result.fixture_count !== 10 || result.matchday_number !== matchdayNumber) {
+    return { ok: false, message: `Manual Matchday ${matchdayNumber} creation returned an invalid result.` };
   }
 
   revalidatePath("/admin");
@@ -87,12 +96,12 @@ export async function createManualMatchday3Test(
   return {
     ok: true,
     message: result.created
-      ? "Manual Matchday 3 created with ten synthetic fixtures."
-      : "Manual Matchday 3 already exists with the expected fixture set; no changes were made.",
+      ? `Manual Matchday ${matchdayNumber} created with ten synthetic fixtures.`
+      : `Manual Matchday ${matchdayNumber} already exists with the expected fixture set; no changes were made.`,
   };
 }
 
-export async function finalizeManualMatchday3Test(
+export async function finalizeManualMatchdayTest(
   _previousState: ScoreActionState,
   formData: FormData,
 ): Promise<ScoreActionState> {
@@ -100,34 +109,71 @@ export async function finalizeManualMatchday3Test(
   if (!user || !profile?.is_active || !profile.is_admin) {
     return { ok: false, message: "Active administrator access is required." };
   }
-  if (formData.get("confirm_matchday3_final_scores") !== "on") {
-    return { ok: false, message: "Confirm the Matchday 3 fake final scores before continuing." };
+  const matchdayNumber = Number(formData.get("test_matchday_number"));
+  if (!Number.isInteger(matchdayNumber) || matchdayNumber < 3 || matchdayNumber > 99) {
+    return { ok: false, message: "Choose a valid accelerated test matchday." };
+  }
+  const confirmed = formData.get("confirm_accelerated_final_scores") === "on";
+  if (!confirmed) {
+    return { ok: false, message: `Confirm the Matchday ${matchdayNumber} fake final scores before continuing.` };
   }
 
   const admin = createAdminClient();
-  const { data, error } = await admin.rpc("finish_pick8_manual_test_matchday3");
+  const { data: testMatchday, error: testMatchdayError } = await admin
+    .from("matchdays")
+    .select("id, matchday_number, fixture_sync_mode, is_accelerated_test, seasons!inner(is_active)")
+    .eq("matchday_number", matchdayNumber)
+    .eq("seasons.is_active", true)
+    .maybeSingle();
+  if (testMatchdayError || !testMatchday) {
+    return { ok: false, message: `Manual Matchday ${matchdayNumber} could not be verified.` };
+  }
+  const { data: testFixtures, error: testFixturesError } = await admin
+    .from("fixtures")
+    .select("external_fixture_id")
+    .eq("matchday_id", testMatchday.id);
+  if (
+    testFixturesError ||
+    !canUseAcceleratedTestCompletion({
+      isAuthorizedAdmin: true,
+      confirmed,
+      fixtureSyncMode: testMatchday.fixture_sync_mode,
+      isAcceleratedTest: testMatchday.is_accelerated_test,
+      matchdayNumber,
+      fixtureIds: (testFixtures ?? []).map((fixture) => fixture.external_fixture_id),
+    })
+  ) {
+    return { ok: false, message: "Accelerated completion is restricted to the exact synthetic fixture set created by this manual-test tool." };
+  }
+  const { data, error } = await admin.rpc("prepare_pick8_accelerated_test_completion", {
+    target_matchday_number: matchdayNumber,
+    confirmed,
+  });
   if (error) return { ok: false, message: error.message };
-  const result = manualMatchday3Result(data);
+  const result = manualMatchdayResult(data);
   if (
     typeof result.matchday_id !== "string" ||
     typeof result.season_id !== "string" ||
+    result.matchday_number !== matchdayNumber ||
     result.fixture_count !== 10
   ) {
-    return { ok: false, message: "Manual Matchday 3 finalisation returned an invalid result." };
+    return { ok: false, message: `Manual Matchday ${matchdayNumber} finalisation returned an invalid result.` };
   }
 
   try {
     const summary = await recalculateMatchdayScores({
       seasonId: result.season_id,
       matchdayId: result.matchday_id,
+      allowAcceleratedTestCompletion: true,
     });
+    await refreshPick8Competitions(result.season_id);
     revalidatePath("/admin");
     revalidatePath("/dashboard");
     revalidatePath("/my-picks");
     revalidatePath("/tables");
     return {
       ok: true,
-      message: "Manual Matchday 3 finalized through the normal scoring path.",
+      message: `Manual Matchday ${matchdayNumber} finalized through the normal scoring path. The accelerated exception applied only to its synthetic kickoff times.`,
       summary,
     };
   } catch (scoringError) {
@@ -135,7 +181,7 @@ export async function finalizeManualMatchday3Test(
       ok: false,
       message: scoringError instanceof Error
         ? scoringError.message
-        : "Normal Matchday 3 scoring failed.",
+        : `Normal Matchday ${matchdayNumber} scoring failed.`,
     };
   }
 }
@@ -155,10 +201,10 @@ export async function finalizeManualMatchday2Test(
   const admin = createAdminClient();
   const { data: matchday, error: matchdayError } = await admin
     .from("matchdays")
-    .select("id, season_id, matchday_number, fixture_sync_mode")
+    .select("id, season_id, matchday_number, fixture_sync_mode, is_accelerated_test")
     .eq("id", MATCHDAY_2_TEST_ID)
     .maybeSingle();
-  if (matchdayError || !matchday || matchday.matchday_number !== 2 || matchday.fixture_sync_mode !== "manual") {
+  if (matchdayError || !matchday || matchday.matchday_number !== 2 || matchday.fixture_sync_mode !== "manual" || !matchday.is_accelerated_test) {
     return { ok: false, message: "The audited Matchday 2 is missing or is not manually managed." };
   }
 
@@ -202,7 +248,9 @@ export async function finalizeManualMatchday2Test(
     const summary = await recalculateMatchdayScores({
       seasonId: matchday.season_id,
       matchdayId: matchday.id,
+      allowAcceleratedTestCompletion: true,
     });
+    await refreshPick8Competitions(matchday.season_id);
     revalidatePath("/admin");
     revalidatePath("/dashboard");
     revalidatePath("/my-picks");

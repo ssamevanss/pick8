@@ -21,6 +21,29 @@ export type Pick8DraftChoice = {
   side: Exclude<Pick8TeamSide, null> | "";
 };
 
+export function buildPick8EditorSnapshot(
+  fixtureIds: string[],
+  selections: Array<{ category: string; fixtureId: string; selectedTeamSide: string | null }>,
+  totalGoals: number | null,
+) {
+  return {
+    choices: restorePick8DraftChoices(fixtureIds, selections),
+    totalGoals: totalGoals === null ? "" : String(totalGoals),
+  };
+}
+
+export function copyPick8EditorSnapshot(snapshot: {
+  choices: Record<string, Pick8DraftChoice>;
+  totalGoals: string;
+}) {
+  return {
+    choices: Object.fromEntries(
+      Object.entries(snapshot.choices).map(([fixtureId, choice]) => [fixtureId, { ...choice }]),
+    ) as Record<string, Pick8DraftChoice>,
+    totalGoals: snapshot.totalGoals,
+  };
+}
+
 const CATEGORY_SIDES: Record<Pick8Category, readonly Pick8TeamSide[]> = {
   home_win: ["home"],
   away_win: ["away"],

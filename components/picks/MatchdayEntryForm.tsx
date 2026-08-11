@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { savePickEntry, type PickEntryActionState } from "@/app/(app)/my-picks/actions";
+import CategorySelect from "@/components/picks/CategorySelect";
 import TeamIdentity, { TeamCrest } from "@/components/picks/TeamIdentity";
 import {
   formatPick8Kickoff,
@@ -10,10 +11,14 @@ import {
   fixtureLifecycleLabel,
   isFixtureSelectionEditable,
 } from "@/utils/pick8-fixture-state";
-import { restorePick8DraftChoices } from "@/utils/pick8-entry-validation";
+import {
+  buildPick8EditorSnapshot,
+  copyPick8EditorSnapshot,
+} from "@/utils/pick8-entry-validation";
+import type { Pick8Category } from "@/utils/pick8-entry-validation";
 
 export type PickFixture = { id: string; homeTeamName: string; awayTeamName: string; homeTeamCrestUrl: string | null; awayTeamCrestUrl: string | null; kickoffAt: string; status: string };
-type Category = "home_win" | "away_win" | "draw" | "team_win" | "team_lose" | "team_score" | "clean_sheet";
+type Category = Pick8Category;
 type TeamSide = "home" | "away" | "";
 type FixtureChoice = { category: Category | ""; side: TeamSide };
 type InitialSelection = { category: string; fixtureId: string; selectedTeamSide: string | null };
@@ -29,10 +34,6 @@ const CATEGORIES: Array<{ key: Category; label: string; needsTeam: boolean }> = 
 ];
 const CATEGORY_BY_KEY = new Map(CATEGORIES.map((category) => [category.key, category]));
 const initialActionState: PickEntryActionState = { ok: false, message: "" };
-
-function buildInitialChoices(fixtures: PickFixture[], initialSelections: InitialSelection[]) {
-  return restorePick8DraftChoices(fixtures.map((fixture) => fixture.id), initialSelections) as Record<string, FixtureChoice>;
-}
 
 function remainingLabel(locksAt: string, now: number) {
   const remaining = new Date(locksAt).getTime() - now;
@@ -70,10 +71,19 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
   initiallyHasEntry: boolean;
   fixtureSlate?: ReactNode;
 }) {
-  const [choices, setChoices] = useState<Record<string, FixtureChoice>>(() => buildInitialChoices(fixtures, initialSelections));
-  const [savedChoices, setSavedChoices] = useState<Record<string, FixtureChoice>>(() => buildInitialChoices(fixtures, initialSelections));
-  const [totalGoals, setTotalGoals] = useState(initialTotalGoals === null ? "" : String(initialTotalGoals));
-  const [savedTotalGoals, setSavedTotalGoals] = useState(initialTotalGoals === null ? "" : String(initialTotalGoals));
+  const incomingPersistedState = useMemo(
+    () => ({
+      snapshot: buildPick8EditorSnapshot(fixtures.map((fixture) => fixture.id), initialSelections, initialTotalGoals),
+      submitted: initiallySubmitted,
+      submittedAt: initiallySubmittedAt,
+      hasEntry: initiallyHasEntry,
+    }),
+    [fixtures, initialSelections, initialTotalGoals, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry],
+  );
+  const [choices, setChoices] = useState<Record<string, FixtureChoice>>(() => copyPick8EditorSnapshot(incomingPersistedState.snapshot).choices as Record<string, FixtureChoice>);
+  const [savedChoices, setSavedChoices] = useState<Record<string, FixtureChoice>>(() => copyPick8EditorSnapshot(incomingPersistedState.snapshot).choices as Record<string, FixtureChoice>);
+  const [totalGoals, setTotalGoals] = useState(incomingPersistedState.snapshot.totalGoals);
+  const [savedTotalGoals, setSavedTotalGoals] = useState(incomingPersistedState.snapshot.totalGoals);
   const [submitted, setSubmitted] = useState(initiallySubmitted);
   const [submittedAt, setSubmittedAt] = useState(initiallySubmittedAt);
   const [editing, setEditing] = useState(!initiallySubmitted);
@@ -94,6 +104,19 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
     },
     initialActionState,
   );
+  const [appliedPersistedState, setAppliedPersistedState] = useState(incomingPersistedState);
+  if (appliedPersistedState !== incomingPersistedState) {
+    const refreshed = copyPick8EditorSnapshot(incomingPersistedState.snapshot);
+    setAppliedPersistedState(incomingPersistedState);
+    setChoices(refreshed.choices as Record<string, FixtureChoice>);
+    setSavedChoices(copyPick8EditorSnapshot(incomingPersistedState.snapshot).choices as Record<string, FixtureChoice>);
+    setTotalGoals(refreshed.totalGoals);
+    setSavedTotalGoals(refreshed.totalGoals);
+    setSubmitted(incomingPersistedState.submitted);
+    setSubmittedAt(incomingPersistedState.submittedAt);
+    setHasSavedEntry(incomingPersistedState.hasEntry);
+    setEditing(!incomingPersistedState.submitted);
+  }
   const eligibleFixtures = useMemo(() => fixtures, [fixtures]);
   const entryWindowOpen = now > 0 && now < new Date(locksAt).getTime();
   const hasEditableFixture = now > 0 && fixtures.some((fixture) =>
@@ -106,6 +129,20 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => { window.clearTimeout(initialTimer); window.clearInterval(timer); };
   }, []);
+
+  function enterEditMode() {
+    const restored = copyPick8EditorSnapshot({ choices: savedChoices, totalGoals: savedTotalGoals });
+    setChoices(restored.choices as Record<string, FixtureChoice>);
+    setTotalGoals(restored.totalGoals);
+    setEditing(true);
+  }
+
+  function cancelEditing() {
+    const restored = copyPick8EditorSnapshot({ choices: savedChoices, totalGoals: savedTotalGoals });
+    setChoices(restored.choices as Record<string, FixtureChoice>);
+    setTotalGoals(restored.totalGoals);
+    setEditing(false);
+  }
 
   const counts = new Map<Category, number>();
   for (const fixture of eligibleFixtures) {
@@ -182,7 +219,7 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
         <div className="contents"><section className="brand-card p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div><p className="brand-eyebrow">Your Pick8</p><h2 className="mt-1 text-xl font-black text-white">Seven picks + Total Goals</h2></div>
-            {hasEditableFixture ? <button type="button" className="brand-button-secondary" onClick={() => setEditing(true)}>Edit submission</button> : <span className="brand-pill">All fixtures locked</span>}
+            {hasEditableFixture ? <button type="button" className="brand-button-secondary" onClick={enterEditMode}>Edit submission</button> : <span className="brand-pill">All fixtures locked</span>}
           </div>
           <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {selectedChoices.map(({ fixture, category, team, teamCrestUrl, hasSelectedTeam }) => (
@@ -199,7 +236,7 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
           </div>
         </section>{fixtureSlate ? <div>{fixtureSlate}</div> : null}</div>
       ) : <>
-      <section className="brand-card overflow-hidden">
+      <section className="brand-card">
         <div className="border-b border-white/10 px-4 py-4 sm:px-5"><h2 className="text-xl font-black text-white">Choose your picks</h2><p className="mt-1 text-sm text-slate-400">Assign one prediction category to each fixture you want to use.</p></div>
         <div className="divide-y divide-white/10">
           {fixtures.map((fixture) => {
@@ -219,7 +256,18 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
                   <TeamIdentity name={fixture.homeTeamName} crestUrl={fixture.homeTeamCrestUrl} />
                   <TeamIdentity name={fixture.awayTeamName} crestUrl={fixture.awayTeamCrestUrl} />
                 </div>
-                <label><span className="sr-only">Category for {fixture.homeTeamName} v {fixture.awayTeamName}</span><select value={choice.category} disabled={!fixtureEditable || pending || unavailable} aria-invalid={duplicated} className={`brand-input mt-0 ${duplicated ? "border-red-400/80 bg-red-950/40" : ""}`} onChange={(event) => changeCategory(fixture.id, event.target.value as Category | "")}><option value="">Not selected</option>{CATEGORIES.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label>
+                <CategorySelect
+                  value={choice.category}
+                  disabled={!fixtureEditable || pending || unavailable}
+                  invalid={duplicated}
+                  ariaLabel={`Category for ${fixture.homeTeamName} v ${fixture.awayTeamName}`}
+                  options={CATEGORIES.map((item) => ({
+                    key: item.key,
+                    label: item.label,
+                    muted: item.key !== choice.category && (counts.get(item.key) ?? 0) > 0,
+                  }))}
+                  onChange={(value) => changeCategory(fixture.id, value)}
+                />
                 {category?.needsTeam ? (
                   <label><span className="sr-only">Team for {category.label}</span><select value={choice.side} disabled={!fixtureEditable || pending} className="brand-input mt-0" onChange={(event) => setChoices((current) => ({ ...current, [fixture.id]: { ...current[fixture.id], side: event.target.value as TeamSide } }))}><option value="">Choose team</option><option value="home">{fixture.homeTeamName}</option><option value="away">{fixture.awayTeamName}</option></select></label>
                 ) : null}
@@ -227,26 +275,20 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
             );
           })}
           {!fixtures.length ? <p className="p-5 text-sm text-slate-400">No fixtures have been synced for this matchday.</p> : null}
-          <div className={`p-4 sm:p-5 ${totalGoalsComplete ? "bg-emerald-400/[0.07]" : "bg-white/[0.02]"}`}>
+          <div className={`p-4 text-center sm:p-5 ${totalGoalsComplete ? "bg-emerald-400/[0.07]" : "bg-white/[0.02]"}`}>
             <input type="hidden" name="total_goals" value={totalGoals} />
-            <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-              <div className="min-w-0" id="total-goals-description">
-                <p className={`text-xs font-black uppercase tracking-wide ${totalGoalsComplete ? "text-emerald-200" : "text-slate-300"}`}>8. Total Goals</p>
-                <h3 className="mt-1 text-lg font-black text-white">Total goals across all {fixtures.length} {fixtures.length === 1 ? "match" : "matches"}</h3>
-                <p className="mt-1 text-sm text-slate-400">Your mandatory eighth selection · Locks at first kickoff.</p>
-              </div>
-              <span className={`brand-pill shrink-0 ${totalGoalsComplete ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200" : "border-amber-300/30 bg-amber-300/10 text-amber-100"}`}>{totalGoalsComplete ? "Completed" : "Required"}</span>
+            <div className="min-w-0" id="total-goals-description">
+              <h3 className={`text-lg font-black ${totalGoalsComplete ? "text-emerald-200" : "text-white"}`}>8. Total Goals Across All Matches</h3>
             </div>
-            <label className="mt-4 block min-w-0 max-w-xs">
+            <label className="mx-auto mt-4 block min-w-0 max-w-48">
               <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-400">Your prediction</span>
               <input
-                className={`brand-input mt-0 h-16 min-w-0 max-w-full text-center text-3xl font-black ${totalGoalsComplete ? "border-emerald-400/50 bg-emerald-400/10 text-white" : "border-white/20"}`}
+                className={`brand-input mt-0 h-14 min-w-0 max-w-full text-center text-2xl font-black ${totalGoalsComplete ? "border-emerald-400/50 bg-emerald-400/10 text-white" : "border-white/20"}`}
                 type="number"
                 min="0"
                 max="100"
                 step="1"
                 inputMode="numeric"
-                placeholder="e.g. 27"
                 value={totalGoals}
                 disabled={!editable || pending || !entryWindowOpen}
                 aria-required="true"
@@ -259,11 +301,11 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
       </section>
 
       <div className={`rounded-xl border p-4 text-sm ${duplicates.length ? "border-red-400/40 bg-red-500/10 text-red-100" : complete ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-100" : "border-white/10 bg-white/5 text-slate-300"}`}>
-        {complete ? <p><strong>Ready to submit.</strong> 8 of 8 selections completed.</p> : <><p>{completedCount} of 8 selections completed.</p><p className="mt-1">Missing: {[...missing.map((item) => item.label), ...missingTeams.map((label) => `${label} team`), ...(!totalGoalsComplete ? ["Total Goals"] : [])].join(", ") || "Resolve the duplicate categories below"}.</p>{duplicates.length ? <p className="mt-1">Duplicate {duplicates.length === 1 ? "category" : "categories"}: {duplicates.map((item) => item.label).join(", ")}.</p> : null}</>}
+        {complete ? <p><strong>Ready to submit.</strong> 8 of 8 selections completed.</p> : <><p>{completedCount} of 8 selections completed.</p><p className="mt-1">Missing: {[...missing.map((item) => item.label), ...missingTeams.map((label) => `${label} team`), ...(!totalGoalsComplete ? ["Total Goals"] : [])].join(", ") || "Resolve the duplicate categories below"}.</p>{duplicates.map((item) => <p key={item.key} className="mt-1 font-semibold">{item.label} is selected more than once.</p>)}</>}
       </div>
 
       {editable ? submitted ? (
-        <div className="flex flex-wrap gap-3"><button className="brand-button-primary w-full sm:w-auto" type="submit" name="intent" value="save_changes" disabled={pending || !complete}>{pending ? "Saving…" : "Save edited submission"}</button><button className="brand-button-secondary w-full sm:w-auto" type="button" disabled={pending} onClick={() => { setChoices(savedChoices); setTotalGoals(savedTotalGoals); setEditing(false); }}>Cancel editing</button></div>
+        <div className="grid w-full gap-3 sm:grid-cols-2"><button className="brand-button-primary w-full" type="submit" name="intent" value="save_changes" disabled={pending || !complete}>{pending ? "Saving…" : "Save edited submission"}</button><button className="brand-button-secondary w-full" type="button" disabled={pending} onClick={cancelEditing}>Cancel editing</button></div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2"><button className="brand-button-secondary" type="submit" name="intent" value="draft" disabled={pending}>{pending ? "Saving…" : "Save Draft"}</button><button className="brand-button-primary" type="submit" name="intent" value="submit" disabled={pending || !complete}>{pending ? "Submitting…" : "Submit Picks"}</button></div>
       ) : null}

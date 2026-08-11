@@ -29,6 +29,22 @@ function failure(message: string): PickEntryActionState {
   return { ok: false, message };
 }
 
+function logPick8DatabaseError(
+  stage: string,
+  context: Record<string, unknown>,
+  error: { code?: string; message: string; details?: string | null; hint?: string | null },
+) {
+  console.error(`Pick8 database error during ${stage}`, {
+    ...context,
+    error: {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    },
+  });
+}
+
 export async function savePickEntry(
   _previousState: PickEntryActionState,
   formData: FormData,
@@ -116,7 +132,7 @@ export async function savePickEntry(
       selectedTeamSide: selection.selected_team_side as Pick8DraftSelection["selectedTeamSide"],
     }));
   const mergedSelections = [...preservedSelections, ...parsed.selections];
-  if (getDuplicatePick8Categories(mergedSelections).length) {
+  if (intent !== "draft" && getDuplicatePick8Categories(mergedSelections).length) {
     return failure("Each prediction category can only be used once, including locked fixtures.");
   }
 
@@ -140,36 +156,50 @@ export async function savePickEntry(
   }
 
   if (!entryId) {
-    const { data, error } = await supabase
+    // Do not request INSERT ... RETURNING here. The new row is permitted by
+    // the INSERT policy, but policy helpers that query entries cannot see that
+    // same row through an MVCC subquery until the following statement.
+    const { error } = await supabase
       .from("entries")
       .insert({
         user_id: user.id,
         matchday_id: matchdayId,
         total_goals_prediction: totalGoals,
         submitted_at: null,
-      })
-      .select("id")
-      .single();
+      });
     if (error) {
-      console.error("Pick8 draft entry creation failed", { matchdayId, userId: user.id, error });
+      logPick8DatabaseError("draft entry creation", { matchdayId, userId: user.id }, error);
       return failure("Your draft could not be created. Your selections are still shown; please try again.");
+    }
+
+    const { data, error: createdEntryReadError } = await supabase
+      .from("entries")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("matchday_id", matchdayId)
+      .single();
+    if (createdEntryReadError) {
+      logPick8DatabaseError(
+        "created draft reload",
+        { matchdayId, userId: user.id },
+        createdEntryReadError,
+      );
+      return failure("Your draft was created but could not be reloaded. Please refresh and try again.");
     }
     entryId = data.id;
   }
 
-  const submittedByCategory = new Map(
-    parsed.selections.map((selection) => [selection.category, selection]),
+  const submittedByFixture = new Map(
+    parsed.selections.map((selection) => [selection.fixtureId, selection]),
   );
   const selectionIdsToDelete = (existingSelections ?? [])
     .filter(() => !existingEntry?.submitted_at)
     .filter((existing) => editableFixtureIdSet.has(existing.fixture_id))
     .filter((existing) => {
-      const submitted = isPick8Category(existing.category)
-        ? submittedByCategory.get(existing.category)
-        : undefined;
+      const submitted = submittedByFixture.get(existing.fixture_id);
       return (
         !submitted ||
-        submitted.fixtureId !== existing.fixture_id ||
+        submitted.category !== existing.category ||
         submitted.selectedTeamSide !== existing.selected_team_side
       );
     })
@@ -181,22 +211,53 @@ export async function savePickEntry(
       .delete()
       .eq("entry_id", entryId)
       .in("id", selectionIdsToDelete);
-    if (error) return failure("Cleared selections could not be removed.");
+    if (error) {
+      logPick8DatabaseError(
+        "draft selection removal",
+        { matchdayId, userId: user.id, entryId },
+        error,
+      );
+      return failure("Cleared selections could not be removed.");
+    }
   }
 
   if (parsed.selections.length) {
-    const { error } = await supabase.from("entry_selections").upsert(
-      parsed.selections.map((selection) => ({
-        entry_id: entryId,
-        category: selection.category,
-        fixture_id: selection.fixtureId,
-        selected_team_side: selection.selectedTeamSide,
-        updated_at: nowIso,
-      })),
-      { onConflict: "entry_id,category" },
-    );
+    const selectionRows = parsed.selections.map((selection) => ({
+      entry_id: entryId,
+      category: selection.category,
+      fixture_id: selection.fixtureId,
+      selected_team_side: selection.selectedTeamSide,
+      updated_at: nowIso,
+    }));
+    const changedDraftRows = selectionRows.filter((selection) => {
+      const existing = (existingSelections ?? []).find(
+        (saved) => saved.fixture_id === selection.fixture_id,
+      );
+      return !existing ||
+        existing.category !== selection.category ||
+        existing.selected_team_side !== selection.selected_team_side;
+    });
+    // Drafts are keyed by fixture and may temporarily contain duplicate
+    // categories while a player rearranges picks. Submitted edits use one
+    // transactional database update so fixture swaps remain constraint-safe.
+    const { error } = existingEntry?.submitted_at
+      ? await supabase.rpc("replace_submitted_pick8_selections", {
+          check_entry_id: entryId,
+          check_selections: selectionRows.map((selection) => ({
+            category: selection.category,
+            fixture_id: selection.fixture_id,
+            selected_team_side: selection.selected_team_side,
+          })),
+        })
+      : changedDraftRows.length
+        ? await supabase.from("entry_selections").insert(changedDraftRows)
+        : { error: null };
     if (error) {
-      console.error("Pick8 draft selection save failed", { matchdayId, userId: user.id, entryId, error });
+      logPick8DatabaseError(
+        "fixture selection save",
+        { matchdayId, userId: user.id, entryId, intent },
+        error,
+      );
       return failure("Your fixture selections could not be saved. They are still shown in this form; please try again.");
     }
   }
@@ -218,7 +279,11 @@ export async function savePickEntry(
     .eq("id", entryId)
     .eq("user_id", user.id);
   if (entryUpdateError) {
-    console.error("Pick8 entry update failed", { matchdayId, userId: user.id, entryId, intent, error: entryUpdateError });
+    logPick8DatabaseError(
+      "entry update",
+      { matchdayId, userId: user.id, entryId, intent },
+      entryUpdateError,
+    );
     if (entryUpdateError.message.includes("Entry must have all seven fixture selections and Total Goals before submission")) {
       return failure(
         "This entry is incomplete and could not be submitted. Complete all seven fixture picks and Total Goals, then try again.",

@@ -1,7 +1,11 @@
 import "server-only";
 
 import { createAdminClient } from "@/utils/supabase/admin";
-import { resolveMatchdayScoringStatus } from "@/utils/pick8-fixture-state";
+import {
+  canFinalizeBeforeConfiguredKickoffs,
+  resolveMatchdayScoringStatus,
+} from "@/utils/pick8-fixture-state";
+import { scorePick8TotalGoals } from "@/utils/pick8-scoring-rules";
 
 export type SelectionCategory =
   | "home_win"
@@ -185,11 +189,11 @@ export function scoreEntry({
     (total, selection) => total + (selection.pointsAwarded ?? 0),
     0,
   );
-  const totalGoalsPoints = finalScoringReady
-    ? totalGoalsPrediction !== null && totalGoalsPrediction === completedGoalTotal
-      ? 10
-      : 0
-    : null;
+  const totalGoalsPoints = scorePick8TotalGoals({
+    prediction: totalGoalsPrediction,
+    actualGoals: completedGoalTotal,
+    finalScoringReady,
+  });
   return {
     selectionScores,
     fixturePoints,
@@ -207,15 +211,17 @@ function databaseFailure(operation: string, message: string): never {
 export async function recalculateMatchdayScores({
   seasonId,
   matchdayId,
+  allowAcceleratedTestCompletion = false,
 }: {
   seasonId: string;
   matchdayId: string;
+  allowAcceleratedTestCompletion?: boolean;
 }): Promise<ScoreRecalculationSummary> {
   const supabase = createAdminClient();
   const recalculatedAt = new Date().toISOString();
   const { data: matchday, error: matchdayError } = await supabase
     .from("matchdays")
-    .select("id, season_id, matchday_number, status")
+    .select("id, season_id, matchday_number, status, fixture_sync_mode, is_accelerated_test")
     .eq("id", matchdayId)
     .eq("season_id", seasonId)
     .maybeSingle();
@@ -231,6 +237,18 @@ export async function recalculateMatchdayScores({
   const fixturesById = new Map(fixtures.map((fixture) => [fixture.id, fixture]));
   const finalScoringReady = isMatchdayReadyForFinalScoring(fixtures);
   const completedGoalTotal = calculateCompletedMatchdayGoalTotal(fixtures);
+  const hasFutureKickoff = fixtures.some((fixture) => Date.parse(fixture.kickoff_at) > Date.parse(recalculatedAt));
+  if (
+    finalScoringReady &&
+    hasFutureKickoff &&
+    !canFinalizeBeforeConfiguredKickoffs({
+      allowAcceleratedTestCompletion,
+      fixtureSyncMode: matchday.fixture_sync_mode,
+      isAcceleratedTest: matchday.is_accelerated_test,
+    })
+  ) {
+    throw new Error("A matchday cannot be completed before every configured kickoff.");
+  }
 
   const { data: entries, error: entriesError } = await supabase
     .from("entries")

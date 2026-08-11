@@ -8,9 +8,8 @@ import CompetitionRefreshCard from "@/components/admin/CompetitionRefreshCard";
 import MatchdaySyncModeCard from "@/components/admin/MatchdaySyncModeCard";
 import ManualMatchdayTestCard from "@/components/admin/ManualMatchdayTestCard";
 import {
+  acceleratedTestFixtureIds,
   MATCHDAY_2_TEST_ID,
-  MATCHDAY_3_TEST_FIXTURE_IDS,
-  MATCHDAY_3_TEST_NUMBER,
 } from "@/utils/pick8-manual-test";
 
 export default async function AdminPage({
@@ -34,29 +33,37 @@ export default async function AdminPage({
   const profiles = (data as Pick8Profile[] | null) ?? [];
   const [{ data: seasonRows }, { data: matchdayRows }, { data: entryRows }, { data: fixtureRows }] = await Promise.all([
     supabase.from("seasons").select("id, name").order("provider_season", { ascending: false }),
-    supabase.from("matchdays").select("id, season_id, matchday_number, status, fixture_sync_mode").order("matchday_number", { ascending: true }),
+    supabase.from("matchdays").select("id, season_id, matchday_number, status, fixture_sync_mode, is_accelerated_test").order("matchday_number", { ascending: true }),
     supabase.from("entries").select("matchday_id, submitted_at, calculated_score"),
     supabase.from("fixtures").select("matchday_id, kickoff_at, external_fixture_id"),
   ]);
   const seasonNameById = new Map((seasonRows ?? []).map((season) => [season.id, season.name]));
   const now = new Date().getTime();
-  const matchday3 = (matchdayRows ?? []).find(
-    (matchday) => matchday.matchday_number === MATCHDAY_3_TEST_NUMBER,
+  const acceleratedMatchdays = (matchdayRows ?? [])
+    .filter((matchday) => matchday.is_accelerated_test)
+    .sort((a, b) => a.matchday_number - b.matchday_number);
+  const latestAccelerated = acceleratedMatchdays.at(-1);
+  const testMatchdayNumber = latestAccelerated?.status === "completed"
+    ? latestAccelerated.matchday_number + 1
+    : latestAccelerated?.matchday_number ?? 3;
+  const testMatchday = (matchdayRows ?? []).find(
+    (matchday) => matchday.matchday_number === testMatchdayNumber,
   );
-  const matchday3FixtureIds = (fixtureRows ?? [])
-    .filter((fixture) => fixture.matchday_id === matchday3?.id)
+  const testFixtureIds = (fixtureRows ?? [])
+    .filter((fixture) => fixture.matchday_id === testMatchday?.id)
     .map((fixture) => fixture.external_fixture_id)
     .sort();
-  const expectedMatchday3FixtureIds = [...MATCHDAY_3_TEST_FIXTURE_IDS].sort();
-  const matchday3Exact = Boolean(matchday3) &&
-    matchday3?.fixture_sync_mode === "manual" &&
-    matchday3FixtureIds.length === expectedMatchday3FixtureIds.length &&
-    matchday3FixtureIds.every((id, index) => id === expectedMatchday3FixtureIds[index]);
-  const matchday3State = !matchday3
+  const expectedTestFixtureIds = acceleratedTestFixtureIds(testMatchdayNumber).sort();
+  const testMatchdayExact = Boolean(testMatchday) &&
+    testMatchday?.fixture_sync_mode === "manual" &&
+    testMatchday.is_accelerated_test &&
+    testFixtureIds.length === expectedTestFixtureIds.length &&
+    testFixtureIds.every((id, index) => id === expectedTestFixtureIds[index]);
+  const testMatchdayState = !testMatchday
     ? "missing" as const
-    : !matchday3Exact
+    : !testMatchdayExact
       ? "unexpected" as const
-      : matchday3.status === "completed"
+      : testMatchday.status === "completed"
         ? "completed" as const
         : "ready" as const;
 
@@ -96,7 +103,8 @@ export default async function AdminPage({
       <CompetitionRefreshCard />
       <ManualMatchdayTestCard
         matchday2Available={(matchdayRows ?? []).some((matchday) => matchday.id === MATCHDAY_2_TEST_ID && matchday.fixture_sync_mode === "manual" && matchday.status !== "completed")}
-        matchday3State={matchday3State}
+        testMatchdayNumber={testMatchdayNumber}
+        testMatchdayState={testMatchdayState}
       />
       <ScoreRecalculationCard
         seasons={(seasonRows ?? []).map((season) => ({ id: season.id, name: season.name }))}
