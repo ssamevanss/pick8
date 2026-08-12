@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   getFixtureLifecycle,
+  getMatchdayGoalProgress,
   earliestFixtureKickoff,
   formatPick8Kickoff,
+  fixtureScoreStateLabel,
   isInitialPick8EntryWindowOpen,
   isFixtureSelectionEditable,
   isPick8SelectionVisible,
@@ -37,10 +39,17 @@ import {
   MATCHDAY_4_TEST_FIXTURE_IDS,
   manualTestFinalGoalTotal,
 } from "../utils/pick8-manual-test.ts";
-import { scorePick8TotalGoals } from "../utils/pick8-scoring-rules.ts";
+import {
+  calculatePick8FixtureSelectionPoints,
+  getPick8FixtureSelectionOutcome,
+  scorePick8TotalGoals,
+  sumPick8Points,
+} from "../utils/pick8-scoring-rules.ts";
+import { findSubmittedPick8Player } from "../utils/pick8-breakdown-types.ts";
 import { resolveCategoryMenuPlacement } from "../utils/category-select-position.ts";
 import {
   buildStandings,
+  currentCompetitionStandings,
   playerMatchdayLifecycle,
   resolveDashboardMatchday,
 } from "../utils/pick8-standings.ts";
@@ -73,6 +82,26 @@ test("provider live, finished and postponed states remain distinct", () => {
   assert.equal(getFixtureLifecycle({ kickoff_at: kickoffAt, status: "in_play" }, kickoff), "live");
   assert.equal(getFixtureLifecycle({ kickoff_at: kickoffAt, status: "finished" }, kickoff), "finished");
   assert.equal(getFixtureLifecycle({ kickoff_at: kickoffAt, status: "postponed" }, kickoff - 1), "void");
+});
+
+test("fixture score state labels distinguish live and full time without labelling upcoming fixtures", () => {
+  assert.equal(fixtureScoreStateLabel("upcoming"), null);
+  assert.equal(fixtureScoreStateLabel("locked"), null);
+  assert.equal(fixtureScoreStateLabel("live"), "LIVE");
+  assert.equal(fixtureScoreStateLabel("finished"), "FT");
+  assert.equal(fixtureScoreStateLabel("void"), null);
+});
+
+test("matchday running goals use started fixtures and remain separate from finalisation", () => {
+  const now = Date.parse("2026-08-12T12:00:00Z");
+  assert.deepEqual(getMatchdayGoalProgress([
+    { kickoff_at: "2026-08-12T11:00:00Z", status: "in_play", home_score: 1, away_score: 0 },
+    { kickoff_at: "2026-08-12T11:30:00Z", status: "in_play", home_score: 1, away_score: 1 },
+    { kickoff_at: "2026-08-12T13:00:00Z", status: "scheduled", home_score: null, away_score: null },
+  ], now), { hasStarted: true, currentGoals: 3 });
+  assert.deepEqual(getMatchdayGoalProgress([
+    { kickoff_at: "2026-08-12T13:00:00Z", status: "scheduled", home_score: null, away_score: null },
+  ], now), { hasStarted: false, currentGoals: 0 });
 });
 
 test("another player's pick is revealed only for its own started fixture", () => {
@@ -204,6 +233,57 @@ test("category menu prefers a full-height direction and scrolls only as fallback
   }), { direction: "down", maxHeight: 260 });
 });
 
+test("live Pick8 outcome states use the same category semantics as final scoring", () => {
+  const liveHomeLead = { status: "in_play", home_score: 2, away_score: 1 };
+  const liveDraw = { status: "in_play", home_score: 1, away_score: 1 };
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "home_win", selected_team_side: "home" }, liveHomeLead), "positive");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "away_win", selected_team_side: "away" }, liveHomeLead), "negative");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "home_win", selected_team_side: "home" }, liveDraw), "neutral");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "draw", selected_team_side: null }, liveDraw), "positive");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "team_win", selected_team_side: "away" }, liveHomeLead), "negative");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "team_lose", selected_team_side: "away" }, liveHomeLead), "positive");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "team_score", selected_team_side: "away" }, { status: "in_play", home_score: 0, away_score: 0 }), "neutral");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "team_score", selected_team_side: "away" }, liveHomeLead), "positive");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "clean_sheet", selected_team_side: "home" }, { status: "in_play", home_score: 1, away_score: 0 }), "neutral");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "clean_sheet", selected_team_side: "home" }, liveHomeLead), "negative");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "clean_sheet", selected_team_side: "home" }, { status: "finished", home_score: 1, away_score: 0 }), "positive");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "team_score", selected_team_side: "away" }, { status: "finished", home_score: 1, away_score: 0 }), "negative");
+});
+
+test("live Pick8 points recalculate from the current score without requiring final status", () => {
+  const homeWinner = { category: "home_win" as const, selected_team_side: "home" as const };
+  const teamWin = { category: "team_win" as const, selected_team_side: "home" as const };
+  assert.deepEqual(calculatePick8FixtureSelectionPoints(homeWinner, { home_score: 1, away_score: 0 }), { pointsAwarded: 6, isCorrect: true });
+  assert.deepEqual(calculatePick8FixtureSelectionPoints(teamWin, { home_score: 1, away_score: 0 }), { pointsAwarded: 10, isCorrect: true });
+  assert.deepEqual(calculatePick8FixtureSelectionPoints(homeWinner, { home_score: 0, away_score: 1 }), { pointsAwarded: -5, isCorrect: false });
+  assert.deepEqual(calculatePick8FixtureSelectionPoints(homeWinner, { home_score: 2, away_score: 0 }), { pointsAwarded: 7, isCorrect: true });
+  assert.deepEqual(calculatePick8FixtureSelectionPoints({ category: "draw", selected_team_side: null }, { home_score: 1, away_score: 0 }), { pointsAwarded: 0, isCorrect: false });
+});
+
+test("current Matchday score sums shared card points and only legitimate Total Goals points", () => {
+  assert.equal(sumPick8Points([6, 16, -10, null]), 12);
+  assert.equal(sumPick8Points([6, 16, -10, null], 10), 22);
+});
+
+test("historical summary resolution uses only the current player's submitted entry", () => {
+  const submittedPlayer = {
+    player: { id: "sam", display_name: "Sam" },
+    entry: { id: "entry", user_id: "sam", matchday_id: "md2", total_goals_prediction: 25, submitted_at: "2026-08-09T10:38:59Z", calculated_score: 16, score_calculated_at: "2026-08-10T00:00:00Z" },
+    selections: [],
+    totalGoalsPoints: 10,
+  };
+  const noEntryPlayer = {
+    player: { id: "paul", display_name: "Paul" },
+    entry: null,
+    selections: [],
+    totalGoalsPoints: null,
+  };
+  const players = [submittedPlayer, noEntryPlayer];
+  assert.equal(findSubmittedPick8Player(players, "sam")?.entry?.total_goals_prediction, 25);
+  assert.equal(findSubmittedPick8Player(players, "paul"), null);
+  assert.equal(findSubmittedPick8Player(players, "missing"), null);
+});
+
 test("fixture automation never provider-syncs a manual matchday", () => {
   assert.equal(shouldSyncProviderFixtures("manual"), false);
   assert.equal(getFixtureAutomationPlan("manual", "fixtures"), "skip");
@@ -316,4 +396,38 @@ test("a normally finalized submitted entry contributes to competition and overal
     { start: 1, end: 5 },
   );
   assert.deepEqual({ points: rows[0]?.points, played: rows[0]?.played, rank: rows[0]?.rank }, { points: 12, played: 1, rank: 1 });
+});
+
+test("paused participation preserves history, records missed matchdays, and resumes without backfill", () => {
+  const disabled = { id: "player", display_name: "Player", pick8_participation_active: false };
+  const enabled = { ...disabled, pick8_participation_active: true };
+  const opponent = { id: "opponent", display_name: "Opponent", pick8_participation_active: true };
+  const matchdays = [
+    { id: "md1", matchday_number: 1, status: "completed", locks_at: "2026-08-01T10:00:00Z" },
+    { id: "md2", matchday_number: 2, status: "completed", locks_at: "2026-08-08T10:00:00Z" },
+    { id: "md3", matchday_number: 3, status: "completed", locks_at: "2026-08-15T10:00:00Z" },
+  ];
+  const matchdayById = new Map(matchdays.map((matchday) => [matchday.id, matchday]));
+  const historicalEntry = { id: "entry-1", user_id: disabled.id, matchday_id: "md1", submitted_at: "2026-08-01T09:00:00Z", calculated_score: 18 };
+  const opponentEntry = { id: "entry-2", user_id: opponent.id, matchday_id: "md2", submitted_at: "2026-08-08T09:00:00Z", calculated_score: 12 };
+
+  const pausedOverall = buildStandings([disabled, opponent], [historicalEntry, opponentEntry], matchdayById);
+  assert.deepEqual(
+    pausedOverall.find((row) => row.profile.id === disabled.id) && {
+      points: pausedOverall.find((row) => row.profile.id === disabled.id)?.points,
+      played: pausedOverall.find((row) => row.profile.id === disabled.id)?.played,
+    },
+    { points: 18, played: 1 },
+  );
+  assert.equal(currentCompetitionStandings(buildStandings([disabled], [historicalEntry], matchdayById, { start: 1, end: 2 })).length, 1);
+  assert.equal(currentCompetitionStandings(buildStandings([disabled], [historicalEntry], matchdayById, { start: 2, end: 3 })).length, 0);
+  const activeNegativeEntry = { id: "entry-negative", user_id: opponent.id, matchday_id: "md2", submitted_at: "2026-08-08T09:00:00Z", calculated_score: -5 };
+  const reranked = currentCompetitionStandings(buildStandings([disabled, opponent], [historicalEntry, activeNegativeEntry], matchdayById, { start: 2, end: 3 }));
+  assert.deepEqual(reranked.map((row) => ({ id: row.profile.id, rank: row.rank })), [{ id: opponent.id, rank: 1 }]);
+
+  const resumedWithoutBackfill = buildStandings([enabled], [historicalEntry], matchdayById);
+  assert.deepEqual({ points: resumedWithoutBackfill[0]?.points, played: resumedWithoutBackfill[0]?.played }, { points: 18, played: 1 });
+  const resumedEntry = { id: "entry-3", user_id: enabled.id, matchday_id: "md3", submitted_at: "2026-08-15T09:00:00Z", calculated_score: 9 };
+  const resumedOverall = buildStandings([enabled], [historicalEntry, resumedEntry], matchdayById);
+  assert.deepEqual({ points: resumedOverall[0]?.points, played: resumedOverall[0]?.played }, { points: 27, played: 2 });
 });

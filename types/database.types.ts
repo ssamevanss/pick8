@@ -286,6 +286,7 @@ export type Database = {
           id: string
           is_active: boolean
           is_admin: boolean
+          pick8_participation_active: boolean
           updated_at: string
         }
         Insert: {
@@ -295,6 +296,7 @@ export type Database = {
           id: string
           is_active?: boolean
           is_admin?: boolean
+          pick8_participation_active?: boolean
           updated_at?: string
         }
         Update: {
@@ -304,6 +306,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           is_admin?: boolean
+          pick8_participation_active?: boolean
           updated_at?: string
         }
         Relationships: []

@@ -27,7 +27,7 @@ export default async function AdminPage({
   const { data, error } = await supabase
     .from("profiles")
     .select(
-      "id, email, display_name, is_admin, is_active, created_at, updated_at",
+      "id, email, display_name, is_admin, is_active, pick8_participation_active, created_at, updated_at",
     )
     .order("display_name", { ascending: true });
   const profiles = (data as Pick8Profile[] | null) ?? [];
@@ -73,9 +73,9 @@ export default async function AdminPage({
         <p className="brand-eyebrow">Administration</p>
         <h1 className="brand-title mt-2">Profiles</h1>
         <p className="brand-subtitle mt-2">
-          Manage access, administrator privileges, and display names for the
-          private Pick8 group. Set a recognisable display name for every player
-          before activating their account; this is the name shown throughout Pick8.
+          Manage account access, Pick8 participation, administrator privileges,
+          and display names. Pausing participation prevents future entries without
+          removing the player or any historical scores.
         </p>
       </header>
 
@@ -118,7 +118,7 @@ export default async function AdminPage({
           return (
             <form key={item.id} action={updateProfile} className="brand-card p-4 sm:p-5">
               <input type="hidden" name="user_id" value={item.id} />
-              <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end">
+              <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] sm:items-end">
                 <div>
                   <label className="text-sm text-slate-300" htmlFor={`display-name-${item.id}`}>
                     Display name
@@ -149,6 +149,16 @@ export default async function AdminPage({
                     className="h-5 w-5 accent-emerald-400"
                   />
                   Active
+                </label>
+
+                <label className="flex items-center gap-2 pb-2 text-sm font-semibold text-slate-200">
+                  <input
+                    type="checkbox"
+                    name="pick8_participation_active"
+                    defaultChecked={item.pick8_participation_active}
+                    className="h-5 w-5 accent-emerald-400"
+                  />
+                  Pick8 participation
                 </label>
 
                 <label className="flex items-center gap-2 pb-2 text-sm font-semibold text-slate-200">

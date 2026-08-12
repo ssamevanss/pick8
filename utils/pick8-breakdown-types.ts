@@ -41,6 +41,14 @@ export type BreakdownPlayer = {
   totalGoalsPoints: number | null;
 };
 
+export function findSubmittedPick8Player(
+  players: BreakdownPlayer[],
+  playerId: string,
+) {
+  const result = players.find(({ player }) => player.id === playerId);
+  return result?.entry?.submitted_at ? result : null;
+}
+
 export const PICK_CATEGORY_LABELS: Record<string, string> = {
   home_win: "Home Winner",
   away_win: "Away Winner",

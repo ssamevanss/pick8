@@ -5,7 +5,11 @@ import {
   canFinalizeBeforeConfiguredKickoffs,
   resolveMatchdayScoringStatus,
 } from "@/utils/pick8-fixture-state";
-import { scorePick8TotalGoals } from "@/utils/pick8-scoring-rules";
+import {
+  calculatePick8FixtureSelectionPoints,
+  getPick8SelectedTeamPerformance,
+  scorePick8TotalGoals,
+} from "@/utils/pick8-scoring-rules";
 
 export type SelectionCategory =
   | "home_win"
@@ -72,17 +76,7 @@ export function getSelectedTeamPerformance(
   fixture: Pick<ScoringFixture, "home_score" | "away_score">,
   side: Exclude<TeamSide, null>,
 ): SelectedTeamPerformance {
-  if (fixture.home_score === null || fixture.away_score === null) {
-    throw new Error("Finished fixture scores are required.");
-  }
-  const goalsFor = side === "home" ? fixture.home_score : fixture.away_score;
-  const goalsAgainst = side === "home" ? fixture.away_score : fixture.home_score;
-  return {
-    result: goalsFor > goalsAgainst ? "win" : goalsFor < goalsAgainst ? "loss" : "draw",
-    goalsFor,
-    goalsAgainst,
-    goalDifference: Math.abs(goalsFor - goalsAgainst),
-  };
+  return getPick8SelectedTeamPerformance(fixture, side);
 }
 
 export function scoreFixtureSelection(
@@ -96,57 +90,19 @@ export function scoreFixtureSelection(
   ) {
     return { pointsAwarded: null, isCorrect: null };
   }
-
-  switch (selection.category) {
-    case "home_win": {
-      const performance = getSelectedTeamPerformance(fixture, "home");
-      return performance.result === "win"
-        ? { pointsAwarded: 5 + performance.goalDifference, isCorrect: true }
-        : performance.result === "loss"
-          ? { pointsAwarded: -5 * performance.goalDifference, isCorrect: false }
-          : { pointsAwarded: 0, isCorrect: false };
-    }
-    case "away_win": {
-      const performance = getSelectedTeamPerformance(fixture, "away");
-      return performance.result === "win"
-        ? { pointsAwarded: 10 + performance.goalDifference, isCorrect: true }
-        : performance.result === "loss"
-          ? { pointsAwarded: -5 * performance.goalDifference, isCorrect: false }
-          : { pointsAwarded: 0, isCorrect: false };
-    }
-    case "draw": {
-      const correct = fixture.home_score === fixture.away_score;
-      return {
-        pointsAwarded: correct ? 15 + fixture.home_score : 0,
-        isCorrect: correct,
-      };
-    }
-    case "team_win":
-    case "team_lose":
-    case "team_score":
-    case "clean_sheet": {
-      if (selection.selected_team_side !== "home" && selection.selected_team_side !== "away") {
-        throw new Error(`Category ${selection.category} requires a selected team.`);
-      }
-      const performance = getSelectedTeamPerformance(
-        fixture,
-        selection.selected_team_side,
-      );
-      const correct =
-        selection.category === "team_win"
-          ? performance.result === "win"
-          : selection.category === "team_lose"
-            ? performance.result === "loss"
-            : selection.category === "team_score"
-              ? performance.goalsFor > 0
-              : performance.goalsAgainst === 0;
-      return { pointsAwarded: correct ? 10 : -10, isCorrect: correct };
-    }
-    default: {
-      const exhaustive: never = selection.category;
-      throw new Error(`Unsupported selection category: ${exhaustive}`);
-    }
+  if (
+    ["team_win", "team_lose", "team_score", "clean_sheet"].includes(selection.category) &&
+    selection.selected_team_side !== "home" &&
+    selection.selected_team_side !== "away"
+  ) {
+    throw new Error(`Category ${selection.category} requires a selected team.`);
   }
+
+  const result = calculatePick8FixtureSelectionPoints(selection, fixture);
+  if (!result) {
+    throw new Error("Finished fixture scores are required.");
+  }
+  return result;
 }
 
 export function isMatchdayReadyForFinalScoring(fixtures: ScoringFixture[]) {

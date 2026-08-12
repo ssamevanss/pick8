@@ -53,6 +53,9 @@ export async function savePickEntry(
   if (!user || !profile?.is_active) {
     return failure("An active Pick8 account is required.");
   }
+  if (!profile.pick8_participation_active) {
+    return failure("Your Pick8 participation is paused. You can still view previous entries and results.");
+  }
 
   const rawIntent = String(formData.get("intent") ?? "draft");
   const intent = rawIntent === "submit"

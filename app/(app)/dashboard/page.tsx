@@ -4,6 +4,7 @@ import { createAdminClient } from "@/utils/supabase/admin";
 import { buildMatchdayBreakdown } from "@/utils/pick8-matchday-breakdown";
 import {
   buildStandings,
+  currentCompetitionStandings,
   playerMatchdayLifecycle,
   playerDisplayName,
   resolveCurrentCompetition,
@@ -89,7 +90,7 @@ export default async function DashboardPage() {
   if (seasonError || !season) return <section className="brand-card p-5"><p className="brand-eyebrow">Current matchday</p><h1 className="mt-2 text-xl font-black text-white">No active season</h1><p className="mt-2 text-sm text-slate-300">There is no active Pick8 season yet.</p></section>;
 
   const [{ data: profileRows }, { data: matchdayRows }, { data: competitionRows }] = await Promise.all([
-    admin.from("profiles").select("id, display_name").eq("is_active", true).order("display_name"),
+    admin.from("profiles").select("id, display_name, pick8_participation_active").eq("is_active", true).order("display_name"),
     admin.from("matchdays").select("id, matchday_number, status, locks_at").eq("season_id", season.id).order("matchday_number"),
     admin.from("competitions").select("id, name, start_matchday, end_matchday, status").eq("season_id", season.id).order("start_matchday"),
   ]);
@@ -107,7 +108,7 @@ export default async function DashboardPage() {
   const currentLifecycle = currentMatchday ? playerMatchdayLifecycle(currentMatchday, now) : null;
   const currentCompetition = resolveCurrentCompetition(competitions, currentMatchday);
   const overall = buildStandings(profiles, standingsEntries, byMatchday);
-  const competitionStandings = currentCompetition ? buildStandings(profiles, standingsEntries, byMatchday, { start: currentCompetition.start_matchday, end: currentCompetition.end_matchday }) : [];
+  const competitionStandings = currentCompetition ? currentCompetitionStandings(buildStandings(profiles, standingsEntries, byMatchday, { start: currentCompetition.start_matchday, end: currentCompetition.end_matchday })) : [];
   const ownOverall = overall.find((row) => row.profile.id === user.id);
   const ownCompetition = competitionStandings.find((row) => row.profile.id === user.id);
   const latestEntries = entries
@@ -127,7 +128,15 @@ export default async function DashboardPage() {
     latestFixtures = (data ?? []) as (BreakdownFixture & { matchday_id: string })[];
   }
   const currentProgress = selectionProgress(currentEntry, relevantSelections.filter((selection) => selection.entry_id === currentEntry?.id));
-  const currentEntryUi = currentMatchday ? entryPresentation(currentMatchday, currentEntry, now, currentProgress) : null;
+  const currentEntryUi = currentMatchday
+    ? !profile.pick8_participation_active && playerMatchdayLifecycle(currentMatchday, now) !== "Completed"
+      ? {
+          status: "Participation paused",
+          detail: "You can view this matchday, but cannot submit or edit picks while participation is paused.",
+          cta: "View Matchday",
+        }
+      : entryPresentation(currentMatchday, currentEntry, now, currentProgress)
+    : null;
   const latestResults = latestEntries.flatMap((entry) => {
     const matchday = byMatchday.get(entry.matchday_id);
     if (!matchday) return [];

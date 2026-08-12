@@ -23,7 +23,7 @@ export const getRequestAuthContext = cache(async () => {
           supabase
             .from("profiles")
             .select(
-              "id, email, display_name, is_admin, is_active, created_at, updated_at",
+              "id, email, display_name, is_admin, is_active, pick8_participation_active, created_at, updated_at",
             )
             .eq("id", user.id)
             .maybeSingle(),

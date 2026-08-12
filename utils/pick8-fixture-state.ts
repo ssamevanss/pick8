@@ -129,6 +129,35 @@ export function fixtureLifecycleLabel(lifecycle: FixtureLifecycle) {
   }
 }
 
+export function fixtureScoreStateLabel(lifecycle: FixtureLifecycle) {
+  if (lifecycle === "live") return "LIVE";
+  if (lifecycle === "finished") return "FT";
+  return null;
+}
+
+export function getMatchdayGoalProgress(
+  fixtures: Array<{
+    kickoff_at: string;
+    status: string;
+    home_score: number | null;
+    away_score: number | null;
+  }>,
+  now = Date.now(),
+) {
+  let hasStarted = false;
+  let currentGoals = 0;
+
+  for (const fixture of fixtures) {
+    if (getFixtureLifecycle(fixture, now) === "upcoming") continue;
+    hasStarted = true;
+    if (fixture.home_score !== null && fixture.away_score !== null) {
+      currentGoals += fixture.home_score + fixture.away_score;
+    }
+  }
+
+  return { hasStarted, currentGoals };
+}
+
 export function formatPick8Kickoff(kickoffAt: string) {
   const kickoff = fixtureKickoffMs(kickoffAt);
   if (kickoff === null) return "Kickoff unavailable";

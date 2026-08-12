@@ -88,7 +88,8 @@ export default async function MyPicksPage({
     ? await supabase.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", entryIds)
     : { data: [] };
   const selections = (selectionRows ?? []) as BreakdownSelection[];
-  const initialSubmissionWindowOpen = isInitialPick8EntryWindowOpen(selectedMatchday.status, effectiveLocksAt, now);
+  const participationActive = profile.pick8_participation_active;
+  const initialSubmissionWindowOpen = participationActive && isInitialPick8EntryWindowOpen(selectedMatchday.status, effectiveLocksAt, now);
   const ownEntry = entries.find((entry) => entry.user_id === user.id) ?? null;
   const ownSelections = ownEntry
     ? selections.filter((selection) => selection.entry_id === ownEntry.id)
@@ -96,7 +97,7 @@ export default async function MyPicksPage({
   const hasFutureFixture = fixtures.some((fixture) =>
     isFixtureSelectionEditable(fixture, now),
   );
-  const canEditSubmittedEntry = Boolean(ownEntry?.submitted_at) && hasFutureFixture;
+  const canEditSubmittedEntry = participationActive && Boolean(ownEntry?.submitted_at) && hasFutureFixture;
   const showEntryEditor =
     effectiveLocksAt !== null &&
     (initialSubmissionWindowOpen || canEditSubmittedEntry);
@@ -120,6 +121,7 @@ export default async function MyPicksPage({
   });
   const fixtureSlate = (
     <ReadOnlyMatchdayPicks
+      key={`fixture-slate-${selectedMatchday.id}`}
       matchday={selectedMatchday}
       fixtures={fixtures}
       players={breakdown.players}
@@ -127,6 +129,7 @@ export default async function MyPicksPage({
       finalReady={breakdown.finalReady}
       currentPlayerId={user.id}
       showPlayers={false}
+      showCurrentPlayerSummary={!ownEntry?.submitted_at}
       now={now}
     />
   );
@@ -144,30 +147,40 @@ export default async function MyPicksPage({
         </div>
       </header>
 
+      {!participationActive ? <p className="brand-alert-warning">Your Pick8 participation is paused. Historical entries and scores remain available, but you cannot submit or edit open matchdays.</p> : null}
+
       {effectiveLocksAt && ownEntry?.submitted_at ? (
         <MatchdayEntryForm
           matchdayId={selectedMatchday.id}
           locksAt={effectiveLocksAt}
-          fixtures={fixtures.map((fixture): PickFixture => ({ id: fixture.id, homeTeamName: fixture.home_team_name, awayTeamName: fixture.away_team_name, homeTeamCrestUrl: fixture.home_team_crest_url, awayTeamCrestUrl: fixture.away_team_crest_url, kickoffAt: fixture.kickoff_at, status: fixture.status }))}
-          initialSelections={ownSelections.map((selection) => ({ category: selection.category, fixtureId: selection.fixture_id, selectedTeamSide: selection.selected_team_side }))}
+          fixtures={fixtures.map((fixture): PickFixture => ({ id: fixture.id, homeTeamName: fixture.home_team_name, awayTeamName: fixture.away_team_name, homeTeamCrestUrl: fixture.home_team_crest_url, awayTeamCrestUrl: fixture.away_team_crest_url, kickoffAt: fixture.kickoff_at, status: fixture.status, homeScore: fixture.home_score, awayScore: fixture.away_score }))}
+          initialSelections={ownSelections.map((selection) => ({ category: selection.category, fixtureId: selection.fixture_id, selectedTeamSide: selection.selected_team_side, pointsAwarded: selection.points_awarded }))}
           initialTotalGoals={ownEntry?.total_goals_prediction ?? null}
           initiallyEditable={canEditSubmittedEntry}
           initiallySubmitted
           initiallySubmittedAt={ownEntry.submitted_at}
           initiallyHasEntry
+          actualGoals={breakdown.actualGoals}
+          finalReady={breakdown.finalReady}
+          finalMatchdayScore={ownEntry.calculated_score}
+          totalGoalsPoints={breakdown.players.find(({ player }) => player.id === user.id)?.totalGoalsPoints ?? null}
           fixtureSlate={fixtureSlate}
         />
       ) : showEntryEditor && effectiveLocksAt ? (
         <MatchdayEntryForm
           matchdayId={selectedMatchday.id}
           locksAt={effectiveLocksAt}
-          fixtures={fixtures.map((fixture): PickFixture => ({ id: fixture.id, homeTeamName: fixture.home_team_name, awayTeamName: fixture.away_team_name, homeTeamCrestUrl: fixture.home_team_crest_url, awayTeamCrestUrl: fixture.away_team_crest_url, kickoffAt: fixture.kickoff_at, status: fixture.status }))}
-          initialSelections={ownSelections.map((selection) => ({ category: selection.category, fixtureId: selection.fixture_id, selectedTeamSide: selection.selected_team_side }))}
+          fixtures={fixtures.map((fixture): PickFixture => ({ id: fixture.id, homeTeamName: fixture.home_team_name, awayTeamName: fixture.away_team_name, homeTeamCrestUrl: fixture.home_team_crest_url, awayTeamCrestUrl: fixture.away_team_crest_url, kickoffAt: fixture.kickoff_at, status: fixture.status, homeScore: fixture.home_score, awayScore: fixture.away_score }))}
+          initialSelections={ownSelections.map((selection) => ({ category: selection.category, fixtureId: selection.fixture_id, selectedTeamSide: selection.selected_team_side, pointsAwarded: selection.points_awarded }))}
           initialTotalGoals={ownEntry?.total_goals_prediction ?? null}
           initiallyEditable={initialSubmissionWindowOpen}
           initiallySubmitted={false}
           initiallySubmittedAt={null}
           initiallyHasEntry={Boolean(ownEntry)}
+          actualGoals={breakdown.actualGoals}
+          finalReady={breakdown.finalReady}
+          finalMatchdayScore={ownEntry?.calculated_score ?? null}
+          totalGoalsPoints={breakdown.players.find(({ player }) => player.id === user.id)?.totalGoalsPoints ?? null}
         />
       ) : (
         <>

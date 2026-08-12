@@ -4,7 +4,8 @@ import { useActionState, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { savePickEntry, type PickEntryActionState } from "@/app/(app)/my-picks/actions";
 import CategorySelect from "@/components/picks/CategorySelect";
-import TeamIdentity, { TeamCrest } from "@/components/picks/TeamIdentity";
+import SubmittedPick8Summary from "@/components/picks/SubmittedPick8Summary";
+import TeamIdentity from "@/components/picks/TeamIdentity";
 import {
   formatPick8Kickoff,
   getFixtureLifecycle,
@@ -17,11 +18,11 @@ import {
 } from "@/utils/pick8-entry-validation";
 import type { Pick8Category } from "@/utils/pick8-entry-validation";
 
-export type PickFixture = { id: string; homeTeamName: string; awayTeamName: string; homeTeamCrestUrl: string | null; awayTeamCrestUrl: string | null; kickoffAt: string; status: string };
+export type PickFixture = { id: string; homeTeamName: string; awayTeamName: string; homeTeamCrestUrl: string | null; awayTeamCrestUrl: string | null; kickoffAt: string; status: string; homeScore: number | null; awayScore: number | null };
 type Category = Pick8Category;
 type TeamSide = "home" | "away" | "";
 type FixtureChoice = { category: Category | ""; side: TeamSide };
-type InitialSelection = { category: string; fixtureId: string; selectedTeamSide: string | null };
+type InitialSelection = { category: string; fixtureId: string; selectedTeamSide: string | null; pointsAwarded: number | null };
 
 const CATEGORIES: Array<{ key: Category; label: string; needsTeam: boolean }> = [
   { key: "home_win", label: "Home Winner", needsTeam: false },
@@ -59,7 +60,7 @@ function submittedTime(value: string | null) {
   }).format(submittedAt);
 }
 
-export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initialSelections, initialTotalGoals, initiallyEditable, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry, fixtureSlate }: {
+export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initialSelections, initialTotalGoals, initiallyEditable, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry, actualGoals, finalReady, finalMatchdayScore, totalGoalsPoints, fixtureSlate }: {
   matchdayId: string;
   locksAt: string;
   fixtures: PickFixture[];
@@ -69,6 +70,10 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
   initiallySubmitted: boolean;
   initiallySubmittedAt: string | null;
   initiallyHasEntry: boolean;
+  actualGoals: number | null;
+  finalReady: boolean;
+  finalMatchdayScore: number | null;
+  totalGoalsPoints: number | null;
   fixtureSlate?: ReactNode;
 }) {
   const incomingPersistedState = useMemo(
@@ -192,17 +197,8 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
     const choice = choices[fixture.id];
     const category = choice?.category ? CATEGORY_BY_KEY.get(choice.category) : null;
     if (!choice?.category || !category) return [];
-    const team = choice.side === "home"
-      ? fixture.homeTeamName
-      : choice.side === "away"
-        ? fixture.awayTeamName
-        : "Draw / no team";
-    const teamCrestUrl = choice.side === "home"
-      ? fixture.homeTeamCrestUrl
-      : choice.side === "away"
-        ? fixture.awayTeamCrestUrl
-        : null;
-    return [{ fixture, category, team, teamCrestUrl, hasSelectedTeam: choice.side !== "" }];
+    const persistedSelection = initialSelections.find((selection) => selection.fixtureId === fixture.id && selection.category === category.key);
+    return [{ category: category.key, fixtureId: fixture.id, selectedTeamSide: choice.side || null, pointsAwarded: persistedSelection?.pointsAwarded ?? null }];
   });
 
   return (
@@ -216,25 +212,20 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
       {state.message ? <p className={state.ok ? "brand-alert-success" : "brand-alert-danger"} role="status" aria-live="polite">{state.message}</p> : null}
 
       {submitted && !editing ? (
-        <div className="contents"><section className="brand-card p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><p className="brand-eyebrow">Your Pick8</p><h2 className="mt-1 text-xl font-black text-white">Seven picks + Total Goals</h2></div>
-            {hasEditableFixture ? <button type="button" className="brand-button-secondary" onClick={enterEditMode}>Edit submission</button> : <span className="brand-pill">All fixtures locked</span>}
-          </div>
-          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            {selectedChoices.map(({ fixture, category, team, teamCrestUrl, hasSelectedTeam }) => (
-              <div key={fixture.id} className="brand-card-soft p-2.5 text-sm">
-                <p className="text-xs font-black uppercase tracking-wide text-emerald-200">{category.label}</p>
-                <div className="mt-1.5">{hasSelectedTeam ? <TeamIdentity name={team} crestUrl={teamCrestUrl} /> : <p className="font-bold text-white">{team}</p>}</div>
-                <div className="mt-2 flex min-w-0 items-center gap-2 border-t border-white/10 pt-2 text-[11px] text-slate-400">
-                  <span className="flex shrink-0 -space-x-1"><TeamCrest name={fixture.homeTeamName} crestUrl={fixture.homeTeamCrestUrl} /><TeamCrest name={fixture.awayTeamName} crestUrl={fixture.awayTeamCrestUrl} /></span>
-                  <span className="truncate" title={`${fixture.homeTeamName} v ${fixture.awayTeamName}`}>{fixture.homeTeamName} v {fixture.awayTeamName}</span>
-                </div>
-              </div>
-            ))}
-            <div className="brand-card-soft flex items-center justify-between gap-3 p-2.5 text-sm lg:block"><p className="text-xs font-black uppercase tracking-wide text-emerald-200">Total Goals</p><p className="text-2xl font-black text-white lg:mt-1">{totalGoals}</p></div>
-          </div>
-        </section>{fixtureSlate ? <div>{fixtureSlate}</div> : null}</div>
+        <div className="space-y-5 sm:space-y-6">
+          <SubmittedPick8Summary
+            fixtures={fixtures}
+            selections={selectedChoices}
+            totalGoals={totalGoals}
+            actualGoals={actualGoals}
+            finalReady={finalReady}
+            finalMatchdayScore={finalMatchdayScore}
+            totalGoalsPoints={totalGoalsPoints}
+            now={now}
+            action={hasEditableFixture ? <button type="button" className="brand-button-secondary" onClick={enterEditMode}>Edit submission</button> : <span className="brand-pill">All fixtures locked</span>}
+          />
+          {fixtureSlate}
+        </div>
       ) : <>
       <section className="brand-card">
         <div className="border-b border-white/10 px-4 py-4 sm:px-5"><h2 className="text-xl font-black text-white">Choose your picks</h2><p className="mt-1 text-sm text-slate-400">Assign one prediction category to each fixture you want to use.</p></div>

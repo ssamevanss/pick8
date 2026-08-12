@@ -1,4 +1,8 @@
-export type StandingsProfile = { id: string; display_name: string };
+export type StandingsProfile = {
+  id: string;
+  display_name: string;
+  pick8_participation_active?: boolean;
+};
 export type StandingsMatchday = { id: string; matchday_number: number; status: string; locks_at: string | null };
 export type StandingsCompetition = { id: string; name: string; start_matchday: number; end_matchday: number; status: string };
 export type StandingsEntry = { id: string; user_id: string; matchday_id: string; submitted_at: string | null; calculated_score: number | null };
@@ -46,4 +50,20 @@ export function buildStandings(profiles: StandingsProfile[], entries: StandingsE
   rows.sort((a, b) => b.points - a.points || playerDisplayName(a.profile).localeCompare(playerDisplayName(b.profile)));
   rows.forEach((row, index) => { row.rank = index > 0 && rows[index - 1].points === row.points ? rows[index - 1].rank : index + 1; });
   return rows;
+}
+
+export function currentCompetitionStandings(
+  rows: ReturnType<typeof buildStandings>,
+) {
+  const visible = rows
+    .filter(
+      (row) => row.profile.pick8_participation_active !== false || row.played > 0,
+    )
+    .map((row) => ({ ...row }));
+  visible.forEach((row, index) => {
+    row.rank = index > 0 && visible[index - 1].points === row.points
+      ? visible[index - 1].rank
+      : index + 1;
+  });
+  return visible;
 }

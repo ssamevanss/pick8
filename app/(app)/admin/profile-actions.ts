@@ -23,6 +23,7 @@ export async function updateProfile(formData: FormData) {
   const displayName = String(formData.get("display_name") ?? "").trim();
   const isActive = formData.get("is_active") === "on";
   const isAdmin = formData.get("is_admin") === "on";
+  const pick8ParticipationActive = formData.get("pick8_participation_active") === "on";
 
   if (!userId || !displayName) {
     redirectWithError("Profile details are incomplete.");
@@ -44,6 +45,7 @@ export async function updateProfile(formData: FormData) {
       display_name: displayName,
       is_active: isActive,
       is_admin: isAdmin,
+      pick8_participation_active: pick8ParticipationActive,
       updated_at: new Date().toISOString(),
     })
     .eq("id", userId);
@@ -54,5 +56,7 @@ export async function updateProfile(formData: FormData) {
 
   revalidatePath("/admin");
   revalidatePath("/dashboard");
+  revalidatePath("/my-picks");
+  revalidatePath("/tables");
   redirect("/admin?saved=1");
 }
