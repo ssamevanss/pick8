@@ -319,6 +319,7 @@ export async function runConditionalResultSync() {
     recalculate: "when-needed",
     forceRecalculateMatchdayIds: finalReconciliationMatchdayIds,
   });
+  const competitionRefresh = await refreshPick8Competitions(season.id);
   const response = {
     ok: result.failures.length === 0,
     skipped: selected.length === 0,
@@ -327,6 +328,7 @@ export async function runConditionalResultSync() {
     matchdaysAttempted: selected.map((matchday) => matchday.matchday_number),
     ...result,
     totals: totals(result.successes),
+    competitionRefresh,
     durationMs: Date.now() - startedAt,
   };
   logRun({ route, success: response.ok, matchdays: selected.length, durationMs: response.durationMs });
@@ -360,6 +362,7 @@ export async function runResultReconciliation() {
     matchdays: selected,
     recalculate: "always",
   });
+  const competitionRefresh = await refreshPick8Competitions(season.id);
   const response = {
     ok: result.failures.length === 0,
     skipped: selected.length === 0,
@@ -369,6 +372,7 @@ export async function runResultReconciliation() {
     matchdaysAttempted: selected.map((matchday) => matchday.matchday_number),
     ...result,
     totals: totals(result.successes),
+    competitionRefresh,
     durationMs: Date.now() - startedAt,
   };
   logRun({ route, success: response.ok, matchdays: selected.length, durationMs: response.durationMs });

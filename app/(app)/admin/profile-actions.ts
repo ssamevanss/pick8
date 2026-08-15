@@ -39,7 +39,7 @@ export async function updateProfile(formData: FormData) {
     );
   }
 
-  const { error } = await supabase
+  const { data: updatedProfile, error } = await supabase
     .from("profiles")
     .update({
       display_name: displayName,
@@ -48,10 +48,25 @@ export async function updateProfile(formData: FormData) {
       pick8_participation_active: pick8ParticipationActive,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", userId);
+    .eq("id", userId)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
-    redirectWithError(error.message);
+    console.error("Pick8 profile update failed", {
+      actorId: user.id,
+      targetId: userId,
+      code: error.code,
+      message: error.message,
+    });
+    redirectWithError("The profile could not be saved. Please try again.");
+  }
+  if (!updatedProfile) {
+    console.error("Pick8 profile update affected no row", {
+      actorId: user.id,
+      targetId: userId,
+    });
+    redirectWithError("The profile could not be found or updated.");
   }
 
   revalidatePath("/admin");

@@ -76,13 +76,18 @@ export default async function MyPicksPage({
 
   const [{ data: fixtureRows }, { data: profileRows }, { data: entryRows }] = await Promise.all([
     admin.from("fixtures").select("id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score").eq("matchday_id", selectedMatchday.id).order("kickoff_at"),
-    admin.from("profiles").select("id, display_name").eq("is_active", true).order("display_name"),
+    admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
     admin.from("entries").select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at").eq("matchday_id", selectedMatchday.id),
   ]);
   const fixtures = (fixtureRows ?? []) as BreakdownFixture[];
   const effectiveLocksAt = earliestFixtureKickoff(fixtures) ?? selectedMatchday.locks_at;
-  const profiles = (profileRows ?? []) as BreakdownProfile[];
+  const allProfiles = profileRows ?? [];
   const entries = (entryRows ?? []) as BreakdownEntry[];
+  const profiles = allProfiles
+    .filter((item) =>
+      (item.is_active && item.pick8_participation_active) ||
+      entries.some((entry) => entry.user_id === item.id),
+    ) as BreakdownProfile[];
   const entryIds = entries.map((entry) => entry.id);
   const { data: selectionRows } = entryIds.length
     ? await supabase.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", entryIds)

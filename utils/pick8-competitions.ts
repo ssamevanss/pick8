@@ -19,7 +19,7 @@ export type CompetitionRefreshSummary = {
 
 function relevantMatchday(rows: Array<{ matchday_number: number; status: string; locks_at: string | null }>, now: number) {
   const first = (status: string) => rows.find((row) => row.status === status);
-  return first("open") ?? first("scoring") ?? rows.find((row) => row.status === "upcoming" && row.locks_at !== null && Date.parse(row.locks_at) > now) ?? [...rows].reverse().find((row) => row.status === "completed") ?? null;
+  return first("open") ?? first("scoring") ?? first("locked") ?? rows.find((row) => row.status === "upcoming" && row.locks_at !== null && Date.parse(row.locks_at) > now) ?? [...rows].reverse().find((row) => row.status === "completed") ?? null;
 }
 
 /** Creates missing fixed ranges and reconciles statuses for one Pick8 season. */

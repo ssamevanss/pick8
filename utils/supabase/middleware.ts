@@ -46,8 +46,10 @@ export async function updateSession(request: NextRequest) {
     "/leagues",
     "/pick-fixtures",
     "/predictions",
+    "/my-picks",
     "/rules",
     "/settings",
+    "/tables",
   ];
   const isProtectedRoute = protectedPrefixes.some(
     (prefix) =>

@@ -34,14 +34,31 @@ export async function requestPasswordReset(formData: FormData) {
     });
   }
 
-  const redirectUrl = new URL("/auth/callback", siteUrl);
+  let redirectUrl: URL;
+  try {
+    redirectUrl = new URL("/auth/callback", siteUrl);
+  } catch {
+    redirectWithEmail("/forgot-password", email, {
+      error: "Password reset is not configured yet. Ask the Pick8 administrator to check setup.",
+    });
+  }
   redirectUrl.searchParams.set("next", "/reset-password");
 
   const supabase = await createClient();
 
-  await supabase.auth.resetPasswordForEmail(email, {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: redirectUrl.toString(),
   });
+
+  if (error) {
+    console.error("Pick8 password reset request failed", {
+      code: error.code,
+      message: error.message,
+    });
+    redirectWithEmail("/forgot-password", email, {
+      error: "We could not send the reset email. Please wait a moment and try again.",
+    });
+  }
 
   redirectWithEmail("/forgot-password", email, {
     sent: "1",

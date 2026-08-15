@@ -70,16 +70,14 @@ export default function AppShell({ children, isAdmin }: AppShellProps) {
 
           <nav className="hidden items-center gap-1 sm:flex" aria-label="Account">
             <NavLink href="/rules" label="Rules" />
-            <NavLink href="/settings" label="Settings" />
-            <NavLink href="/logout" label="Sign out" />
+            <NavLink href="/logout" label="Log out" />
           </nav>
 
           <details className="group relative sm:hidden">
             <summary className="brand-button-secondary cursor-pointer list-none [&::-webkit-details-marker]:hidden">Menu</summary>
             <nav className="absolute right-0 top-[calc(100%+0.5rem)] z-50 grid min-w-40 gap-1 rounded-xl border border-white/15 bg-[#07101f] p-2 shadow-2xl shadow-black/50" aria-label="Account menu">
               <NavLink href="/rules" label="Rules" />
-              <NavLink href="/settings" label="Settings" />
-              <NavLink href="/logout" label="Sign out" />
+              <NavLink href="/logout" label="Log out" />
             </nav>
           </details>
         </header>

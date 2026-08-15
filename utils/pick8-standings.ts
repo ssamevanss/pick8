@@ -1,6 +1,7 @@
 export type StandingsProfile = {
   id: string;
   display_name: string;
+  is_active?: boolean;
   pick8_participation_active?: boolean;
 };
 export type StandingsMatchday = { id: string; matchday_number: number; status: string; locks_at: string | null };
@@ -18,7 +19,7 @@ export function resolveCurrentMatchday(matchdays: StandingsMatchday[], now: numb
 
 export function resolveDashboardMatchday(matchdays: StandingsMatchday[], now: number) {
   const ordered = [...matchdays].sort((a, b) => a.matchday_number - b.matchday_number);
-  return ordered.find((matchday) => matchday.status === "open") ?? ordered.find((matchday) => matchday.status === "upcoming" && matchday.locks_at !== null && Date.parse(matchday.locks_at) > now) ?? ordered.find((matchday) => matchday.status === "scoring") ?? [...ordered].reverse().find((matchday) => matchday.status === "completed") ?? null;
+  return ordered.find((matchday) => matchday.status === "open") ?? ordered.find((matchday) => matchday.status === "upcoming" && matchday.locks_at !== null && Date.parse(matchday.locks_at) > now) ?? ordered.find((matchday) => ["locked", "scoring"].includes(matchday.status)) ?? [...ordered].reverse().find((matchday) => matchday.status === "completed") ?? null;
 }
 
 export function playerMatchdayLifecycle(
@@ -55,15 +56,33 @@ export function buildStandings(profiles: StandingsProfile[], entries: StandingsE
 export function currentCompetitionStandings(
   rows: ReturnType<typeof buildStandings>,
 ) {
-  const visible = rows
-    .filter(
-      (row) => row.profile.pick8_participation_active !== false || row.played > 0,
-    )
-    .map((row) => ({ ...row }));
-  visible.forEach((row, index) => {
-    row.rank = index > 0 && visible[index - 1].points === row.points
-      ? visible[index - 1].rank
+  return rerankStandings(rows.filter(
+    (row) =>
+      (
+        row.profile.is_active !== false &&
+        row.profile.pick8_participation_active !== false
+      ) || row.played > 0,
+  ));
+}
+
+function rerankStandings(rows: ReturnType<typeof buildStandings>) {
+  const reranked = rows.map((row) => ({ ...row }));
+  reranked.forEach((row, index) => {
+    row.rank = index > 0 && reranked[index - 1].points === row.points
+      ? reranked[index - 1].rank
       : index + 1;
   });
-  return visible;
+  return reranked;
+}
+
+export function overallSeasonStandings(
+  rows: ReturnType<typeof buildStandings>,
+) {
+  return rerankStandings(rows.filter(
+    (row) =>
+      (
+        row.profile.is_active !== false &&
+        row.profile.pick8_participation_active !== false
+      ) || row.played > 0,
+  ));
 }

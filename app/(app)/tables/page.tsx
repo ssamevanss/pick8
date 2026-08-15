@@ -7,6 +7,7 @@ import { buildMatchdayBreakdown } from "@/utils/pick8-matchday-breakdown";
 import {
   buildStandings,
   currentCompetitionStandings,
+  overallSeasonStandings,
   playerDisplayName,
   resolveCurrentCompetition,
   resolveCurrentMatchday,
@@ -90,7 +91,7 @@ export default async function TablesPage({
   }
 
   const [{ data: profileRows }, { data: matchdayRows }, { data: competitionRows }] = await Promise.all([
-    admin.from("profiles").select("id, display_name, pick8_participation_active").eq("is_active", true).order("display_name"),
+    admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
     admin.from("matchdays").select("id, matchday_number, status, locks_at").eq("season_id", season.id).order("matchday_number"),
     admin.from("competitions").select("id, name, start_matchday, end_matchday, status").eq("season_id", season.id).order("start_matchday"),
   ]);
@@ -111,7 +112,7 @@ export default async function TablesPage({
         end: currentCompetition.end_matchday,
       }))
     : [];
-  const overallRows = buildStandings(profiles, entries, matchdayById);
+  const overallRows = overallSeasonStandings(buildStandings(profiles, entries, matchdayById));
   const selectedMatchday =
     (/^\d+$/.test(params.matchday ?? "")
       ? matchdays.find(
@@ -140,9 +141,19 @@ export default async function TablesPage({
         : Promise.resolve({ data: [], error: null }),
     ]);
     const fixtureRows = fixtures ?? [];
+    const breakdownProfiles = profiles.filter((item) =>
+      (
+        item.is_active !== false &&
+        item.pick8_participation_active !== false
+      ) || entries.some(
+        (entry) =>
+          entry.matchday_id === selectedMatchday.id &&
+          entry.user_id === item.id,
+      ),
+    );
     const sharedBreakdown = buildMatchdayBreakdown({
       matchday: selectedMatchday,
-      profiles,
+      profiles: breakdownProfiles,
       entries,
       selections: selections ?? [],
       fixtures: fixtureRows,

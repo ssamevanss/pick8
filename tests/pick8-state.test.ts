@@ -46,10 +46,16 @@ import {
   sumPick8Points,
 } from "../utils/pick8-scoring-rules.ts";
 import { findSubmittedPick8Player } from "../utils/pick8-breakdown-types.ts";
+import {
+  buildCurrentSubmissionRows,
+  pick8SubmissionStatus,
+  sortPick8AdminProfiles,
+} from "../utils/pick8-admin-status.ts";
 import { resolveCategoryMenuPlacement } from "../utils/category-select-position.ts";
 import {
   buildStandings,
   currentCompetitionStandings,
+  overallSeasonStandings,
   playerMatchdayLifecycle,
   resolveDashboardMatchday,
 } from "../utils/pick8-standings.ts";
@@ -154,6 +160,45 @@ test("entry state is derived only from row existence and submitted_at", () => {
   assert.equal(getPick8EntryState(null), "not_started");
   assert.equal(getPick8EntryState({ submitted_at: null }), "draft");
   assert.equal(getPick8EntryState({ submitted_at: "2026-10-01T00:00:00Z" }), "submitted");
+});
+
+test("admin submission status uses persisted entry state and operational ordering", () => {
+  assert.equal(pick8SubmissionStatus(null), "not_submitted");
+  assert.equal(pick8SubmissionStatus({ user_id: "draft", submitted_at: null }), "draft");
+  assert.equal(pick8SubmissionStatus({ user_id: "submitted", submitted_at: "2026-08-15T00:00:00Z" }), "submitted");
+
+  const profiles = [
+    { id: "submitted", display_name: "Zoe", is_active: true, pick8_participation_active: true },
+    { id: "draft", display_name: "Aaron", is_active: true, pick8_participation_active: true },
+    { id: "missing-b", display_name: "Beth", is_active: true, pick8_participation_active: true },
+    { id: "missing-a", display_name: "Adam", is_active: true, pick8_participation_active: true },
+    { id: "paused", display_name: "Paused", is_active: true, pick8_participation_active: false },
+  ];
+  const rows = buildCurrentSubmissionRows(profiles, [
+    { user_id: "submitted", submitted_at: "2026-08-15T00:00:00Z" },
+    { user_id: "draft", submitted_at: null },
+  ]);
+  assert.deepEqual(rows.map((row) => [row.profile.id, row.status]), [
+    ["missing-a", "not_submitted"],
+    ["missing-b", "not_submitted"],
+    ["draft", "draft"],
+    ["submitted", "submitted"],
+  ]);
+});
+
+test("admin users sort participating, paused, then inactive and alphabetically", () => {
+  const profiles = [
+    { id: "inactive", display_name: "Adam", is_active: false, pick8_participation_active: true },
+    { id: "paused", display_name: "Beth", is_active: true, pick8_participation_active: false },
+    { id: "active-z", display_name: "Zoe", is_active: true, pick8_participation_active: true },
+    { id: "active-a", display_name: "Aaron", is_active: true, pick8_participation_active: true },
+  ];
+  assert.deepEqual(sortPick8AdminProfiles(profiles).map((profile) => profile.id), [
+    "active-a",
+    "active-z",
+    "paused",
+    "inactive",
+  ]);
 });
 
 test("an incomplete seven-pick draft survives form serialization and reload", () => {
@@ -378,6 +423,14 @@ test("completed Matchday 2 yields current-matchday priority to upcoming Matchday
   assert.equal(resolveDashboardMatchday(matchdays, Date.parse("2026-08-11T00:00:00Z"))?.id, "md3");
 });
 
+test("a locked matchday remains current instead of falling back to history", () => {
+  const matchdays = [
+    { id: "md3", matchday_number: 3, status: "completed", locks_at: "2026-08-10T09:00:00Z" },
+    { id: "md4", matchday_number: 4, status: "locked", locks_at: "2026-08-15T09:00:00Z" },
+  ];
+  assert.equal(resolveDashboardMatchday(matchdays, Date.parse("2026-08-15T09:01:00Z"))?.id, "md4");
+});
+
 test("dashboard lifecycle uses player-facing open, in-progress and completed wording", () => {
   const now = Date.parse("2026-08-10T09:00:00Z");
   assert.equal(playerMatchdayLifecycle({ status: "open", locks_at: "2026-08-10T10:00:00Z" }, now), "Open");
@@ -430,4 +483,18 @@ test("paused participation preserves history, records missed matchdays, and resu
   const resumedEntry = { id: "entry-3", user_id: enabled.id, matchday_id: "md3", submitted_at: "2026-08-15T09:00:00Z", calculated_score: 9 };
   const resumedOverall = buildStandings([enabled], [historicalEntry, resumedEntry], matchdayById);
   assert.deepEqual({ points: resumedOverall[0]?.points, played: resumedOverall[0]?.played }, { points: 27, played: 2 });
+});
+
+test("account deactivation hides no earned historical leaderboard score", () => {
+  const inactive = { id: "inactive", display_name: "Inactive", is_active: false, pick8_participation_active: false };
+  const active = { id: "active", display_name: "Active", is_active: true, pick8_participation_active: true };
+  const matchday = { id: "md1", matchday_number: 1, status: "completed", locks_at: "2026-08-01T10:00:00Z" };
+  const rows = buildStandings(
+    [inactive, active],
+    [{ id: "historic", user_id: inactive.id, matchday_id: matchday.id, submitted_at: "2026-08-01T09:00:00Z", calculated_score: 14 }],
+    new Map([[matchday.id, matchday]]),
+  );
+  const visible = overallSeasonStandings(rows);
+  assert.equal(visible.find((row) => row.profile.id === inactive.id)?.points, 14);
+  assert.equal(visible.some((row) => row.profile.id === active.id), true);
 });
