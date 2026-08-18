@@ -65,7 +65,7 @@ export default function AppShell({ children, isAdmin }: AppShellProps) {
   return (
     <div className="app-surface flex h-dvh min-h-dvh flex-col overflow-y-auto overscroll-y-contain pb-[var(--mobile-nav-clearance)] scroll-pb-[var(--mobile-nav-clearance)] text-white sm:h-auto sm:overflow-visible sm:pb-0 sm:scroll-pb-0">
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 pt-4 sm:pb-12 sm:pt-6">
-        <header className="mb-6 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#0b1627]/80 px-3 py-3 shadow-xl shadow-black/20 backdrop-blur sm:px-4">
+        <header className="relative z-[60] isolate mb-6 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#0b1627]/80 px-3 py-3 shadow-xl shadow-black/20 backdrop-blur sm:px-4">
           <BrandMark />
 
           <nav className="hidden items-center gap-1 sm:flex" aria-label="Account">

@@ -222,7 +222,7 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
             finalMatchdayScore={finalMatchdayScore}
             totalGoalsPoints={totalGoalsPoints}
             now={now}
-            action={hasEditableFixture ? <button type="button" className="brand-button-secondary" onClick={enterEditMode}>Edit submission</button> : <span className="brand-pill">All fixtures locked</span>}
+            action={hasEditableFixture ? <button type="button" className="brand-button-primary w-full sm:w-auto" onClick={enterEditMode}>Edit submission</button> : <span className="brand-pill">All fixtures locked</span>}
           />
           {fixtureSlate}
         </div>

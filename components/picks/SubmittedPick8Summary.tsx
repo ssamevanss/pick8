@@ -111,9 +111,9 @@ export default function SubmittedPick8Summary({
 
   return (
     <section className="brand-card p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div><p className="brand-eyebrow">Your Pick8</p><h2 className="mt-1 text-xl font-black text-white">Seven picks + Total Goals</h2></div>
-        {action}
+        {action ? <div className="w-full sm:w-auto">{action}</div> : null}
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {scoredSelections.map(({ fixture, selection, lifecycle, displayedPoints }) => {
