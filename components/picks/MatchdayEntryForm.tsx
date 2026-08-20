@@ -16,6 +16,7 @@ import {
   buildPick8EditorSnapshot,
   copyPick8EditorSnapshot,
 } from "@/utils/pick8-entry-validation";
+import { PICK8_MATCHDAY_LOCKED_MESSAGE } from "@/utils/pick8-entry-lock";
 import type { Pick8Category } from "@/utils/pick8-entry-validation";
 
 export type PickFixture = { id: string; homeTeamName: string; awayTeamName: string; homeTeamCrestUrl: string | null; awayTeamCrestUrl: string | null; kickoffAt: string; status: string; homeScore: number | null; awayScore: number | null };
@@ -104,6 +105,14 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
         setSubmitted(result.intent !== "draft");
         setSubmittedAt(result.submittedAt ?? null);
         if (result.intent !== "draft") setEditing(false);
+      } else if (result.message === PICK8_MATCHDAY_LOCKED_MESSAGE && submitted) {
+        const restored = copyPick8EditorSnapshot({
+          choices: savedChoices,
+          totalGoals: savedTotalGoals,
+        });
+        setChoices(restored.choices as Record<string, FixtureChoice>);
+        setTotalGoals(restored.totalGoals);
+        setEditing(false);
       }
       return result;
     },
@@ -124,10 +133,7 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
   }
   const eligibleFixtures = useMemo(() => fixtures, [fixtures]);
   const entryWindowOpen = now > 0 && now < new Date(locksAt).getTime();
-  const hasEditableFixture = now > 0 && fixtures.some((fixture) =>
-    isFixtureSelectionEditable({ kickoff_at: fixture.kickoffAt, status: fixture.status }, now),
-  );
-  const editable = initiallyEditable && (!submitted ? entryWindowOpen : editing && hasEditableFixture);
+  const editable = initiallyEditable && entryWindowOpen && (!submitted || editing);
 
   useEffect(() => {
     const initialTimer = window.setTimeout(() => setNow(Date.now()), 0);
@@ -222,7 +228,7 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
             finalMatchdayScore={finalMatchdayScore}
             totalGoalsPoints={totalGoalsPoints}
             now={now}
-            action={hasEditableFixture ? <button type="button" className="brand-button-primary w-full sm:w-auto" onClick={enterEditMode}>Edit submission</button> : <span className="brand-pill">All fixtures locked</span>}
+            action={entryWindowOpen && initiallyEditable ? <button type="button" className="brand-button-primary w-full sm:w-auto" onClick={enterEditMode}>Edit submission</button> : <span className="brand-pill">Matchday locked</span>}
           />
           {fixtureSlate}
         </div>

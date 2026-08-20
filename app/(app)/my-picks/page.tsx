@@ -15,7 +15,6 @@ import {
 import {
   earliestFixtureKickoff,
   isInitialPick8EntryWindowOpen,
-  isFixtureSelectionEditable,
 } from "@/utils/pick8-fixture-state";
 import { playerMatchdayLifecycle } from "@/utils/pick8-standings";
 
@@ -99,10 +98,7 @@ export default async function MyPicksPage({
   const ownSelections = ownEntry
     ? selections.filter((selection) => selection.entry_id === ownEntry.id)
     : [];
-  const hasFutureFixture = fixtures.some((fixture) =>
-    isFixtureSelectionEditable(fixture, now),
-  );
-  const canEditSubmittedEntry = participationActive && Boolean(ownEntry?.submitted_at) && hasFutureFixture;
+  const canEditSubmittedEntry = initialSubmissionWindowOpen && Boolean(ownEntry?.submitted_at);
   const showEntryEditor =
     effectiveLocksAt !== null &&
     (initialSubmissionWindowOpen || canEditSubmittedEntry);

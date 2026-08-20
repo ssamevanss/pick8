@@ -383,6 +383,15 @@ export type Database = {
         Args: { check_entry_id: string; check_selections: Json }
         Returns: undefined
       }
+      save_pick8_entry: {
+        Args: {
+          check_intent: string
+          check_matchday_id: string
+          check_selections: Json
+          check_total_goals: number | null
+        }
+        Returns: Json
+      }
       finish_pick8_manual_test_matchday3: {
         Args: Record<PropertyKey, never>
         Returns: Json
