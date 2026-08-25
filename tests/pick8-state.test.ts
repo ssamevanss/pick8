@@ -30,6 +30,12 @@ import {
   shouldSyncProviderFixtures,
 } from "../utils/pick8-fixture-sync-mode.ts";
 import {
+  getDailyFixtureSyncMatchdayNumbers,
+  getProviderPayloadMatchday,
+  representSameKickoff,
+} from "../utils/pick8-matchday-generation.ts";
+import { resolveDefaultPicksMatchday } from "../utils/pick8-matchday-selection.ts";
+import {
   acceleratedTestFinalScorePlan,
   canUseAcceleratedTestCompletion,
   MATCHDAY_2_FINAL_SCORE_PLAN,
@@ -346,6 +352,74 @@ test("provider matchdays retain authoritative fixture and result sync", () => {
   assert.equal(shouldSyncProviderFixtures("provider"), true);
   assert.equal(getFixtureAutomationPlan("provider", "fixtures"), "provider_sync");
   assert.equal(getFixtureAutomationPlan("provider", "results"), "provider_sync");
+});
+
+test("daily fixture automation creates three upcoming provider rounds before the current round completes", () => {
+  assert.deepEqual(
+    getDailyFixtureSyncMatchdayNumbers([
+      { matchday_number: 1, status: "scoring", fixture_sync_mode: "provider" },
+    ]),
+    [1, 2, 3, 4],
+  );
+});
+
+test("the Picks page defaults to Matchday 2 as soon as it is populated", () => {
+  const now = Date.parse("2026-08-25T07:00:00Z");
+  assert.equal(
+    resolveDefaultPicksMatchday([
+      { matchday_number: 1, status: "completed", locks_at: "2026-08-21T19:00:00Z" },
+      { matchday_number: 2, status: "upcoming", locks_at: "2026-08-28T19:00:00Z" },
+    ], now)?.matchday_number,
+    2,
+  );
+});
+
+test("daily fixture automation tops up its lookahead after completion and is idempotent", () => {
+  const matchdays = [
+    { matchday_number: 1, status: "completed", fixture_sync_mode: "provider" as const },
+    { matchday_number: 2, status: "upcoming", fixture_sync_mode: "provider" as const },
+    { matchday_number: 3, status: "upcoming", fixture_sync_mode: "provider" as const },
+    { matchday_number: 4, status: "upcoming", fixture_sync_mode: "provider" as const },
+  ];
+  assert.deepEqual(getDailyFixtureSyncMatchdayNumbers(matchdays), [2, 3, 4]);
+  assert.deepEqual(getDailyFixtureSyncMatchdayNumbers(matchdays), [2, 3, 4]);
+
+  matchdays[1] = { ...matchdays[1], status: "completed" };
+  assert.deepEqual(getDailyFixtureSyncMatchdayNumbers(matchdays), [3, 4, 5]);
+});
+
+test("fixture generation fills round gaps without provider-syncing manual matchdays", () => {
+  assert.deepEqual(
+    getDailyFixtureSyncMatchdayNumbers([
+      { matchday_number: 1, status: "completed", fixture_sync_mode: "provider" },
+      { matchday_number: 3, status: "upcoming", fixture_sync_mode: "manual" },
+    ]),
+    [2, 4],
+  );
+});
+
+test("provider payloads must identify the requested round at the response boundary", () => {
+  assert.equal(getProviderPayloadMatchday({ matchday: 2, fixtures: [] }), 2);
+  assert.equal(getProviderPayloadMatchday({ matchdayNumber: "3" }), 3);
+  assert.equal(getProviderPayloadMatchday({ fixtures: [] }), null);
+  assert.equal(getProviderPayloadMatchday([{ matchday: 2 }]), null);
+});
+
+test("fixture sync treats equivalent database and provider timestamp formats as unchanged", () => {
+  assert.equal(
+    representSameKickoff(
+      "2026-08-28T19:00:00+00:00",
+      "2026-08-28T19:00:00.000Z",
+    ),
+    true,
+  );
+  assert.equal(
+    representSameKickoff(
+      "2026-08-28T19:00:00+00:00",
+      "2026-08-28T19:01:00.000Z",
+    ),
+    false,
+  );
 });
 
 test("manual Matchday 2 fake finals cover ten unique fixtures and total 25 goals", () => {

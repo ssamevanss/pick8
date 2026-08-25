@@ -11,9 +11,9 @@ import {
 import { refreshPick8Competitions } from "@/utils/pick8-competitions";
 import {
   getFixtureAutomationPlan,
-  providerManagedMatchdays,
   type FixtureSyncMode,
 } from "@/utils/pick8-fixture-sync-mode";
+import { getDailyFixtureSyncMatchdayNumbers } from "@/utils/pick8-matchday-generation";
 
 type Season = Pick<Tables<"seasons">, "id" | "name" | "provider_season">;
 type Matchday = Pick<
@@ -258,11 +258,19 @@ export async function runDailyFixtureSync() {
   const season = await loadActiveSeason();
   if (!season) return noActiveSeason(route, startedAt);
   const matchdays = await loadMatchdays(season.id);
-  const useful = matchdays.filter((matchday) =>
-    ["open", "scoring"].includes(matchday.status),
+  const matchdayByNumber = new Map(
+    matchdays.map((matchday) => [matchday.matchday_number, matchday]),
   );
-  const nextUpcoming = matchdays.filter((matchday) => matchday.status === "upcoming").slice(0, 3);
-  const selected = providerManagedMatchdays(uniqueMatchdays([...useful, ...nextUpcoming]));
+  const selected = getDailyFixtureSyncMatchdayNumbers(matchdays).map(
+    (matchdayNumber): Matchday =>
+      matchdayByNumber.get(matchdayNumber) ?? {
+        id: `pending:${season.id}:${matchdayNumber}`,
+        matchday_number: matchdayNumber,
+        status: "upcoming",
+        locks_at: null,
+        fixture_sync_mode: "provider",
+      },
+  );
   const result = await runSelectedMatchdays({ route, season, matchdays: selected, recalculate: "never" });
   const competitionRefresh = await refreshPick8Competitions(season.id);
   const response = {

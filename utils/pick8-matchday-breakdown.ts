@@ -17,6 +17,8 @@ import type {
   BreakdownSelection,
 } from "@/utils/pick8-breakdown-types";
 
+export { resolveDefaultPicksMatchday } from "@/utils/pick8-matchday-selection";
+
 export type {
   BreakdownEntry,
   BreakdownFixture,
@@ -34,28 +36,6 @@ export function isMatchdayVisibleToAll(
   return (
     ["locked", "scoring", "completed"].includes(matchday.status) ||
     fixtures.some((fixture) => hasFixtureKickedOff(fixture.kickoff_at, now))
-  );
-}
-
-export function resolveDefaultPicksMatchday(
-  matchdays: BreakdownMatchday[],
-  now: number,
-) {
-  const ordered = [...matchdays].sort(
-    (a, b) => a.matchday_number - b.matchday_number,
-  );
-  return (
-    ordered.find((matchday) => matchday.status === "open") ??
-    ordered.find(
-      (matchday) =>
-        matchday.status === "upcoming" &&
-        matchday.locks_at !== null &&
-        new Date(matchday.locks_at).getTime() > now,
-    ) ??
-    [...ordered]
-      .reverse()
-      .find((matchday) => ["completed", "scoring"].includes(matchday.status)) ??
-    null
   );
 }
 

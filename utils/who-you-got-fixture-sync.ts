@@ -5,6 +5,10 @@ import type { Tables, TablesInsert } from "@/types/database.types";
 import { logicalPick8FixtureKey } from "@/utils/pick8-fixture-identity";
 import { earliestFixtureKickoff } from "@/utils/pick8-fixture-state";
 import { shouldSyncProviderFixtures } from "@/utils/pick8-fixture-sync-mode";
+import {
+  getProviderPayloadMatchday,
+  representSameKickoff,
+} from "@/utils/pick8-matchday-generation";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const FIXTURE_STATUSES = new Set([
@@ -209,6 +213,15 @@ function parseFixture(value: unknown, index: number): SourceFixture {
 
 function parseFixtures(payload: unknown, expectedMatchday: number) {
   const root = record(payload);
+  const providerMatchday = getProviderPayloadMatchday(payload);
+  if (providerMatchday !== expectedMatchday) {
+    throw new FixtureSyncError(
+      "invalid_response",
+      providerMatchday === null
+        ? "Who You Got did not identify the provider matchday in its response."
+        : `Who You Got returned matchday ${providerMatchday} for requested matchday ${expectedMatchday}.`,
+    );
+  }
   const values = Array.isArray(payload) ? payload : root?.fixtures;
   if (!Array.isArray(values) || values.length === 0) {
     throw new FixtureSyncError(
@@ -537,7 +550,7 @@ export async function syncWhoYouGotFixtures(input: {
       existing.away_team_name !== fixture.awayTeamName ||
       existing.home_team_crest_url !== fixture.homeTeamCrestUrl ||
       existing.away_team_crest_url !== fixture.awayTeamCrestUrl ||
-      existing.kickoff_at !== fixture.kickoffAt ||
+      !representSameKickoff(existing.kickoff_at, fixture.kickoffAt) ||
       existing.status !== fixture.status ||
       existing.home_score !== fixture.homeScore ||
       existing.away_score !== fixture.awayScore
