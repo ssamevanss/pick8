@@ -1,8 +1,6 @@
 import BrandMark from "@/components/brand/BrandMark";
 import LoginForm from "@/components/auth/LoginForm";
 import { login } from "./actions";
-import { createClient } from "@/utils/supabase/server";
-import { redirect } from "next/navigation";
 import Link from "next/link";
 
 function safeNext(value: string | undefined) {
@@ -16,14 +14,6 @@ export default async function LoginPage({
 }) {
   const params = searchParams ? await searchParams : {};
   const next = safeNext(params.next);
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (user) {
-    redirect(next || "/dashboard");
-  }
 
   return (
     <main className="app-surface flex min-h-screen items-center justify-center px-4 py-8 text-white">

@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
+import { isServerAuthUnavailable } from "@/utils/supabase/resilience";
 
 export async function updatePassword(formData: FormData) {
   const password = String(formData.get("password") ?? "");
@@ -26,7 +27,9 @@ export async function updatePassword(formData: FormData) {
 
   if (error) {
     redirect(
-      "/reset-password?error=We could not update your password. Open the latest reset link and try again.",
+      isServerAuthUnavailable(error)
+        ? "/reset-password?error=The password service is temporarily unavailable. Your password was not changed; please try again."
+        : "/reset-password?error=We could not update your password. Open the latest reset link and try again.",
     );
   }
 

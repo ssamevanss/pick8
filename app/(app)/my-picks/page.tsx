@@ -1,5 +1,7 @@
 import { getRequestAuthContext } from "@/utils/app-context";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createInteractiveAdminClient } from "@/utils/supabase/admin";
+import { createClient } from "@/utils/supabase/server";
+import { requireSuccessfulDatabaseOperation } from "@/utils/supabase/resilience";
 import MatchdayEntryForm, { type PickFixture } from "@/components/picks/MatchdayEntryForm";
 import ReadOnlyMatchdayPicks from "@/components/picks/ReadOnlyMatchdayPicks";
 import MatchdaySelectNavigation from "@/components/picks/MatchdaySelectNavigation";
@@ -36,26 +38,34 @@ export default async function MyPicksPage({
   searchParams?: Promise<{ matchday?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
-  const { supabase, user, profile } = await getRequestAuthContext();
+  const { user, profile, requestDeadlineSignal, requestId } = await getRequestAuthContext();
   if (!user || !profile?.is_active) return null;
+  const supabase = await createClient({
+    overallSignal: requestDeadlineSignal,
+    context: { page: "my-picks", operation: "load-player-picks", requestId },
+  });
 
   const { data: season, error: seasonError } = await supabase
     .from("seasons")
     .select("id, name")
     .eq("is_active", true)
     .maybeSingle();
-  if (seasonError || !season) {
+  requireSuccessfulDatabaseOperation(seasonError);
+  if (!season) {
     return <section className="brand-card p-5 sm:p-7"><p className="brand-eyebrow">Competition</p><h1 className="brand-title mt-2">My Picks</h1><p className="brand-subtitle mt-3">There is no active Pick8 season available.</p></section>;
   }
 
-  const admin = createAdminClient();
+  const admin = createInteractiveAdminClient({
+    overallSignal: requestDeadlineSignal,
+    context: { page: "my-picks", operation: "load-matchday-picks", requestId },
+  });
   const { data: matchdayRows, error: matchdayError } = await admin
     .from("matchdays")
     .select("id, matchday_number, status, locks_at")
     .eq("season_id", season.id)
     .order("matchday_number");
   if (matchdayError) {
-    return <section className="brand-card p-5 sm:p-7"><p className="brand-eyebrow">{season.name}</p><h1 className="brand-title mt-2">My Picks</h1><p className="brand-alert-danger mt-4">Matchdays could not be loaded.</p></section>;
+    requireSuccessfulDatabaseOperation(matchdayError);
   }
   const matchdays = (matchdayRows ?? []) as BreakdownMatchday[];
   const now = new Date().getTime();
@@ -73,24 +83,28 @@ export default async function MyPicksPage({
     return <section className="brand-card p-5 sm:p-7"><p className="brand-eyebrow">{season.name}</p><h1 className="brand-title mt-2">My Picks</h1><p className="brand-subtitle mt-3">No matchdays are available for this season.</p></section>;
   }
 
-  const [{ data: fixtureRows }, { data: profileRows }, { data: entryRows }] = await Promise.all([
+  const [fixturesResult, profilesResult, entriesResult] = await Promise.all([
     admin.from("fixtures").select("id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score").eq("matchday_id", selectedMatchday.id).order("kickoff_at"),
     admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
     admin.from("entries").select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at").eq("matchday_id", selectedMatchday.id),
   ]);
-  const fixtures = (fixtureRows ?? []) as BreakdownFixture[];
+  requireSuccessfulDatabaseOperation(fixturesResult.error);
+  requireSuccessfulDatabaseOperation(profilesResult.error);
+  requireSuccessfulDatabaseOperation(entriesResult.error);
+  const fixtures = (fixturesResult.data ?? []) as BreakdownFixture[];
   const effectiveLocksAt = earliestFixtureKickoff(fixtures) ?? selectedMatchday.locks_at;
-  const allProfiles = profileRows ?? [];
-  const entries = (entryRows ?? []) as BreakdownEntry[];
+  const allProfiles = profilesResult.data ?? [];
+  const entries = (entriesResult.data ?? []) as BreakdownEntry[];
   const profiles = allProfiles
     .filter((item) =>
       (item.is_active && item.pick8_participation_active) ||
       entries.some((entry) => entry.user_id === item.id),
     ) as BreakdownProfile[];
   const entryIds = entries.map((entry) => entry.id);
-  const { data: selectionRows } = entryIds.length
+  const { data: selectionRows, error: selectionsError } = entryIds.length
     ? await supabase.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", entryIds)
-    : { data: [] };
+    : { data: [], error: null };
+  requireSuccessfulDatabaseOperation(selectionsError);
   const selections = (selectionRows ?? []) as BreakdownSelection[];
   const participationActive = profile.pick8_participation_active;
   const initialSubmissionWindowOpen = participationActive && isInitialPick8EntryWindowOpen(selectedMatchday.status, effectiveLocksAt, now);
@@ -153,6 +167,7 @@ export default async function MyPicksPage({
       {effectiveLocksAt && ownEntry?.submitted_at ? (
         <MatchdayEntryForm
           matchdayId={selectedMatchday.id}
+          reloadHref={`/my-picks?matchday=${selectedMatchday.matchday_number}`}
           locksAt={effectiveLocksAt}
           fixtures={fixtures.map((fixture): PickFixture => ({ id: fixture.id, homeTeamName: fixture.home_team_name, awayTeamName: fixture.away_team_name, homeTeamCrestUrl: fixture.home_team_crest_url, awayTeamCrestUrl: fixture.away_team_crest_url, kickoffAt: fixture.kickoff_at, status: fixture.status, homeScore: fixture.home_score, awayScore: fixture.away_score }))}
           initialSelections={ownSelections.map((selection) => ({ category: selection.category, fixtureId: selection.fixture_id, selectedTeamSide: selection.selected_team_side, pointsAwarded: selection.points_awarded }))}
@@ -170,6 +185,7 @@ export default async function MyPicksPage({
       ) : showEntryEditor && effectiveLocksAt ? (
         <MatchdayEntryForm
           matchdayId={selectedMatchday.id}
+          reloadHref={`/my-picks?matchday=${selectedMatchday.matchday_number}`}
           locksAt={effectiveLocksAt}
           fixtures={fixtures.map((fixture): PickFixture => ({ id: fixture.id, homeTeamName: fixture.home_team_name, awayTeamName: fixture.away_team_name, homeTeamCrestUrl: fixture.home_team_crest_url, awayTeamCrestUrl: fixture.away_team_crest_url, kickoffAt: fixture.kickoff_at, status: fixture.status, homeScore: fixture.home_score, awayScore: fixture.away_score }))}
           initialSelections={ownSelections.map((selection) => ({ category: selection.category, fixtureId: selection.fixture_id, selectedTeamSide: selection.selected_team_side, pointsAwarded: selection.points_awarded }))}

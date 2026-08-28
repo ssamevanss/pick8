@@ -61,8 +61,9 @@ function submittedTime(value: string | null) {
   }).format(submittedAt);
 }
 
-export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initialSelections, initialTotalGoals, initiallyEditable, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry, actualGoals, finalReady, finalMatchdayScore, totalGoalsPoints, fixtureSlate }: {
+export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fixtures, initialSelections, initialTotalGoals, initiallyEditable, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry, actualGoals, finalReady, finalMatchdayScore, totalGoalsPoints, fixtureSlate }: {
   matchdayId: string;
+  reloadHref: string;
   locksAt: string;
   fixtures: PickFixture[];
   initialSelections: InitialSelection[];
@@ -133,7 +134,8 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
   }
   const eligibleFixtures = useMemo(() => fixtures, [fixtures]);
   const entryWindowOpen = now > 0 && now < new Date(locksAt).getTime();
-  const editable = initiallyEditable && entryWindowOpen && (!submitted || editing);
+  const outcomeUnknown = state.outcome === "unknown";
+  const editable = initiallyEditable && entryWindowOpen && (!submitted || editing) && !outcomeUnknown;
 
   useEffect(() => {
     const initialTimer = window.setTimeout(() => setNow(Date.now()), 0);
@@ -215,7 +217,8 @@ export default function MatchdayEntryForm({ matchdayId, locksAt, fixtures, initi
         <div className="text-right"><p className={`text-lg font-black ${submitted || complete ? "text-emerald-200" : hasSavedEntry ? "text-amber-100" : "text-white"}`}>{topStatus}</p><p className="mt-1 text-sm text-slate-300">{topStatusDetail}</p></div>
       </div>
       {now > 0 && !submitted && !entryWindowOpen ? <p className="brand-alert-warning">The submission deadline has passed. This entry is read-only.</p> : null}
-      {state.message ? <p className={state.ok ? "brand-alert-success" : "brand-alert-danger"} role="status" aria-live="polite">{state.message}</p> : null}
+      {state.message ? <p className={state.ok ? "brand-alert-success" : outcomeUnknown ? "brand-alert-warning" : "brand-alert-danger"} role="status" aria-live="polite">{state.message}</p> : null}
+      {outcomeUnknown ? <a className="brand-button-primary block w-full text-center" href={reloadHref}>Reload saved entry</a> : null}
 
       {submitted && !editing ? (
         <div className="space-y-5 sm:space-y-6">

@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@/utils/supabase/legacy-server";
+import { requireApprovedAdminRoute } from "@/utils/supabase/route-auth";
 
 type GameweekRow = {
   id: string;
@@ -19,26 +20,8 @@ type NotificationRow = {
 
 async function requireAdmin() {
   const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { supabase, error: new Response("Unauthorized", { status: 401 }) };
-  }
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role, status")
-    .eq("id", user.id)
-    .single();
-
-  if (profile?.role !== "admin" || profile.status !== "approved") {
-    return { supabase, error: new Response("Forbidden", { status: 403 }) };
-  }
-
-  return { supabase, error: null };
+  const result = await requireApprovedAdminRoute(supabase);
+  return { supabase, error: result.ok ? null : result.response };
 }
 
 function getMetadataGameweekId(metadata: Record<string, unknown> | null) {

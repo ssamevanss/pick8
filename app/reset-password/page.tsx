@@ -4,6 +4,10 @@ import ResetPasswordForm from "@/components/auth/ResetPasswordForm";
 import ToastTrigger from "@/components/toast/ToastTrigger";
 import { createClient } from "@/utils/supabase/server";
 import { updatePassword } from "./actions";
+import {
+  classifyServerAuth,
+  Pick8ServiceUnavailableError,
+} from "@/utils/supabase/resilience";
 
 export default async function ResetPasswordPage({
   searchParams,
@@ -12,10 +16,12 @@ export default async function ResetPasswordPage({
 }) {
   const params = searchParams ? await searchParams : {};
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const canReset = Boolean(user);
+  const { data, error } = await supabase.auth.getUser();
+  const authState = classifyServerAuth({ user: data.user, error });
+  if (authState.kind === "unavailable") {
+    throw new Pick8ServiceUnavailableError("auth");
+  }
+  const canReset = authState.kind === "authenticated";
 
   return (
     <main className="app-surface flex min-h-screen items-center justify-center px-4 py-8 text-white">

@@ -5,31 +5,14 @@ import {
 } from "@/utils/team-standings";
 import { createAdminClient } from "@/utils/supabase/legacy-admin";
 import { createClient } from "@/utils/supabase/legacy-server";
+import { requireApprovedAdminRoute } from "@/utils/supabase/route-auth";
 
 export const dynamic = "force-dynamic";
 
 async function requireAdmin() {
   const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { error: Response.json({ error: "Unauthorized" }, { status: 401 }) };
-  }
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role, status")
-    .eq("id", user.id)
-    .single();
-
-  if (profile?.role !== "admin" || profile.status !== "approved") {
-    return { error: Response.json({ error: "Forbidden" }, { status: 403 }) };
-  }
-
-  return { error: null };
+  const result = await requireApprovedAdminRoute(supabase);
+  return { error: result.ok ? null : result.response };
 }
 
 async function handleRefreshStandings(request: Request) {

@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
+import { isServerAuthUnavailable } from "@/utils/supabase/resilience";
 
 function returnToSignup(message: string, displayName: string, email: string): never {
   const params = new URLSearchParams({ error: message });
@@ -41,7 +42,13 @@ export async function signup(formData: FormData) {
     password,
     options: { data: { display_name: displayName }, emailRedirectTo: callbackUrl },
   });
-  if (error) returnToSignup("We could not create an account with those details. Try signing in or resetting your password.", displayName, email);
+  if (error) returnToSignup(
+    isServerAuthUnavailable(error)
+      ? "Account creation is temporarily unavailable. Your details are unchanged; please try again."
+      : "We could not create an account with those details. Try signing in or resetting your password.",
+    displayName,
+    email,
+  );
   if (data.session) redirect("/dashboard");
   if (data.user) redirect("/signup?check_email=1");
   redirect("/login?created=1");

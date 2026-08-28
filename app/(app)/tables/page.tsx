@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { getRequestAuthContext } from "@/utils/app-context";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createInteractiveAdminClient } from "@/utils/supabase/admin";
+import { createClient } from "@/utils/supabase/server";
+import { requireSuccessfulDatabaseOperation } from "@/utils/supabase/resilience";
 import ReadOnlyMatchdayPicks from "@/components/picks/ReadOnlyMatchdayPicks";
 import MatchdaySelectNavigation from "@/components/picks/MatchdaySelectNavigation";
 import { buildMatchdayBreakdown } from "@/utils/pick8-matchday-breakdown";
@@ -73,35 +75,47 @@ export default async function TablesPage({
   const view: View = ["competition", "overall", "matchday"].includes(params.view ?? "")
     ? (params.view as View)
     : "competition";
-  const { supabase, user, profile } = await getRequestAuthContext();
+  const { user, profile, requestDeadlineSignal, requestId } = await getRequestAuthContext();
   if (!user || !profile?.is_active) return null;
   const requestNow = new Date().getTime();
+  const supabase = await createClient({
+    overallSignal: requestDeadlineSignal,
+    context: { page: "tables", operation: "load-private-breakdown", requestId },
+  });
 
   // Profile RLS exposes only the current profile to ordinary users. This
   // authenticated server page uses the admin client to build complete tables,
   // then applies stricter pick-visibility filtering below.
-  const admin = createAdminClient();
+  const admin = createInteractiveAdminClient({
+    overallSignal: requestDeadlineSignal,
+    context: { page: "tables", operation: "load-tables", requestId },
+  });
   const { data: season, error: seasonError } = await admin
     .from("seasons")
     .select("id, name")
     .eq("is_active", true)
     .maybeSingle();
-  if (seasonError || !season) {
+  requireSuccessfulDatabaseOperation(seasonError);
+  if (!season) {
     return <section className="brand-card p-5 sm:p-7"><p className="brand-eyebrow">Competition</p><h1 className="brand-title mt-2">Tables</h1><p className="brand-subtitle mt-3">There is no active season available.</p></section>;
   }
 
-  const [{ data: profileRows }, { data: matchdayRows }, { data: competitionRows }] = await Promise.all([
+  const [profilesResult, matchdaysResult, competitionsResult] = await Promise.all([
     admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
     admin.from("matchdays").select("id, matchday_number, status, locks_at").eq("season_id", season.id).order("matchday_number"),
     admin.from("competitions").select("id, name, start_matchday, end_matchday, status").eq("season_id", season.id).order("start_matchday"),
   ]);
-  const profiles = (profileRows ?? []) as Profile[];
-  const matchdays = (matchdayRows ?? []) as Matchday[];
-  const competitions = (competitionRows ?? []) as Competition[];
+  requireSuccessfulDatabaseOperation(profilesResult.error);
+  requireSuccessfulDatabaseOperation(matchdaysResult.error);
+  requireSuccessfulDatabaseOperation(competitionsResult.error);
+  const profiles = (profilesResult.data ?? []) as Profile[];
+  const matchdays = (matchdaysResult.data ?? []) as Matchday[];
+  const competitions = (competitionsResult.data ?? []) as Competition[];
   const matchdayIds = matchdays.map((matchday) => matchday.id);
-  const { data: entryRows } = matchdayIds.length
+  const { data: entryRows, error: entriesError } = matchdayIds.length
     ? await admin.from("entries").select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at").in("matchday_id", matchdayIds)
-    : { data: [] };
+    : { data: [], error: null };
+  requireSuccessfulDatabaseOperation(entriesError);
   const entries = (entryRows ?? []) as Entry[];
   const matchdayById = new Map(matchdays.map((matchday) => [matchday.id, matchday]));
   const currentMatchday = resolveCurrentMatchday(matchdays, requestNow);
@@ -134,13 +148,15 @@ export default async function TablesPage({
     const breakdownEntryIds = entries
       .filter((entry) => entry.matchday_id === selectedMatchday.id)
       .map((entry) => entry.id);
-    const [{ data: fixtures }, { data: selections }] = await Promise.all([
+    const [fixturesResult, selectionsResult] = await Promise.all([
       admin.from("fixtures").select("id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score").eq("matchday_id", selectedMatchday.id).order("kickoff_at"),
       breakdownEntryIds.length
         ? supabase.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", breakdownEntryIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
-    const fixtureRows = fixtures ?? [];
+    requireSuccessfulDatabaseOperation(fixturesResult.error);
+    requireSuccessfulDatabaseOperation(selectionsResult.error);
+    const fixtureRows = fixturesResult.data ?? [];
     const breakdownProfiles = profiles.filter((item) =>
       (
         item.is_active !== false &&
@@ -155,7 +171,7 @@ export default async function TablesPage({
       matchday: selectedMatchday,
       profiles: breakdownProfiles,
       entries,
-      selections: selections ?? [],
+      selections: selectionsResult.data ?? [],
       fixtures: fixtureRows,
       viewerId: user.id,
       now: requestNow,

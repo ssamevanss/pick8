@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { createClient } from "@/utils/supabase/legacy-server";
+import { requireApprovedRouteUser } from "@/utils/supabase/route-auth";
 import { getActiveSeason } from "@/utils/seasons";
 import { getSelectedLeagueForUser } from "@/utils/leagues";
 import {
@@ -107,23 +108,9 @@ export async function GET(request: Request) {
     return Response.json({ error: "gameweek_id is required" }, { status: 400 });
   }
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("status")
-    .eq("id", user.id)
-    .single();
-
-  if (profile?.status !== "approved") {
-    return Response.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const authResult = await requireApprovedRouteUser(supabase);
+  if (!authResult.ok) return authResult.response;
+  const { user } = authResult;
   const { selectedLeague } = await getSelectedLeagueForUser(
     supabase,
     user.id,

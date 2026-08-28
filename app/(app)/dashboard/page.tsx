@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getRequestAuthContext } from "@/utils/app-context";
-import { createAdminClient } from "@/utils/supabase/admin";
+import { createInteractiveAdminClient } from "@/utils/supabase/admin";
+import { requireSuccessfulDatabaseOperation } from "@/utils/supabase/resilience";
 import { buildMatchdayBreakdown } from "@/utils/pick8-matchday-breakdown";
 import {
   buildStandings,
@@ -84,22 +85,30 @@ function ContextTable({ rows, userId }: { rows: StandingRow[]; userId: string })
 }
 
 export default async function DashboardPage() {
-  const { user, profile } = await getRequestAuthContext();
+  const { user, profile, requestDeadlineSignal, requestId } = await getRequestAuthContext();
   if (!user || !profile?.is_active) return null;
-  const admin = createAdminClient();
+  const admin = createInteractiveAdminClient({
+    overallSignal: requestDeadlineSignal,
+    context: { page: "dashboard", operation: "load-dashboard", requestId },
+  });
   const { data: season, error: seasonError } = await admin.from("seasons").select("id, name").eq("is_active", true).maybeSingle();
-  if (seasonError || !season) return <section className="brand-card p-5"><p className="brand-eyebrow">Current matchday</p><h1 className="mt-2 text-xl font-black text-white">No active season</h1><p className="mt-2 text-sm text-slate-300">There is no active Pick8 season yet.</p></section>;
+  requireSuccessfulDatabaseOperation(seasonError);
+  if (!season) return <section className="brand-card p-5"><p className="brand-eyebrow">Current matchday</p><h1 className="mt-2 text-xl font-black text-white">No active season</h1><p className="mt-2 text-sm text-slate-300">There is no active Pick8 season yet.</p></section>;
 
-  const [{ data: profileRows }, { data: matchdayRows }, { data: competitionRows }] = await Promise.all([
+  const [profilesResult, matchdaysResult, competitionsResult] = await Promise.all([
     admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
     admin.from("matchdays").select("id, matchday_number, status, locks_at").eq("season_id", season.id).order("matchday_number"),
     admin.from("competitions").select("id, name, start_matchday, end_matchday, status").eq("season_id", season.id).order("start_matchday"),
   ]);
-  const profiles = (profileRows ?? []) as StandingsProfile[];
-  const matchdays = (matchdayRows ?? []) as StandingsMatchday[];
-  const competitions = (competitionRows ?? []) as StandingsCompetition[];
+  requireSuccessfulDatabaseOperation(profilesResult.error);
+  requireSuccessfulDatabaseOperation(matchdaysResult.error);
+  requireSuccessfulDatabaseOperation(competitionsResult.error);
+  const profiles = (profilesResult.data ?? []) as StandingsProfile[];
+  const matchdays = (matchdaysResult.data ?? []) as StandingsMatchday[];
+  const competitions = (competitionsResult.data ?? []) as StandingsCompetition[];
   const matchdayIds = matchdays.map((matchday) => matchday.id);
-  const { data: entryRows } = matchdayIds.length ? await admin.from("entries").select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at").in("matchday_id", matchdayIds) : { data: [] };
+  const { data: entryRows, error: entriesError } = matchdayIds.length ? await admin.from("entries").select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at").in("matchday_id", matchdayIds) : { data: [], error: null };
+  requireSuccessfulDatabaseOperation(entriesError);
   const entries = (entryRows ?? []) as BreakdownEntry[];
   const standingsEntries = entries as StandingsEntry[];
   const byMatchday = new Map(matchdays.map((matchday) => [matchday.id, matchday]));
@@ -119,13 +128,15 @@ export default async function DashboardPage() {
   const relevantEntryIds = [...new Set([currentEntry?.id, ...latestEntries.map((entry) => entry.id)].filter((id): id is string => Boolean(id)))];
   let relevantSelections: BreakdownSelection[] = [];
   if (relevantEntryIds.length) {
-    const { data } = await admin.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", relevantEntryIds);
+    const { data, error } = await admin.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", relevantEntryIds);
+    requireSuccessfulDatabaseOperation(error);
     relevantSelections = (data ?? []) as BreakdownSelection[];
   }
   const latestMatchdayIds = latestEntries.map((entry) => entry.matchday_id);
   let latestFixtures: (BreakdownFixture & { matchday_id: string })[] = [];
   if (latestMatchdayIds.length) {
-    const { data } = await admin.from("fixtures").select("id, matchday_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score").in("matchday_id", latestMatchdayIds);
+    const { data, error } = await admin.from("fixtures").select("id, matchday_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score").in("matchday_id", latestMatchdayIds);
+    requireSuccessfulDatabaseOperation(error);
     latestFixtures = (data ?? []) as (BreakdownFixture & { matchday_id: string })[];
   }
   const currentProgress = selectionProgress(currentEntry, relevantSelections.filter((selection) => selection.entry_id === currentEntry?.id));

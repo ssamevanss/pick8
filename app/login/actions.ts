@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
+import { isServerAuthUnavailable } from "@/utils/supabase/resilience";
 
 function safeNext(value: string) {
   return value.startsWith("/") && !value.startsWith("//") ? value : "";
@@ -44,7 +45,9 @@ export async function login(formData: FormData) {
 
   if (error) {
     redirectWithLoginError(
-      "We could not sign you in with those details.",
+      isServerAuthUnavailable(error)
+        ? "Sign in is temporarily unavailable. Your details are unchanged. Please try again."
+        : "We could not sign you in with those details.",
       email,
       next,
     );
@@ -66,7 +69,15 @@ export async function login(formData: FormData) {
     .eq("id", user.id)
     .maybeSingle();
 
-  if (profileError || !profile) {
+  if (profileError) {
+    redirectWithLoginError(
+      "Pick8 could not finish signing you in just now. Your session has been preserved; please try again.",
+      email,
+      next,
+    );
+  }
+
+  if (!profile) {
     await supabase.auth.signOut();
     redirectWithLoginError(
       "Your Pick8 profile is not configured. Ask the administrator for help.",
