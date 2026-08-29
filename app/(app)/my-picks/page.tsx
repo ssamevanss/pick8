@@ -7,7 +7,6 @@ import ReadOnlyMatchdayPicks from "@/components/picks/ReadOnlyMatchdayPicks";
 import MatchdaySelectNavigation from "@/components/picks/MatchdaySelectNavigation";
 import {
   buildMatchdayBreakdown,
-  resolveDefaultPicksMatchday,
   type BreakdownEntry,
   type BreakdownFixture,
   type BreakdownMatchday,
@@ -18,7 +17,10 @@ import {
   earliestFixtureKickoff,
   isInitialPick8EntryWindowOpen,
 } from "@/utils/pick8-fixture-state";
-import { playerMatchdayLifecycle } from "@/utils/pick8-standings";
+import {
+  playerMatchdayLifecycle,
+  resolveRelevantMatchday,
+} from "@/utils/pick8-standings";
 
 function formatDateTime(value: string | null) {
   if (!value) return "Not set";
@@ -69,7 +71,7 @@ export default async function MyPicksPage({
   }
   const matchdays = (matchdayRows ?? []) as BreakdownMatchday[];
   const now = new Date().getTime();
-  const defaultMatchday = resolveDefaultPicksMatchday(matchdays, now);
+  const defaultMatchday = resolveRelevantMatchday(matchdays, now);
   const requestedNumber = /^\d+$/.test(params.matchday ?? "")
     ? Number(params.matchday)
     : null;

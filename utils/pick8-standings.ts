@@ -17,10 +17,30 @@ export function resolveCurrentMatchday(matchdays: StandingsMatchday[], now: numb
   return ordered.find((matchday) => matchday.status === "open") ?? ordered.find((matchday) => matchday.status === "upcoming" && matchday.locks_at !== null && Date.parse(matchday.locks_at) > now) ?? [...ordered].reverse().find((matchday) => ["locked", "scoring", "completed"].includes(matchday.status)) ?? null;
 }
 
-export function resolveDashboardMatchday(matchdays: StandingsMatchday[], now: number) {
-  const ordered = [...matchdays].sort((a, b) => a.matchday_number - b.matchday_number);
-  return ordered.find((matchday) => matchday.status === "scoring") ?? ordered.find((matchday) => matchday.status === "locked") ?? ordered.find((matchday) => matchday.status === "open") ?? ordered.find((matchday) => matchday.status === "upcoming" && matchday.locks_at !== null && Date.parse(matchday.locks_at) > now) ?? [...ordered].reverse().find((matchday) => matchday.status === "completed") ?? null;
+export function resolveRelevantMatchday<
+  T extends Pick<StandingsMatchday, "matchday_number" | "status" | "locks_at">,
+>(matchdays: T[], now: number) {
+  const ordered = [...matchdays].sort(
+    (a, b) => a.matchday_number - b.matchday_number,
+  );
+  return (
+    ordered.find((matchday) => matchday.status === "scoring") ??
+    ordered.find((matchday) => matchday.status === "locked") ??
+    ordered.find((matchday) => matchday.status === "open") ??
+    ordered.find(
+      (matchday) =>
+        matchday.status === "upcoming" &&
+        matchday.locks_at !== null &&
+        Date.parse(matchday.locks_at) > now,
+    ) ??
+    [...ordered]
+      .reverse()
+      .find((matchday) => matchday.status === "completed") ??
+    null
+  );
 }
+
+export const resolveDashboardMatchday = resolveRelevantMatchday;
 
 export function resolveNextEditableDashboardMatchday(
   matchdays: StandingsMatchday[],

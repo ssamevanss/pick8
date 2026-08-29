@@ -17,8 +17,6 @@ import type {
   BreakdownSelection,
 } from "@/utils/pick8-breakdown-types";
 
-export { resolveDefaultPicksMatchday } from "@/utils/pick8-matchday-selection";
-
 export type {
   BreakdownEntry,
   BreakdownFixture,

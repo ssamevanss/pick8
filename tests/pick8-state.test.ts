@@ -34,7 +34,6 @@ import {
   getProviderPayloadMatchday,
   representSameKickoff,
 } from "../utils/pick8-matchday-generation.ts";
-import { resolveDefaultPicksMatchday } from "../utils/pick8-matchday-selection.ts";
 import {
   acceleratedTestFinalScorePlan,
   canUseAcceleratedTestCompletion,
@@ -65,6 +64,7 @@ import {
   playerMatchdayLifecycle,
   resolveDashboardMatchday,
   resolveNextEditableDashboardMatchday,
+  resolveRelevantMatchday,
 } from "../utils/pick8-standings.ts";
 
 const kickoffAt = "2026-10-04T10:00:00.000Z";
@@ -367,12 +367,68 @@ test("daily fixture automation creates three upcoming provider rounds before the
 test("the Picks page defaults to Matchday 2 as soon as it is populated", () => {
   const now = Date.parse("2026-08-25T07:00:00Z");
   assert.equal(
-    resolveDefaultPicksMatchday([
+    resolveRelevantMatchday([
       { matchday_number: 1, status: "completed", locks_at: "2026-08-21T19:00:00Z" },
       { matchday_number: 2, status: "upcoming", locks_at: "2026-08-28T19:00:00Z" },
     ], now)?.matchday_number,
     2,
   );
+});
+
+test("My Picks uses current-matchday priority and agrees with the dashboard", () => {
+  const now = Date.parse("2026-08-13T00:00:00Z");
+  const scenarios = [
+    {
+      name: "scoring before open",
+      expected: "md2",
+      matchdays: [
+        { id: "md2", matchday_number: 2, status: "scoring", locks_at: "2026-08-12T10:00:00Z" },
+        { id: "md3", matchday_number: 3, status: "open", locks_at: "2026-08-20T10:00:00Z" },
+      ],
+    },
+    {
+      name: "locked before open",
+      expected: "md2",
+      matchdays: [
+        { id: "md2", matchday_number: 2, status: "locked", locks_at: "2026-08-12T10:00:00Z" },
+        { id: "md3", matchday_number: 3, status: "open", locks_at: "2026-08-20T10:00:00Z" },
+      ],
+    },
+    {
+      name: "open before upcoming",
+      expected: "md2",
+      matchdays: [
+        { id: "md2", matchday_number: 2, status: "open", locks_at: "2026-08-20T10:00:00Z" },
+        { id: "md3", matchday_number: 3, status: "upcoming", locks_at: "2026-08-27T10:00:00Z" },
+      ],
+    },
+    {
+      name: "open after completed",
+      expected: "md3",
+      matchdays: [
+        { id: "md2", matchday_number: 2, status: "completed", locks_at: "2026-08-12T10:00:00Z" },
+        { id: "md3", matchday_number: 3, status: "open", locks_at: "2026-08-20T10:00:00Z" },
+      ],
+    },
+    {
+      name: "scoring before multiple future matchdays",
+      expected: "md2",
+      matchdays: [
+        { id: "md2", matchday_number: 2, status: "scoring", locks_at: "2026-08-12T10:00:00Z" },
+        { id: "md3", matchday_number: 3, status: "open", locks_at: "2026-08-20T10:00:00Z" },
+        { id: "md4", matchday_number: 4, status: "open", locks_at: "2026-08-27T10:00:00Z" },
+        { id: "md5", matchday_number: 5, status: "upcoming", locks_at: "2026-09-03T10:00:00Z" },
+      ],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const picksMatchday = resolveRelevantMatchday(scenario.matchdays, now);
+    const dashboardMatchday = resolveDashboardMatchday(scenario.matchdays, now);
+    assert.equal(picksMatchday?.id, scenario.expected, scenario.name);
+    assert.equal(dashboardMatchday?.id, scenario.expected, scenario.name);
+    assert.equal(picksMatchday?.id, dashboardMatchday?.id, `${scenario.name}: destinations agree`);
+  }
 });
 
 test("daily fixture automation tops up its lookahead after completion and is idempotent", () => {
