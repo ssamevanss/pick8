@@ -64,6 +64,7 @@ import {
   overallSeasonStandings,
   playerMatchdayLifecycle,
   resolveDashboardMatchday,
+  resolveNextEditableDashboardMatchday,
 } from "../utils/pick8-standings.ts";
 
 const kickoffAt = "2026-10-04T10:00:00.000Z";
@@ -487,6 +488,36 @@ test("completed Matchday 3 allows Manual Matchday 4 to become current", () => {
     { id: "md4", matchday_number: 4, status: "open", locks_at: "2026-08-14T10:00:00Z" },
   ];
   assert.equal(resolveDashboardMatchday(matchdays, Date.parse("2026-08-13T00:00:00Z"))?.id, "md4");
+});
+
+test("a scoring matchday stays primary while future matchdays are open for picks", () => {
+  const now = Date.parse("2026-08-13T00:00:00Z");
+  const matchdays = [
+    { id: "md2", matchday_number: 2, status: "scoring", locks_at: "2026-08-12T10:00:00Z" },
+    { id: "md3", matchday_number: 3, status: "open", locks_at: "2026-08-20T10:00:00Z" },
+    { id: "md4", matchday_number: 4, status: "upcoming", locks_at: "2026-08-27T10:00:00Z" },
+  ];
+  const primary = resolveDashboardMatchday(matchdays, now);
+  assert.equal(primary?.id, "md2");
+  assert.equal(resolveNextEditableDashboardMatchday(matchdays, primary, now)?.id, "md3");
+});
+
+test("the earliest open matchday stays primary when no matchday is scoring", () => {
+  const matchdays = [
+    { id: "md2", matchday_number: 2, status: "open", locks_at: "2026-08-14T10:00:00Z" },
+    { id: "md3", matchday_number: 3, status: "upcoming", locks_at: "2026-08-21T10:00:00Z" },
+  ];
+  assert.equal(resolveDashboardMatchday(matchdays, Date.parse("2026-08-13T00:00:00Z"))?.id, "md2");
+});
+
+test("future entry state does not displace a scoring dashboard matchday", () => {
+  const matchdays = [
+    { id: "md2", matchday_number: 2, status: "scoring", locks_at: "2026-08-12T10:00:00Z" },
+    { id: "md3", matchday_number: 3, status: "open", locks_at: "2026-08-20T10:00:00Z" },
+  ];
+  const submittedEntries = [{ matchday_id: "md3", submitted_at: "2026-08-12T09:00:00Z" }];
+  assert.equal(submittedEntries[0]?.matchday_id, "md3");
+  assert.equal(resolveDashboardMatchday(matchdays, Date.parse("2026-08-13T00:00:00Z"))?.id, "md2");
 });
 
 test("completed Matchday 2 yields current-matchday priority to upcoming Matchday 3", () => {
