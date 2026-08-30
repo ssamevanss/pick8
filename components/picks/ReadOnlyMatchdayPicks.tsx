@@ -5,7 +5,6 @@ import SubmittedPick8Summary, { type Pick8SummarySelection } from "@/components/
 import TeamIdentity from "@/components/picks/TeamIdentity";
 import {
   findSubmittedPick8Player,
-  PICK_CATEGORY_LABELS,
   type BreakdownFixture,
   type BreakdownMatchday,
   type BreakdownPlayer,
@@ -25,6 +24,11 @@ import {
   isPick8Category,
   PICK8_ENTRY_STATE_LABELS,
 } from "@/utils/pick8-entry-validation";
+import {
+  formatPick8FixtureSelection,
+  groupFixturePicks,
+  PICK8_CATEGORY_LABELS,
+} from "@/utils/pick8-selection-display";
 
 function scoreLabel(score: number | null) {
   if (score === null) return "Pending";
@@ -43,27 +47,6 @@ function selectionStateClass(state: string) {
   if (state === "Incorrect") return "text-rose-200";
   if (state === "Void") return "text-amber-200";
   return "text-slate-300";
-}
-
-function fixturePickDescription(
-  category: string,
-  selectedTeamSide: string | null,
-  fixture: BreakdownFixture,
-) {
-  const selectedTeam = selectedTeamSide === "home"
-    ? fixture.home_team_name
-    : selectedTeamSide === "away"
-      ? fixture.away_team_name
-      : null;
-  if (category === "draw") return "Draw";
-  if (category === "home_win") return `${fixture.home_team_name} to Win`;
-  if (category === "away_win") return `${fixture.away_team_name} to Win`;
-  if (!selectedTeam) return PICK_CATEGORY_LABELS[category] ?? category;
-  if (category === "team_win") return `${selectedTeam} to Win`;
-  if (category === "team_lose") return `${selectedTeam} to Lose`;
-  if (category === "team_score") return `${selectedTeam} to Score`;
-  if (category === "clean_sheet") return `${selectedTeam} Clean Sheet`;
-  return `${PICK_CATEGORY_LABELS[category] ?? category} · ${selectedTeam}`;
 }
 
 function submittedLabel(value: string) {
@@ -197,23 +180,74 @@ export default function ReadOnlyMatchdayPicks({
                     kickoffAt: fixture.kickoff_at,
                     now,
                   }))
-                  .map((selection) => ({ player, entry, selection })),
+                  .map((selection) => ({ player, selection })),
               );
-              const ownPickLabel = ownSelection
-                ? fixturePickDescription(ownSelection.category, ownSelection.selected_team_side, fixture)
-                : "No selection";
-              const content = <><div className="grid min-w-0 gap-1.5"><TeamIdentity name={fixture.home_team_name} crestUrl={fixture.home_team_crest_url} /><TeamIdentity name={fixture.away_team_name} crestUrl={fixture.away_team_crest_url} /><p className="text-xs text-slate-400">{formatPick8Kickoff(fixture.kickoff_at)} · {fixtureLifecycleLabel(fixtureLifecycle)}</p><p className="truncate text-xs text-slate-300"><span className="font-bold text-white">Your Pick8:</span> {ownPickLabel}</p><p className={`text-xs font-bold ${started ? "text-emerald-200" : "text-slate-500"}`}>{started ? expanded ? "Hide all picks ↑" : "View all picks →" : "Other players’ picks hidden until kickoff"}</p></div><div className="flex shrink-0 items-center gap-2"><p className="text-lg font-black tabular-nums text-white">{fixture.home_score ?? "–"}–{fixture.away_score ?? "–"}</p>{scoreStateLabel ? <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${scoreStateLabel === "LIVE" ? "border-emerald-400/35 bg-emerald-400/15 text-emerald-200" : "border-slate-500/40 bg-slate-700/50 text-slate-300"}`}>{scoreStateLabel}</span> : null}</div></>;
-              return <div key={fixture.id} className="brand-card-soft overflow-hidden text-sm">{started ? <button type="button" className="flex w-full items-center justify-between gap-3 p-3 text-left transition-colors hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-300/70" aria-expanded={expanded} onClick={() => toggleFixture(fixture.id)}>{content}</button> : <div className="flex items-center justify-between gap-3 p-3">{content}</div>}{started && expanded ? <div className="space-y-2 border-t border-white/10 p-3">{fixturePicks.length ? fixturePicks.map(({ player, selection }) => {
+              const voidFixture = ["postponed", "cancelled"].includes(fixture.status);
+              const groupedFixturePicks = groupFixturePicks(fixturePicks.map(({ player, selection }) => {
                 const category = isPick8Category(selection.category) ? selection.category : null;
                 const liveResult = category ? calculatePick8FixtureSelectionPoints(
-                  { category, selected_team_side: selection.selected_team_side === "home" || selection.selected_team_side === "away" ? selection.selected_team_side : null },
+                  {
+                    category,
+                    selected_team_side: selection.selected_team_side === "home" || selection.selected_team_side === "away"
+                      ? selection.selected_team_side
+                      : null,
+                  },
                   { home_score: fixture.home_score, away_score: fixture.away_score },
                 ) : null;
                 const displayedPoints = fixture.status === "finished" && selection.points_awarded !== null
                   ? selection.points_awarded
                   : liveResult?.pointsAwarded ?? null;
-                const voidFixture = ["postponed", "cancelled"].includes(fixture.status);
-                return <div key={selection.id} className="flex items-center justify-between gap-3 text-xs"><span className="text-slate-300"><strong className="text-white">{player.display_name}</strong> · {fixturePickDescription(selection.category, selection.selected_team_side, fixture)}</span><span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-black ${voidFixture ? "border-amber-300/30 bg-amber-300/10 text-amber-200" : scoreClass(displayedPoints)}`}>{voidFixture ? "Void" : displayedPoints === null ? "Pending" : scoreLabel(displayedPoints)}</span></div>;
+                return {
+                  selectionId: selection.id,
+                  playerId: player.id,
+                  playerName: player.display_name.trim() || "Player",
+                  category: selection.category,
+                  selectedTeamSide: selection.selected_team_side,
+                  displayedPoints,
+                };
+              }));
+              const ownPickLabel = ownSelection
+                ? formatPick8FixtureSelection(
+                    ownSelection.category,
+                    ownSelection.selected_team_side,
+                    {
+                      homeTeamName: fixture.home_team_name,
+                      awayTeamName: fixture.away_team_name,
+                    },
+                  )
+                : "No selection";
+              const content = <><div className="grid min-w-0 gap-1.5"><TeamIdentity name={fixture.home_team_name} crestUrl={fixture.home_team_crest_url} /><TeamIdentity name={fixture.away_team_name} crestUrl={fixture.away_team_crest_url} /><p className="text-xs text-slate-400">{formatPick8Kickoff(fixture.kickoff_at)} · {fixtureLifecycleLabel(fixtureLifecycle)}</p><p className="truncate text-xs text-slate-300"><span className="font-bold text-white">Your Pick8:</span> {ownPickLabel}</p><p className={`text-xs font-bold ${started ? "text-emerald-200" : "text-slate-500"}`}>{started ? expanded ? "Hide all picks ↑" : "View all picks →" : "Other players’ picks hidden until kickoff"}</p></div><div className="flex shrink-0 items-center gap-2"><p className="text-lg font-black tabular-nums text-white">{fixture.home_score ?? "–"}–{fixture.away_score ?? "–"}</p>{scoreStateLabel ? <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${scoreStateLabel === "LIVE" ? "border-emerald-400/35 bg-emerald-400/15 text-emerald-200" : "border-slate-500/40 bg-slate-700/50 text-slate-300"}`}>{scoreStateLabel}</span> : null}</div></>;
+              return <div key={fixture.id} className="brand-card-soft overflow-hidden text-sm">{started ? <button type="button" className="flex w-full items-center justify-between gap-3 p-3 text-left transition-colors hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-300/70" aria-expanded={expanded} onClick={() => toggleFixture(fixture.id)}>{content}</button> : <div className="flex items-center justify-between gap-3 p-3">{content}</div>}{started && expanded ? <div className="space-y-2 border-t border-white/10 p-3">{groupedFixturePicks.length ? groupedFixturePicks.map((group) => {
+                const containsCurrentPlayer = group.players.some(({ id }) => id === currentPlayerId);
+                return (
+                  <div
+                    key={group.key}
+                    className={`rounded-xl border px-3 py-2.5 ${containsCurrentPlayer ? "border-emerald-300/25 bg-emerald-300/[0.07]" : "border-white/10 bg-slate-950/20"}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 text-xs font-black leading-5 text-white">
+                        {formatPick8FixtureSelection(
+                          group.category,
+                          group.selectedTeamSide,
+                          {
+                            homeTeamName: fixture.home_team_name,
+                            awayTeamName: fixture.away_team_name,
+                          },
+                        )}
+                      </p>
+                      <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-black tabular-nums ${voidFixture ? "border-amber-300/30 bg-amber-300/10 text-amber-200" : scoreClass(group.displayedPoints)}`}>
+                        {voidFixture ? "Void" : group.displayedPoints === null ? "Pending" : scoreLabel(group.displayedPoints)}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 text-xs leading-5 text-slate-300">
+                      {group.players.map(({ id, name }, index) => (
+                        <span key={id} className={id === currentPlayerId ? "font-bold text-emerald-200" : undefined}>
+                          {index > 0 ? " · " : ""}{name}
+                        </span>
+                      ))}
+                    </p>
+                  </div>
+                );
               }) : <p className="text-xs text-slate-400">No submitted selections were made against this fixture.</p>}</div> : null}</div>;
             })}
           </div>
@@ -262,7 +296,7 @@ export default function ReadOnlyMatchdayPicks({
                         return (
                           <div key={selection.id} className="brand-card-soft grid gap-2 p-3 text-sm sm:grid-cols-[1fr_auto] sm:items-center">
                             <div>
-                              <p className="font-bold text-white">{PICK_CATEGORY_LABELS[selection.category] ?? selection.category}</p>
+                              <p className="font-bold text-white">{PICK8_CATEGORY_LABELS[selection.category as keyof typeof PICK8_CATEGORY_LABELS] ?? selection.category}</p>
                               {team ? <div className="mt-2 w-fit"><TeamIdentity name={team} crestUrl={teamCrest} /></div> : <p className="mt-1 text-xs text-slate-300">Selected team: Draw / no team</p>}
                               <p className="mt-1 text-xs text-slate-400">Fixture: {fixture ? `${fixture.home_team_name} v ${fixture.away_team_name}` : "Unavailable"}</p>
                               <p className={`mt-1 text-xs font-bold ${selectionStateClass(state)}`}>{state}</p>

@@ -48,13 +48,3 @@ export function findSubmittedPick8Player(
   const result = players.find(({ player }) => player.id === playerId);
   return result?.entry?.submitted_at ? result : null;
 }
-
-export const PICK_CATEGORY_LABELS: Record<string, string> = {
-  home_win: "Home Winner",
-  away_win: "Away Winner",
-  draw: "Draw",
-  team_win: "Team to Win",
-  team_lose: "Team to Lose",
-  team_score: "Team to Score",
-  clean_sheet: "Clean Sheet",
-};

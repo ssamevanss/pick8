@@ -11,6 +11,7 @@ import {
   type Pick8ScoringCategory,
   type Pick8ScoringTeamSide,
 } from "@/utils/pick8-scoring-rules";
+import { PICK8_CATEGORY_LABELS } from "@/utils/pick8-selection-display";
 
 export type Pick8SummaryFixture = {
   id: string;
@@ -29,16 +30,6 @@ export type Pick8SummarySelection = {
   fixtureId: string;
   selectedTeamSide: Pick8ScoringTeamSide;
   pointsAwarded?: number | null;
-};
-
-const CATEGORY_LABELS: Record<Pick8ScoringCategory, string> = {
-  home_win: "Home Winner",
-  away_win: "Away Winner",
-  draw: "Draw",
-  team_win: "Team to Win",
-  team_lose: "Team to Lose",
-  team_score: "Team to Score",
-  clean_sheet: "Clean Sheet",
 };
 
 function pointsPillClass(points: number | null) {
@@ -134,7 +125,7 @@ export default function SubmittedPick8Summary({
             <div key={`${selection.category}:${fixture.id}`} className="brand-card-soft p-2.5 text-sm">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                  <p className="text-xs font-black uppercase tracking-wide text-emerald-200">{CATEGORY_LABELS[selection.category]}</p>
+                  <p className="text-xs font-black uppercase tracking-wide text-emerald-200">{PICK8_CATEGORY_LABELS[selection.category]}</p>
                   {scoreStateLabel ? <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-black ${scoreStateLabel === "LIVE" ? "border-emerald-400/35 bg-emerald-400/15 text-emerald-200" : "border-slate-500/40 bg-slate-700/50 text-slate-300"}`}>{scoreStateLabel}</span> : null}
                 </div>
                 {started ? <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-black tabular-nums ${pointsPillClass(displayedPoints)}`}>{voidFixture ? "Void" : displayedPoints === null ? "Pending" : pointsLabel(displayedPoints)}</span> : null}
