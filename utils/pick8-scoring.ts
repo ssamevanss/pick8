@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createSyncDiagnostics } from "@/utils/pick8-sync-diagnostics";
 import { createAdminClient } from "@/utils/supabase/admin";
 import {
   canFinalizeBeforeConfiguredKickoffs,
@@ -67,6 +68,7 @@ export type ScoreRecalculationSummary = {
   entriesSkipped: number;
   finalScoringReady: boolean;
   recalculatedAt: string;
+  matchdayStatus: string;
 };
 
 const TERMINAL_STATUSES = new Set(["finished", "postponed", "cancelled"]);
@@ -164,7 +166,7 @@ function databaseFailure(operation: string, message: string): never {
   throw new Error(`${operation} failed: ${message}`);
 }
 
-export async function recalculateMatchdayScores({
+async function recalculateMatchdayScoresInternal({
   seasonId,
   matchdayId,
   allowAcceleratedTestCompletion = false,
@@ -177,7 +179,7 @@ export async function recalculateMatchdayScores({
   const recalculatedAt = new Date().toISOString();
   const { data: matchday, error: matchdayError } = await supabase
     .from("matchdays")
-    .select("id, season_id, matchday_number, status, fixture_sync_mode, is_accelerated_test")
+    .select("id, season_id, matchday_number, status, fixture_sync_mode, is_accelerated_test, scoring_revision")
     .eq("id", matchdayId)
     .eq("season_id", seasonId)
     .maybeSingle();
@@ -280,22 +282,35 @@ export async function recalculateMatchdayScores({
     if (entryUpdateError) databaseFailure("Updating entry score", entryUpdateError.message);
   }
 
-  const { error: statusError } = await supabase
+  const matchdayStatus = resolveMatchdayScoringStatus({
+    currentStatus: matchday.status, fixtures, finalScoringReady, now: Date.parse(recalculatedAt),
+  });
+  const { data: statusRow, error: statusError } = await supabase
     .from("matchdays")
     .update({
-      status: resolveMatchdayScoringStatus({
-        currentStatus: matchday.status,
-        fixtures,
-        finalScoringReady,
-        now: Date.parse(recalculatedAt),
-      }),
+      status: matchdayStatus,
       updated_at: recalculatedAt,
     })
     .eq("id", matchdayId)
-    .eq("season_id", seasonId);
+    .eq("season_id", seasonId)
+    .eq("status", matchday.status)
+    .select("id")
+    .maybeSingle();
+  if (!statusError && !statusRow) throw new Error("Matchday lifecycle changed during scoring; retry required.");
   if (statusError) databaseFailure("Updating matchday status", statusError.message);
 
+  const { data: acknowledged, error: acknowledgementError } = await supabase
+    .from("matchdays")
+    .update({ scoring_pending: false })
+    .eq("id", matchdayId)
+    .eq("scoring_revision", matchday.scoring_revision)
+    .select("id")
+    .maybeSingle();
+  if (acknowledgementError) databaseFailure("Acknowledging scoring", acknowledgementError.message);
+  if (!acknowledged) throw new Error("Scoring inputs changed during calculation; retry required.");
+
   return {
+    matchdayStatus,
     seasonId,
     matchdayId,
     matchdayNumber: matchday.matchday_number,
@@ -308,4 +323,30 @@ export async function recalculateMatchdayScores({
     finalScoringReady,
     recalculatedAt,
   };
+}
+
+/** Mark work before any scoring reads/writes; failed or concurrent work stays visible. */
+export async function recalculateMatchdayScores(input: {
+  seasonId: string;
+  matchdayId: string;
+  allowAcceleratedTestCompletion?: boolean;
+}): Promise<ScoreRecalculationSummary> {
+  const diagnostics = createSyncDiagnostics({ operation: "recalculate-scores", matchdayId: input.matchdayId });
+  const supabase = createAdminClient();
+  return diagnostics.stage("scoring", async () => {
+    const { error } = await supabase.from("matchdays").update({ scoring_pending: true })
+      .eq("id", input.matchdayId).eq("season_id", input.seasonId);
+    if (error) databaseFailure("Marking scoring pending", error.message);
+    try {
+      return await recalculateMatchdayScoresInternal(input);
+    } catch (error) {
+      // An overlapping successful scorer may have cleared the flag since we
+      // started. Reassert it after any failure, including a revision conflict.
+      const { error: recoveryError } = await supabase.from("matchdays")
+        .update({ scoring_pending: true, sync_pending: true })
+        .eq("id", input.matchdayId).eq("season_id", input.seasonId);
+      if (recoveryError) console.error("Could not retain scoring recovery state", recoveryError.message);
+      throw error;
+    }
+  });
 }

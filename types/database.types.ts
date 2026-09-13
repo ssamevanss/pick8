@@ -233,6 +233,12 @@ export type Database = {
       }
       matchdays: {
         Row: {
+          applied_fixture_fingerprint: string | null
+          last_upstream_check_at: string | null
+          sync_pending: boolean
+          scoring_pending: boolean
+          sync_revision: number
+          scoring_revision: number
           created_at: string
           fixture_sync_mode: string
           id: string
@@ -245,6 +251,12 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          applied_fixture_fingerprint?: string | null
+          last_upstream_check_at?: string | null
+          sync_pending?: boolean
+          scoring_pending?: boolean
+          sync_revision?: number
+          scoring_revision?: number
           created_at?: string
           fixture_sync_mode?: string
           id?: string
@@ -257,6 +269,12 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          applied_fixture_fingerprint?: string | null
+          last_upstream_check_at?: string | null
+          sync_pending?: boolean
+          scoring_pending?: boolean
+          sync_revision?: number
+          scoring_revision?: number
           created_at?: string
           fixture_sync_mode?: string
           id?: string
@@ -313,6 +331,9 @@ export type Database = {
       }
       seasons: {
         Row: {
+          competition_refresh_pending: boolean
+          competition_revision: number
+          competition_refresh_after: string | null
           created_at: string
           ends_at: string | null
           id: string
@@ -323,6 +344,9 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          competition_refresh_pending?: boolean
+          competition_revision?: number
+          competition_refresh_after?: string | null
           created_at?: string
           ends_at?: string | null
           id?: string
@@ -333,6 +357,9 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          competition_refresh_pending?: boolean
+          competition_revision?: number
+          competition_refresh_after?: string | null
           created_at?: string
           ends_at?: string | null
           id?: string

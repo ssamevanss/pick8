@@ -1,5 +1,8 @@
 import "server-only";
 
+import { createSyncDiagnostics } from "@/utils/pick8-sync-diagnostics";
+import { competitionRefreshRequired } from "@/utils/pick8-sync-state";
+
 import { NextResponse } from "next/server";
 import type { Tables } from "@/types/database.types";
 import { recalculateMatchdayScores } from "@/utils/pick8-scoring";
@@ -15,11 +18,11 @@ import {
 } from "@/utils/pick8-fixture-sync-mode";
 import { getDailyFixtureSyncMatchdayNumbers } from "@/utils/pick8-matchday-generation";
 
-type Season = Pick<Tables<"seasons">, "id" | "name" | "provider_season">;
+type Season = Pick<Tables<"seasons">, "id" | "name" | "provider_season" | "competition_refresh_pending" | "competition_refresh_after">;
 type Matchday = Pick<
   Tables<"matchdays">,
   "id" | "matchday_number" | "status" | "locks_at"
-> & { fixture_sync_mode: FixtureSyncMode };
+> & { fixture_sync_mode: FixtureSyncMode; sync_pending: boolean; scoring_pending: boolean };
 type Fixture = Pick<Tables<"fixtures">, "matchday_id" | "kickoff_at" | "status">;
 
 type MatchdayFailure = { matchday: number; error: string };
@@ -62,7 +65,7 @@ async function loadActiveSeason() {
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("seasons")
-    .select("id, name, provider_season")
+    .select("id, name, provider_season, competition_refresh_pending, competition_refresh_after")
     .eq("is_active", true)
     .order("provider_season", { ascending: false })
     .limit(1)
@@ -75,7 +78,7 @@ async function loadMatchdays(seasonId: string) {
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("matchdays")
-    .select("id, matchday_number, status, locks_at, fixture_sync_mode")
+    .select("id, matchday_number, status, locks_at, fixture_sync_mode, sync_pending, scoring_pending")
     .eq("season_id", seasonId)
     .order("matchday_number", { ascending: true });
   if (error) throw new Error(`Loading matchdays failed: ${error.message}`);
@@ -102,13 +105,11 @@ async function syncMatchday({
   season,
   matchday,
   recalculate,
-  forceRecalculate = false,
 }: {
   route: string;
   season: Season;
   matchday: Matchday;
   recalculate: "never" | "when-needed" | "always";
-  forceRecalculate?: boolean;
 }): Promise<MatchdayRun | null> {
   const key = `${season.id}:${matchday.id}`;
   if (inFlightMatchdays.has(key)) return null;
@@ -148,18 +149,9 @@ async function syncMatchday({
     const sync = await syncWhoYouGotFixtures({
       season: season.provider_season,
       matchday: matchday.matchday_number,
+      recalculateScores: recalculate !== "never",
     });
-    const providerChanged = sync.inserted + sync.updated > 0;
-    const shouldRecalculate =
-      recalculate === "always" ||
-      (recalculate === "when-needed" &&
-        (providerChanged ||
-          forceRecalculate ||
-          matchday.status === "scoring" ||
-          sync.matchdayStatus === "completed"));
-    const scoring = shouldRecalculate
-      ? await recalculateMatchdayScores({ seasonId: season.id, matchdayId: matchday.id })
-      : undefined;
+    const scoring = sync.scoring;
     logRun({
       route,
       season: season.provider_season,
@@ -174,6 +166,7 @@ async function syncMatchday({
       invalidatedEntries: sync.invalidatedEntries,
       potentialRemovals: sync.potentialRemovals.length,
       recalculated: Boolean(scoring),
+      fastPath: sync.fastPath ?? false,
     });
     return { matchday: matchday.matchday_number, sync, recalculated: Boolean(scoring), scoring };
   } catch (error) {
@@ -196,13 +189,11 @@ async function runSelectedMatchdays({
   season,
   matchdays,
   recalculate,
-  forceRecalculateMatchdayIds = new Set<string>(),
 }: {
   route: string;
   season: Season;
   matchdays: Matchday[];
   recalculate: "never" | "when-needed" | "always";
-  forceRecalculateMatchdayIds?: Set<string>;
 }) {
   const runs: MatchdayRun[] = [];
   const failures: MatchdayFailure[] = [];
@@ -214,7 +205,6 @@ async function runSelectedMatchdays({
         season,
         matchday,
         recalculate,
-        forceRecalculate: forceRecalculateMatchdayIds.has(matchday.id),
       });
       if (run) runs.push(run);
       else skippedInFlight.push(matchday.matchday_number);
@@ -252,12 +242,31 @@ function noActiveSeason(route: string, startedAt: number) {
   return result;
 }
 
-export async function runDailyFixtureSync() {
+
+async function discover(route: string, includeFixtures: boolean) {
+  return createSyncDiagnostics({ route }).stage("discovery", async () => {
+    const season = await loadActiveSeason();
+    if (!season) return { season, matchdays: [], fixtures: [] };
+    const matchdays = await loadMatchdays(season.id);
+    const fixtures = includeFixtures ? await loadFixtures(matchdays.map((row) => row.id)) : [];
+    return { season, matchdays, fixtures };
+  });
+}
+
+async function refreshAfterSync(route: string, season: Season, result: Awaited<ReturnType<typeof runSelectedMatchdays>>) {
+  const changedOrRecovery = result.failures.length > 0 || result.successes.some((run) => !run.sync.fastPath);
+  if (!changedOrRecovery && !competitionRefreshRequired(season)) {
+    createSyncDiagnostics({ route, seasonId: season.id }).skipped("competition_refresh", "no_lifecycle_change_or_pending_recovery");
+    return null;
+  }
+  return refreshPick8Competitions(season.id, { ifNeeded: true });
+}
+
+async function runDailyFixtureSyncInternal() {
   const route = "sync-fixtures";
   const startedAt = Date.now();
-  const season = await loadActiveSeason();
+  const { season, matchdays } = await discover(route, false);
   if (!season) return noActiveSeason(route, startedAt);
-  const matchdays = await loadMatchdays(season.id);
   const matchdayByNumber = new Map(
     matchdays.map((matchday) => [matchday.matchday_number, matchday]),
   );
@@ -269,10 +278,12 @@ export async function runDailyFixtureSync() {
         status: "upcoming",
         locks_at: null,
         fixture_sync_mode: "provider",
+        sync_pending: false,
+        scoring_pending: false,
       },
   );
   const result = await runSelectedMatchdays({ route, season, matchdays: selected, recalculate: "never" });
-  const competitionRefresh = await refreshPick8Competitions(season.id);
+  const competitionRefresh = await refreshAfterSync(route, season, result);
   const response = {
     ok: result.failures.length === 0,
     skipped: selected.length === 0,
@@ -287,30 +298,17 @@ export async function runDailyFixtureSync() {
   return response;
 }
 
-export async function runConditionalResultSync() {
+async function runConditionalResultSyncInternal() {
   const route = "sync-results";
   const startedAt = Date.now();
-  const season = await loadActiveSeason();
+  const { season, matchdays, fixtures } = await discover(route, true);
   if (!season) return noActiveSeason(route, startedAt);
-  const matchdays = await loadMatchdays(season.id);
-  const fixtures = await loadFixtures(matchdays.map((matchday) => matchday.id));
   const now = Date.now();
   const windowStart = now - 4 * 60 * 60 * 1000;
   const windowEnd = now + 30 * 60 * 1000;
   const fixturesByMatchday = Map.groupBy(fixtures, (fixture) => fixture.matchday_id);
-  const finalReconciliationMatchdayIds = new Set(
-    matchdays
-      .filter(
-        (matchday) =>
-          matchday.status !== "completed" &&
-          (fixturesByMatchday.get(matchday.id) ?? []).some(
-            (fixture) => fixture.status === "finished",
-          ),
-      )
-      .map((matchday) => matchday.id),
-  );
   const selected = matchdays.filter((matchday) => {
-    if (matchday.status === "scoring") return true;
+    if ((matchday.fixture_sync_mode === "provider" && matchday.sync_pending) || matchday.scoring_pending || matchday.status === "scoring") return true;
     return (fixturesByMatchday.get(matchday.id) ?? []).some((fixture) => {
       const kickoff = Date.parse(fixture.kickoff_at);
       return (
@@ -325,9 +323,8 @@ export async function runConditionalResultSync() {
     season,
     matchdays: selected,
     recalculate: "when-needed",
-    forceRecalculateMatchdayIds: finalReconciliationMatchdayIds,
   });
-  const competitionRefresh = await refreshPick8Competitions(season.id);
+  const competitionRefresh = await refreshAfterSync(route, season, result);
   const response = {
     ok: result.failures.length === 0,
     skipped: selected.length === 0,
@@ -343,13 +340,11 @@ export async function runConditionalResultSync() {
   return response;
 }
 
-export async function runResultReconciliation() {
+async function runResultReconciliationInternal() {
   const route = "reconcile-results";
   const startedAt = Date.now();
-  const season = await loadActiveSeason();
+  const { season, matchdays, fixtures } = await discover(route, true);
   if (!season) return noActiveSeason(route, startedAt);
-  const matchdays = await loadMatchdays(season.id);
-  const fixtures = await loadFixtures(matchdays.map((matchday) => matchday.id));
   const now = new Date();
   const startUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 2);
   const endUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -370,7 +365,7 @@ export async function runResultReconciliation() {
     matchdays: selected,
     recalculate: "always",
   });
-  const competitionRefresh = await refreshPick8Competitions(season.id);
+  const competitionRefresh = await refreshAfterSync(route, season, result);
   const response = {
     ok: result.failures.length === 0,
     skipped: selected.length === 0,
@@ -385,4 +380,19 @@ export async function runResultReconciliation() {
   };
   logRun({ route, success: response.ok, matchdays: selected.length, durationMs: response.durationMs });
   return response;
+}
+
+export async function runDailyFixtureSync() {
+  const diagnostics = createSyncDiagnostics({ operation: "runDailyFixtureSync" });
+  return diagnostics.stage("total", () => runDailyFixtureSyncInternal());
+}
+
+export async function runConditionalResultSync() {
+  const diagnostics = createSyncDiagnostics({ operation: "runConditionalResultSync" });
+  return diagnostics.stage("total", () => runConditionalResultSyncInternal());
+}
+
+export async function runResultReconciliation() {
+  const diagnostics = createSyncDiagnostics({ operation: "runResultReconciliation" });
+  return diagnostics.stage("total", () => runResultReconciliationInternal());
 }

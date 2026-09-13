@@ -1601,11 +1601,11 @@ Only update dependencies if there is a clear reason, such as security fixes or n
 
 ### Pick8 fixture and result automation
 
-Vercel invokes three authenticated GET routes. Schedules are UTC:
+Automation invokes three authenticated GET routes. Schedules are UTC:
 
 - `/api/cron/sync-fixtures` at `02:15` daily (approximately 02:15 Dublin in winter and 03:15 in summer). It syncs every open/scoring matchday plus the next three upcoming matchdays.
-- `/api/cron/sync-results` every five minutes. It makes no Who You Got request unless a matchday is scoring, has a live/paused fixture, has an unfinished local result near kickoff (30 minutes ahead through four hours behind), or has a finished fixture whose matchday is not completed.
-- `/api/cron/reconcile-results` at `05:30` daily. It re-syncs and recalculates matchdays with fixtures from the previous two complete UTC calendar days, plus any matchday still scoring. This is the correction safety net for late provider changes.
+- The external scheduler calls `/api/cron/sync-results` every five minutes. It checks matchdays that are scoring, have a live/paused fixture, have any fixture near kickoff (30 minutes ahead through four hours behind), have a finished fixture whose matchday is not completed, or have pending recovery work. Completed fixtures are also eligible inside the kickoff window.
+- `/api/cron/reconcile-results` at `05:30` daily. It checks matchdays with fixtures from the previous two complete UTC calendar days, plus any matchday still scoring. Clean unchanged fingerprints skip application/scoring; changes and pending recovery are processed. This is the correction safety net for late provider changes.
 
 Required production environment variables:
 
@@ -1616,6 +1616,89 @@ WHO_YOU_GOT_API_KEY
 NEXT_PUBLIC_SUPABASE_URL
 SUPABASE_SECRET_KEY
 ```
+
+#### Pick 8 content fingerprints and recovery
+
+The additive migration `supabase/migrations/20260913000000_pick8_sync_fingerprints.sql`
+must be applied before releasing the fingerprint-aware application. Writing this
+migration locally does not apply it to a database. Existing matchdays bootstrap
+their fingerprint on the next normal result sync; the migration does not enqueue
+a historical season replay. Existing seasons receive one pending competition
+refresh so the lifecycle checkpoint can be initialized.
+
+Each successfully fetched, validated WhoYouGot fixture list is hashed using a
+versioned canonical representation. The representation includes season/matchday,
+fixture membership and external IDs, team IDs/names/crests, normalized kickoff,
+status and scores. Fixture ordering and volatile upstream timestamps do not
+affect the hash. `cache: "no-store"` and the ten-second provider timeout remain
+unchanged; this does not require WhoYouGot to support ETags or change tokens.
+
+`matchdays.applied_fixture_fingerprint` acknowledges a fully applied and scored
+representation. A matching fingerprint only skips work when `sync_pending` and
+`scoring_pending` are false and the fixture-derived lifecycle/deadline still
+matches local state. The fast path records `last_upstream_check_at` and performs
+no fixture reread, removal check, fixture write or scoring operation. Cron skips
+competition refresh too unless its independent recovery/time checkpoint is due.
+
+`fixtures.last_synced_at` now records an actual provider fixture insertion/update,
+not every successful upstream check. Use `matchdays.last_upstream_check_at` for
+check freshness. The legacy external-fixture workflow is separate and retains
+its previous timestamp behavior. Pick 8 eligibility, scoring and deadline logic
+do not depend on advancing unchanged fixture timestamps; provider/manual
+isolation checks still apply to actual fixture writes.
+
+Recovery rules:
+
+- Fixture membership/content changes, entry submission/Total Goals changes and
+  selection input changes set durable pending flags and increment revisions.
+  Matchday lifecycle/deadline/mode changes invalidate the sync checkpoint too.
+  Timestamp-only fixture updates and the scorer's derived output writes do not
+  invalidate scoring inputs.
+- Scoring marks itself pending before reading inputs. It clears that flag only
+  after all writes succeed and the input revision still matches. Failures retain
+  pending work, including failed admin-triggered scoring.
+- After scoring, sync snapshots the local revision, verifies the complete local
+  fixture content and lifecycle, then conditionally acknowledges the fingerprint.
+  Failed application/validation/acknowledgement leaves recovery pending. A
+  fixture-only daily/admin sync leaves scoring pending for the result worker and
+  does not advance the applied fingerprint.
+- Pending provider application or scoring work is eligible for result recovery
+  even outside the normal kickoff window. This is a recovery exception, not a
+  new polling cadence. The external five-minute schedule and normal eligibility
+  windows are unchanged. Daily reconciliation now honors a clean fingerprint
+  instead of forcing an identical full recalculation.
+- Competition refresh has its own season revision, pending flag and next
+  upcoming kickoff boundary. Failures remain retryable even if the fixture hash
+  is already acknowledged. Explicit admin competition refresh remains available.
+- Scoring remains sequential REST writes, not a transaction. Revision guards
+  detect racing input changes and leave work for retry; they do not make partial
+  score writes invisible or replace a distributed worker lock. The existing
+  process-local in-flight guard remains best effort.
+
+For one clean selected matchday, the result route currently makes six Supabase
+requests (three discovery reads, two sync identity/state reads and one successful
+check update), plus one WhoYouGot request. This replaces approximately 100
+Supabase requests plus one WhoYouGot request for the previous unchanged-scoring
+case with ten submitted entries/seventy fixture selections. An active-season
+invocation with no eligible matchdays and no competition work uses three reads.
+Changed and recovery paths intentionally retain full scoring and additionally
+validate/acknowledge recovery state.
+
+Structured `pick8-sync-stage` events share a `runId` across a cron invocation and
+report `discovery`, `who_you_got`, `fixture_application`, `scoring`,
+`competition_refresh` and `total` durations, success/failure, or an explicit skip
+reason. Fixture verification/acknowledgement uses an additional
+`fixture_application` event with `phase: "verify_and_acknowledge"`. Discovery and
+total events can be nested (route and matchday scope); do not sum nested totals.
+Existing `pick8-cron` matchday counters now also include `fastPath`. Compare
+production p50/p95 upstream, scoring and overall time separately; request-count
+savings are verified locally, not a production runtime benchmark.
+
+`npm test` includes fingerprint and orchestration failure-injection tests. The
+optional `tests/pick8-sync-migration.mjs` suite executes the migration with a
+temporary PGlite installation, a minimal schema and the existing manual/deadline
+triggers. Run it with `PICK8_PGLITE_MODULE` pointing to that installation's
+`dist/index.js`. It does not connect to Supabase or apply project data repairs.
 
 All three cron endpoints require exactly `Authorization: Bearer <CRON_SECRET>`. They do not accept query-string secrets. A missing header returns 401, an incorrect value returns 403, and a missing server configuration fails closed.
 

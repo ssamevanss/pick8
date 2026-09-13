@@ -1,5 +1,8 @@
 import "server-only";
 
+import { createSyncDiagnostics } from "@/utils/pick8-sync-diagnostics";
+import { competitionRefreshRequired } from "@/utils/pick8-sync-state";
+
 import { createAdminClient } from "@/utils/supabase/admin";
 
 const COMPETITION_RANGES = [
@@ -15,6 +18,7 @@ export type CompetitionRefreshSummary = {
   statusesUpdated: number;
   activeCompetition: string | null;
   refreshedAt: string;
+  skipped?: boolean;
 };
 
 function relevantMatchday(rows: Array<{ matchday_number: number; status: string; locks_at: string | null }>, now: number) {
@@ -23,15 +27,36 @@ function relevantMatchday(rows: Array<{ matchday_number: number; status: string;
 }
 
 /** Creates missing fixed ranges and reconciles statuses for one Pick8 season. */
-export async function refreshPick8Competitions(seasonId: string): Promise<CompetitionRefreshSummary> {
+export async function refreshPick8Competitions(seasonId: string, options: { ifNeeded?: boolean } = {}): Promise<CompetitionRefreshSummary> {
+  const diagnostics = createSyncDiagnostics({ operation: "refresh-competitions", seasonId });
+  return diagnostics.stage("competition_refresh", async () => {
+    try {
+      return await refreshCompetitionsInternal(seasonId, options);
+    } catch (error) {
+      const { error: recoveryError } = await createAdminClient().from("seasons")
+        .update({ competition_refresh_pending: true }).eq("id", seasonId);
+      if (recoveryError) console.error("Could not retain competition recovery state", recoveryError.message);
+      throw error;
+    }
+  });
+}
+
+async function refreshCompetitionsInternal(seasonId: string, options: { ifNeeded?: boolean }): Promise<CompetitionRefreshSummary> {
   const supabase = createAdminClient();
   const refreshedAt = new Date().toISOString();
-  const [{ data: season, error: seasonError }, { data: existingRows, error: competitionError }, { data: matchdayRows, error: matchdayError }] = await Promise.all([
-    supabase.from("seasons").select("id, name, provider_season").eq("id", seasonId).single(),
+  const { data: season, error: seasonError } = await supabase.from("seasons")
+    .select("id, name, provider_season, competition_refresh_pending, competition_revision, competition_refresh_after")
+    .eq("id", seasonId).single();
+  if (seasonError || !season) throw new Error(`Loading competition season failed: ${seasonError?.message ?? "Season not found."}`);
+  if (options.ifNeeded && !competitionRefreshRequired(season)) {
+    return { season: season.name, inserted: 0, statusesUpdated: 0, activeCompetition: null, refreshedAt, skipped: true };
+  }
+  const { error: pendingError } = await supabase.from("seasons").update({ competition_refresh_pending: true }).eq("id", seasonId);
+  if (pendingError) throw new Error(`Marking competition refresh pending failed: ${pendingError.message}`);
+  const [{ data: existingRows, error: competitionError }, { data: matchdayRows, error: matchdayError }] = await Promise.all([
     supabase.from("competitions").select("id, name, start_matchday, end_matchday, status").eq("season_id", seasonId).order("start_matchday"),
     supabase.from("matchdays").select("matchday_number, status, locks_at").eq("season_id", seasonId).order("matchday_number"),
   ]);
-  if (seasonError || !season) throw new Error(`Loading competition season failed: ${seasonError?.message ?? "Season not found."}`);
   if (competitionError) throw new Error(`Loading competitions failed: ${competitionError.message}`);
   if (matchdayError) throw new Error(`Loading competition matchdays failed: ${matchdayError.message}`);
 
@@ -52,7 +77,8 @@ export async function refreshPick8Competitions(seasonId: string): Promise<Compet
   const { data: competitions, error: reloadError } = await supabase.from("competitions").select("id, name, start_matchday, end_matchday, status").eq("season_id", seasonId).order("start_matchday");
   if (reloadError) throw new Error(`Reloading competitions failed: ${reloadError.message}`);
   const matchdays = matchdayRows ?? [];
-  const current = relevantMatchday(matchdays, Date.now());
+  const evaluatedAt = Date.now();
+  const current = relevantMatchday(matchdays, evaluatedAt);
   let statusesUpdated = 0;
   let activeCompetition: string | null = null;
   for (const competition of competitions ?? []) {
@@ -68,5 +94,13 @@ export async function refreshPick8Competitions(seasonId: string): Promise<Compet
       statusesUpdated += 1;
     }
   }
+  const nextBoundary = matchdays.filter((row) => row.status === "upcoming" && row.locks_at && Date.parse(row.locks_at) > evaluatedAt)
+    .map((row) => row.locks_at!).sort()[0] ?? null;
+  const { data: acknowledged, error: acknowledgementError } = await supabase.from("seasons")
+    .update({ competition_refresh_pending: false, competition_refresh_after: nextBoundary })
+    .eq("id", seasonId).eq("competition_revision", season.competition_revision)
+    .select("id").maybeSingle();
+  if (acknowledgementError) throw new Error(`Acknowledging competition refresh failed: ${acknowledgementError.message}`);
+  if (!acknowledged) throw new Error("Competition inputs changed during refresh; retry required.");
   return { season: season.name, inserted, statusesUpdated, activeCompetition, refreshedAt };
 }

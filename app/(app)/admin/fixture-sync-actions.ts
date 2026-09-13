@@ -34,7 +34,7 @@ export async function syncFixturesAction(
     const admin = createAdminClient();
     const { data: syncedSeason, error: seasonError } = await admin.from("seasons").select("id").eq("provider_season", summary.season).single();
     if (seasonError || !syncedSeason) throw new Error("The synced season could not be loaded for competition refresh.");
-    await refreshPick8Competitions(syncedSeason.id);
+    await refreshPick8Competitions(syncedSeason.id, { ifNeeded: true });
     return {
       ok: true,
       message: `Season ${summary.season}/${String((summary.season + 1) % 100).padStart(2, "0")} matchday ${summary.matchday} synced.`,
