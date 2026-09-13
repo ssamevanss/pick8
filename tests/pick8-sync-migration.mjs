@@ -118,4 +118,21 @@ await test('entry deletion and fixture deletion retain recovery work', async () 
   await clean(); await db.exec(`delete from public.fixtures where id='${fixture}';`);
   assert.equal((await db.query('select sync_pending from public.matchdays where id=$1', [otherMatchday])).rows[0].sync_pending, true);
 });
+await test('competition checkpoint commit is readable and a stale acknowledgement cannot clear newer work', async () => {
+  await db.exec(`update public.seasons set competition_refresh_pending=true where id='${season}'`);
+  const before = (await db.query('select * from public.seasons where id=$1', [season])).rows[0];
+  // Ignore the write response as though the gateway lost it after commit.
+  await db.query('update public.seasons set competition_refresh_pending=false, competition_refresh_after=$3 where id=$1 and competition_revision=$2',
+    [season, before.competition_revision, '2026-09-14T12:00:00Z']);
+  const committed = (await db.query('select * from public.seasons where id=$1', [season])).rows[0];
+  assert.equal(committed.competition_revision, before.competition_revision);
+  assert.equal(committed.competition_refresh_pending, false);
+  assert.equal(new Date(committed.competition_refresh_after).toISOString(), '2026-09-14T12:00:00.000Z');
+  await db.exec(`update public.matchdays set status='open' where id='${matchday}'`);
+  const stale = await db.query('update public.seasons set competition_refresh_pending=false where id=$1 and competition_revision=$2 returning id', [season, before.competition_revision]);
+  assert.equal(stale.rows.length, 0);
+  const newer = (await db.query('select * from public.seasons where id=$1', [season])).rows[0];
+  assert.equal(newer.competition_refresh_pending, true);
+  assert.ok(newer.competition_revision > before.competition_revision);
+});
 await db.close();

@@ -1,3 +1,4 @@
+import { cronRead, currentCronReadContext, isAmbiguousWriteResult, structuredCronError } from "@/utils/supabase/cron-read";
 import "server-only";
 
 import { matchdayContentFingerprint, canSkipMatchdayApplication } from "@/utils/pick8-sync-state";
@@ -313,7 +314,7 @@ async function fetchFixtures(season: number, matchday: number) {
     response = await fetch(url, {
       headers: { Authorization: `Bearer ${apiKey}` },
       cache: "no-store",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), ...(currentCronReadContext() ? [currentCronReadContext()!.signal] : [])]),
     });
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "TimeoutError";
@@ -400,11 +401,11 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
   const syncedAt = new Date().toISOString();
 
   const { seasonId, existingMatchday } = await diagnostics.stage("discovery", async () => {
-    const { data: existingSeason, error: seasonReadError } = await supabase
+    const { data: existingSeason, error: seasonReadError } = await cronRead("who-you-got-fixture-sync.seasons", () => supabase
       .from("seasons")
       .select("id, name, is_active")
       .eq("provider_season", input.season)
-      .maybeSingle();
+      .maybeSingle());
     if (seasonReadError) throw databaseError("Reading season", seasonReadError.message);
 
     let seasonId = existingSeason?.id;
@@ -417,11 +418,11 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
         if (error) throw databaseError("Updating season", error.message);
       }
     } else {
-      const { data: activeSeason, error: activeSeasonError } = await supabase
+      const { data: activeSeason, error: activeSeasonError } = await cronRead("who-you-got-fixture-sync.seasons", () => supabase
         .from("seasons")
         .select("id")
         .eq("is_active", true)
-        .maybeSingle();
+        .maybeSingle());
       if (activeSeasonError) throw databaseError("Reading active season", activeSeasonError.message);
 
       const { data, error } = await supabase
@@ -442,12 +443,12 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
 
     if (!seasonId) throw databaseError("Upserting season", "No season ID was returned.");
 
-    const { data: existingMatchday, error: matchdayReadError } = await supabase
+    const { data: existingMatchday, error: matchdayReadError } = await cronRead("who-you-got-fixture-sync.matchdays", () => supabase
       .from("matchdays")
       .select("id, status, locks_at, fixture_sync_mode, sync_pending, scoring_pending, sync_revision, applied_fixture_fingerprint")
       .eq("season_id", seasonId)
       .eq("matchday_number", input.matchday)
-      .maybeSingle();
+      .maybeSingle());
     if (matchdayReadError) throw databaseError("Reading matchday", matchdayReadError.message);
     if (
       existingMatchday &&
@@ -521,20 +522,20 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
     if (matchdayError) throw databaseError("Upserting matchday", matchdayError.message);
 
     const externalIds = fixtures.map((fixture) => fixture.externalFixtureId);
-    const { data: existingRows, error: fixtureReadError } = await supabase
+    const { data: existingRows, error: fixtureReadError } = await cronRead("who-you-got-fixture-sync.fixtures", () => supabase
       .from("fixtures")
       .select(
         "id, external_fixture_id, matchday_id, home_team_id, away_team_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score",
       )
-      .in("external_fixture_id", externalIds);
+      .in("external_fixture_id", externalIds));
     if (fixtureReadError) throw databaseError("Reading fixtures", fixtureReadError.message);
     const existingById = new Map(
       (existingRows ?? []).map((fixture) => [fixture.external_fixture_id, fixture]),
     );
-    const { data: existingMatchdayRows, error: matchdayFixtureReadError } = await supabase
+    const { data: existingMatchdayRows, error: matchdayFixtureReadError } = await cronRead("who-you-got-fixture-sync.fixtures", () => supabase
       .from("fixtures")
       .select("id, external_fixture_id, matchday_id, home_team_id, away_team_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score")
-      .eq("matchday_id", matchday.id);
+      .eq("matchday_id", matchday.id));
     if (matchdayFixtureReadError) {
       throw databaseError("Reading matchday fixtures", matchdayFixtureReadError.message);
     }
@@ -645,10 +646,10 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
         .eq("id", fixture.id);
       if (error) throw databaseError("Updating fixture", error.message);
     }
-    const { data: matchdayFixtures, error: missingReadError } = await supabase
+    const { data: matchdayFixtures, error: missingReadError } = await cronRead("who-you-got-fixture-sync.fixtures", () => supabase
       .from("fixtures")
       .select("external_fixture_id")
-      .eq("matchday_id", matchday.id);
+      .eq("matchday_id", matchday.id));
     if (missingReadError) throw databaseError("Checking missing fixtures", missingReadError.message);
     const receivedIds = new Set(externalIds);
     const staleExternalIds = (matchdayFixtures ?? [])
@@ -659,10 +660,10 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
     let invalidatedEntries = 0;
     const potentialRemovals: string[] = [];
     if (staleExternalIds.length) {
-      const { data: referencedRows, error: referenceError } = await supabase
+      const { data: referencedRows, error: referenceError } = await cronRead("who-you-got-fixture-sync.entry_selections", () => supabase
         .from("entry_selections")
         .select("entry_id, fixture_id, fixtures!inner(external_fixture_id)")
-        .in("fixtures.external_fixture_id", staleExternalIds);
+        .in("fixtures.external_fixture_id", staleExternalIds));
       if (referenceError) throw databaseError("Checking stale fixture selections", referenceError.message);
       const affectedEntryIds = [
         ...new Set((referencedRows ?? []).map((row) => row.entry_id)),
@@ -730,13 +731,13 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
     await createSyncDiagnostics({ phase: "verify_and_acknowledge" }).stage("fixture_application", async () => {
       // Snapshot the revision BEFORE reading back applied content. The CAS below
       // cannot acknowledge a local mutation racing with that validation.
-      const { data: state, error: stateError } = await supabase.from("matchdays")
+      const { data: state, error: stateError } = await cronRead("who-you-got-fixture-sync.matchdays", () => supabase.from("matchdays")
         .select("sync_revision, scoring_pending, status, locks_at, fixture_sync_mode")
-        .eq("id", matchdayId).single();
+        .eq("id", matchdayId).single());
       if (stateError) throw databaseError("Reading applied state", stateError.message);
-      const { data: rows, error: readError } = await supabase.from("fixtures")
+      const { data: rows, error: readError } = await cronRead("who-you-got-fixture-sync.fixtures", () => supabase.from("fixtures")
         .select("external_fixture_id, home_team_id, away_team_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score")
-        .eq("matchday_id", matchdayId);
+        .eq("matchday_id", matchdayId));
       if (readError) throw databaseError("Verifying applied fixtures", readError.message);
       const localFingerprint = matchdayContentFingerprint(input.season, input.matchday, (rows ?? []).map((row) => ({
         externalFixtureId: row.external_fixture_id, homeTeamId: row.home_team_id, awayTeamId: row.away_team_id,
@@ -748,11 +749,22 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
         state.status !== scoring.matchdayStatus || !state.locks_at || !representSameKickoff(state.locks_at, locksAt)) {
         throw databaseError("Verifying applied fixtures", "Local state changed during sync; recovery remains pending.");
       }
-      const { data: acknowledged, error } = await supabase.from("matchdays")
+      const acknowledgement = await supabase.from("matchdays")
         .update({ applied_fixture_fingerprint: fingerprint, sync_pending: false })
         .eq("id", matchdayId).eq("sync_revision", state.sync_revision).eq("scoring_pending", false)
         .select("id").maybeSingle();
-      if (error) throw databaseError("Acknowledging applied fingerprint", error.message);
+      let acknowledged = Boolean(acknowledgement.data);
+      if (acknowledgement.error) {
+        console.error(JSON.stringify({ service: "pick8-sync-acknowledgement", operation: "fixture_fingerprint", ...structuredCronError(acknowledgement) }));
+        if (isAmbiguousWriteResult(acknowledgement)) {
+          const { data, error } = await cronRead("sync.fingerprint_acknowledgement_readback", () => supabase.from("matchdays")
+            .select("sync_revision, applied_fixture_fingerprint, sync_pending, scoring_pending")
+            .eq("id", matchdayId).single());
+          acknowledged = !error && !!data && data.sync_revision === state.sync_revision &&
+            data.applied_fixture_fingerprint === fingerprint && !data.sync_pending && !data.scoring_pending;
+        }
+        if (!acknowledged) throw databaseError("Acknowledging applied fingerprint", acknowledgement.error.message);
+      }
       if (!acknowledged) throw databaseError("Acknowledging applied fingerprint", "Local state changed during sync; retry required.");
     });
   }

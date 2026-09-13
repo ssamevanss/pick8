@@ -1,3 +1,4 @@
+import { cronRead, isAmbiguousWriteResult, structuredCronError } from "@/utils/supabase/cron-read";
 import "server-only";
 
 import { createSyncDiagnostics } from "@/utils/pick8-sync-diagnostics";
@@ -177,19 +178,19 @@ async function recalculateMatchdayScoresInternal({
 }): Promise<ScoreRecalculationSummary> {
   const supabase = createAdminClient();
   const recalculatedAt = new Date().toISOString();
-  const { data: matchday, error: matchdayError } = await supabase
+  const { data: matchday, error: matchdayError } = await cronRead("pick8-scoring.matchdays", () => supabase
     .from("matchdays")
     .select("id, season_id, matchday_number, status, fixture_sync_mode, is_accelerated_test, scoring_revision")
     .eq("id", matchdayId)
     .eq("season_id", seasonId)
-    .maybeSingle();
+    .maybeSingle());
   if (matchdayError) databaseFailure("Reading matchday", matchdayError.message);
   if (!matchday) throw new Error("The selected matchday does not belong to that season.");
 
-  const { data: fixtureRows, error: fixtureError } = await supabase
+  const { data: fixtureRows, error: fixtureError } = await cronRead("pick8-scoring.fixtures", () => supabase
     .from("fixtures")
     .select("id, kickoff_at, status, home_score, away_score")
-    .eq("matchday_id", matchdayId);
+    .eq("matchday_id", matchdayId));
   if (fixtureError) databaseFailure("Reading fixtures", fixtureError.message);
   const fixtures = (fixtureRows ?? []) as ScoringFixture[];
   const fixturesById = new Map(fixtures.map((fixture) => [fixture.id, fixture]));
@@ -208,11 +209,11 @@ async function recalculateMatchdayScoresInternal({
     throw new Error("A matchday cannot be completed before every configured kickoff.");
   }
 
-  const { data: entries, error: entriesError } = await supabase
+  const { data: entries, error: entriesError } = await cronRead("pick8-scoring.entries", () => supabase
     .from("entries")
     .select("id, total_goals_prediction")
     .eq("matchday_id", matchdayId)
-    .not("submitted_at", "is", null);
+    .not("submitted_at", "is", null));
   if (entriesError) databaseFailure("Reading entries", entriesError.message);
   const entryRows = entries ?? [];
 
@@ -226,10 +227,10 @@ async function recalculateMatchdayScoresInternal({
   if (draftResetError) databaseFailure("Resetting draft scores", draftResetError.message);
   const entryIds = entryRows.map((entry) => entry.id);
   const { data: selections, error: selectionsError } = entryIds.length
-    ? await supabase
+    ? await cronRead("pick8-scoring.entry_selections", () => supabase
         .from("entry_selections")
         .select("id, entry_id, category, fixture_id, selected_team_side")
-        .in("entry_id", entryIds)
+        .in("entry_id", entryIds))
     : { data: [], error: null };
   if (selectionsError) databaseFailure("Reading selections", selectionsError.message);
 
@@ -299,14 +300,24 @@ async function recalculateMatchdayScoresInternal({
   if (!statusError && !statusRow) throw new Error("Matchday lifecycle changed during scoring; retry required.");
   if (statusError) databaseFailure("Updating matchday status", statusError.message);
 
-  const { data: acknowledged, error: acknowledgementError } = await supabase
+  const acknowledgement = await supabase
     .from("matchdays")
     .update({ scoring_pending: false })
     .eq("id", matchdayId)
     .eq("scoring_revision", matchday.scoring_revision)
     .select("id")
     .maybeSingle();
-  if (acknowledgementError) databaseFailure("Acknowledging scoring", acknowledgementError.message);
+  let acknowledged = Boolean(acknowledgement.data);
+  if (acknowledgement.error) {
+    console.error(JSON.stringify({ service: "pick8-sync-acknowledgement", operation: "scoring", ...structuredCronError(acknowledgement) }));
+    if (isAmbiguousWriteResult(acknowledgement)) {
+      const { data, error } = await cronRead("scoring.acknowledgement_readback", () => supabase.from("matchdays")
+        .select("scoring_revision, scoring_pending, status").eq("id", matchdayId).single());
+      acknowledged = !error && !!data && data.scoring_revision === matchday.scoring_revision &&
+        !data.scoring_pending && data.status === matchdayStatus;
+    }
+    if (!acknowledged) databaseFailure("Acknowledging scoring", acknowledgement.error.message);
+  }
   if (!acknowledged) throw new Error("Scoring inputs changed during calculation; retry required.");
 
   return {
@@ -337,16 +348,8 @@ export async function recalculateMatchdayScores(input: {
     const { error } = await supabase.from("matchdays").update({ scoring_pending: true })
       .eq("id", input.matchdayId).eq("season_id", input.seasonId);
     if (error) databaseFailure("Marking scoring pending", error.message);
-    try {
-      return await recalculateMatchdayScoresInternal(input);
-    } catch (error) {
-      // An overlapping successful scorer may have cleared the flag since we
-      // started. Reassert it after any failure, including a revision conflict.
-      const { error: recoveryError } = await supabase.from("matchdays")
-        .update({ scoring_pending: true, sync_pending: true })
-        .eq("id", input.matchdayId).eq("season_id", input.seasonId);
-      if (recoveryError) console.error("Could not retain scoring recovery state", recoveryError.message);
-      throw error;
-    }
+    // Pending was persisted before work. A catch-block write could undo an
+    // acknowledged completion from this invocation or an overlapping scorer.
+    return recalculateMatchdayScoresInternal(input);
   });
 }

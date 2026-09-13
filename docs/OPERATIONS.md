@@ -1762,3 +1762,35 @@ Mitigations:
 - Run lint/build before deploy
 - Keep docs updated
 - Avoid risky updates during live gameweeks
+
+#### Bounded result-cron Supabase reads
+
+`/api/cron/sync-results` opts into one async-local read context across discovery,
+provider sync, application verification, scoring and competition refresh. Other
+cron routes and interactive/admin callers retain their existing read behavior.
+Each labelled table GET/HEAD supplies a fresh PostgREST builder and disables SDK
+retries. Reads have at most two attempts, a six-second attempt timeout and one
+25-second invocation deadline. Queueing and jittered backoff consume that same
+budget; at most three reads run concurrently and at most eight retries are allowed
+across the invocation. Only 502/503/504, recognized network failures and attempt
+timeouts are retried. Deterministic SQL/permission errors, other HTTP errors,
+mutations and RPC calls are excluded. `cron_read` events retain HTTP status and
+code/message/details/hint (bounded in length), attempt, queue/request duration,
+remaining budget and the reason retries stopped.
+
+The provider request and admin-client transport share the remaining invocation
+deadline. Writes are never generically retried; a timeout does not establish
+whether they committed. Competition, scoring and applied-fingerprint completion
+acknowledgements retain their revision guards and use bounded read-back after an
+ambiguous response. Matching revision and completion state proves success; the
+competition checkpoint also matches its next time boundary. A newer revision is
+never cleared by recovery. An unresolved response leaves the pre-existing pending
+state or an already committed checkpoint for the next invocation to discover.
+Catch blocks do not unconditionally set pending again after a possible completion.
+This preserves the six-database-request unchanged path after acknowledgement.
+
+The deadline is a work budget, not a transaction or a distributed lock. Partial
+writes remain possible and the existing dirty-state recovery remains necessary.
+A scoring workload exceeding the budget must be measured before increasing it or
+moving that work into smaller durable units. No schema change is required for
+this read-resilience rollout.

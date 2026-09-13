@@ -1,3 +1,4 @@
+import { currentCronReadContext, cronDeadlineFetch } from "@/utils/supabase/cron-read";
 import "server-only";
 
 import { createClient } from "@supabase/supabase-js";
@@ -19,7 +20,9 @@ export function createAdminClient() {
     throw new Error("Missing SUPABASE_SECRET_KEY");
   }
 
+  const cronContext = currentCronReadContext();
   return createClient<Database>(supabaseUrl, secretKey, {
+    ...(cronContext ? { global: { fetch: cronDeadlineFetch(cronContext) } } : {}),
     auth: {
       autoRefreshToken: false,
       persistSession: false,

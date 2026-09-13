@@ -1,3 +1,4 @@
+import { cronRead, withCronReadContext } from "@/utils/supabase/cron-read";
 import "server-only";
 
 import { createSyncDiagnostics } from "@/utils/pick8-sync-diagnostics";
@@ -63,24 +64,24 @@ function logRun(fields: Record<string, unknown>) {
 
 async function loadActiveSeason() {
   const supabase = createAdminClient();
-  const { data, error } = await supabase
+  const { data, error } = await cronRead("pick8-cron-automation.seasons", () => supabase
     .from("seasons")
     .select("id, name, provider_season, competition_refresh_pending, competition_refresh_after")
     .eq("is_active", true)
     .order("provider_season", { ascending: false })
     .limit(1)
-    .maybeSingle();
+    .maybeSingle());
   if (error) throw new Error(`Loading the active season failed: ${error.message}`);
   return (data ?? null) as Season | null;
 }
 
 async function loadMatchdays(seasonId: string) {
   const supabase = createAdminClient();
-  const { data, error } = await supabase
+  const { data, error } = await cronRead("pick8-cron-automation.matchdays", () => supabase
     .from("matchdays")
     .select("id, matchday_number, status, locks_at, fixture_sync_mode, sync_pending, scoring_pending")
     .eq("season_id", seasonId)
-    .order("matchday_number", { ascending: true });
+    .order("matchday_number", { ascending: true }));
   if (error) throw new Error(`Loading matchdays failed: ${error.message}`);
   return (data ?? []) as Matchday[];
 }
@@ -88,10 +89,10 @@ async function loadMatchdays(seasonId: string) {
 async function loadFixtures(matchdayIds: string[]) {
   if (matchdayIds.length === 0) return [];
   const supabase = createAdminClient();
-  const { data, error } = await supabase
+  const { data, error } = await cronRead("pick8-cron-automation.fixtures", () => supabase
     .from("fixtures")
     .select("matchday_id, kickoff_at, status")
-    .in("matchday_id", matchdayIds);
+    .in("matchday_id", matchdayIds));
   if (error) throw new Error(`Loading fixtures failed: ${error.message}`);
   return (data ?? []) as Fixture[];
 }
@@ -389,7 +390,7 @@ export async function runDailyFixtureSync() {
 
 export async function runConditionalResultSync() {
   const diagnostics = createSyncDiagnostics({ operation: "runConditionalResultSync" });
-  return diagnostics.stage("total", () => runConditionalResultSyncInternal());
+  return diagnostics.stage("total", () => withCronReadContext(() => runConditionalResultSyncInternal()));
 }
 
 export async function runResultReconciliation() {

@@ -35,6 +35,7 @@ function harness() {
   const logs: Row[] = [];
   let upstreamCalls = 0;
   let fail: ((call: Call) => boolean) | undefined;
+  let ambiguous: ((call: Call) => boolean) | undefined;
   let before: ((call: Call) => void) | undefined;
   let upstream = providerPayload();
   function providerPayload() {
@@ -60,6 +61,10 @@ function harness() {
     let single = false;
     const filters: Array<(row: Row) => boolean> = [];
     const builder = {
+      get method() { return operation === "select" ? "GET" : "PATCH"; },
+      url: new URL(`https://example.test/rest/v1/${table}`),
+      retry(enabled: boolean) { assert.equal(enabled, false); return builder; },
+      abortSignal() { return builder; },
       select() { return builder; },
       update(value: Row) { operation = "update"; values = value; return builder; },
       insert(value: Row | Row[]) { operation = "insert"; values = value; return builder; },
@@ -95,6 +100,7 @@ function harness() {
           if (table === "fixtures" && rows.length) dirty();
         }
         const data = JSON.parse(JSON.stringify(single ? rows[0] ?? null : rows));
+        if (ambiguous?.(call)) return Promise.resolve(onfulfilled({ data: null, error: { message: "Gateway Timeout", code: "", details: "upstream", hint: "" }, status: 504 } as never));
         return Promise.resolve(onfulfilled({ data, error: null }));
       },
     };
@@ -118,7 +124,7 @@ function harness() {
       return nativeRequire(id);
     };
     runInNewContext(source, {
-      exports, module: loadedModule, require, Date: ClockDate, Map, Set, URL, AbortSignal, performance, crypto: globalThis.crypto,
+      exports, module: loadedModule, require, Date: ClockDate, Map, Set, URL, AbortSignal, performance, setTimeout, clearTimeout, crypto: globalThis.crypto,
       process: { env: { WHO_YOU_GOT_API_URL: "https://example.test", WHO_YOU_GOT_API_KEY: "test" } },
       console: { info: (value: string) => logs.push(JSON.parse(value)), error: () => {} },
       fetch: async () => { upstreamCalls++; return Response.json(upstream); },
@@ -132,6 +138,7 @@ function harness() {
     fixtureOnly: () => sync.syncWhoYouGotFixtures({ season: 2026, matchday: 5 }),
     cron: () => cron.runConditionalResultSync(), reconcile: () => cron.runResultReconciliation(),
     upstreamCalls: () => upstreamCalls,
+    ambiguous: (handler?: (call: Call) => boolean) => { ambiguous = handler; },
     fail: (handler?: (call: Call) => boolean) => { fail = handler; },
     before: (handler?: (call: Call) => void) => { before = handler; },
     upstream: () => upstream,
@@ -284,4 +291,84 @@ test("competition clock work runs even when the selected provider matchday is un
   assert.equal(result.successes[0].sync.fastPath, true);
   assert.equal(result.competitionRefresh?.statusesUpdated, 2);
   assert.equal(h.tables.seasons[0].competition_refresh_after, null);
+});
+
+const competitionAck = (call: Call) => call.table === "seasons" && call.values?.competition_refresh_pending === false;
+
+test("ambiguous competition acknowledgement reads back committed checkpoint without re-dirtying", async () => {
+  const h = harness(); await h.sync(); h.tables.seasons[0].competition_refresh_pending = true;
+  h.ambiguous(competitionAck);
+  const result = await h.cron();
+  assert.equal(result.ok, true);
+  assert.equal(h.tables.seasons[0].competition_refresh_pending, false);
+  assert.equal(h.calls.filter(competitionAck).length, 1);
+  h.calls.length = 0;
+  await h.cron();
+  assert.equal(h.calls.length, 6);
+});
+
+test("ambiguous acknowledgement preserves a newer revision and its pending work", async () => {
+  const h = harness(); await h.sync(); h.tables.seasons[0].competition_refresh_pending = true;
+  h.ambiguous((call) => {
+    if (!competitionAck(call)) return false;
+    h.tables.seasons[0].competition_revision = Number(h.tables.seasons[0].competition_revision) + 1;
+    h.tables.seasons[0].competition_refresh_pending = true;
+    return true;
+  });
+  await assert.rejects(h.cron(), /Acknowledging competition refresh failed/);
+  assert.equal(h.tables.seasons[0].competition_refresh_pending, true);
+  assert.equal(h.calls.filter(competitionAck).length, 1);
+  h.ambiguous(); await h.cron();
+  assert.equal(h.tables.seasons[0].competition_refresh_pending, false);
+});
+
+test("failed readback does not overwrite an overlapping worker's completion", async () => {
+  const h = harness(); await h.sync(); h.tables.seasons[0].competition_refresh_pending = true;
+  h.ambiguous((call) => {
+    if (!competitionAck(call)) return false;
+    h.tables.seasons[0].competition_revision = Number(h.tables.seasons[0].competition_revision) + 1;
+    h.tables.seasons[0].competition_refresh_pending = false;
+    h.fail((read) => read.table === "seasons" && read.operation === "select");
+    return true;
+  });
+  await assert.rejects(h.cron(), /Acknowledging competition refresh failed/);
+  assert.equal(h.tables.seasons[0].competition_refresh_pending, false);
+  assert.equal(h.calls.at(-1)?.operation, "select");
+});
+
+test("failed competition load cannot re-dirty another worker's successful refresh", async () => {
+  const h = harness(); await h.sync(); h.tables.seasons[0].competition_refresh_pending = true;
+  h.fail((call) => {
+    if (call.table !== "competitions") return false;
+    h.tables.seasons[0].competition_refresh_pending = false;
+    return true;
+  });
+  await assert.rejects(h.cron(), /Loading competitions failed/);
+  assert.equal(h.tables.seasons[0].competition_refresh_pending, false);
+});
+
+test("committed scoring and fingerprint acknowledgements survive lost responses", async () => {
+  const h = harness();
+  h.ambiguous((call) => call.table === "matchdays" &&
+    (call.values?.scoring_pending === false || typeof call.values?.applied_fixture_fingerprint === "string"));
+  const result = await h.cron();
+  assert.equal(result.ok, true);
+  assert.equal(h.tables.matchdays[0].sync_pending, false);
+  assert.equal(h.tables.matchdays[0].scoring_pending, false);
+  h.calls.length = 0;
+  await h.cron();
+  assert.equal(h.calls.length, 6);
+});
+
+test("older competition refresh cannot overwrite a newer clock checkpoint at the same revision", async () => {
+  const h = harness(); await h.sync(); h.tables.seasons[0].competition_refresh_pending = true;
+  h.before((call) => {
+    if (!competitionAck(call)) return;
+    h.tables.seasons[0].competition_refresh_after = "2026-09-15T12:00:00.000Z";
+    h.tables.seasons[0].competition_refresh_pending = false;
+    h.before();
+  });
+  await assert.rejects(h.cron(), /Competition inputs changed/);
+  assert.equal(h.tables.seasons[0].competition_refresh_after, "2026-09-15T12:00:00.000Z");
+  assert.equal(h.tables.seasons[0].competition_refresh_pending, false);
 });
