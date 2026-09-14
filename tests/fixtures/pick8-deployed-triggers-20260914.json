@@ -1,0 +1,135 @@
+{
+  "triggers": [
+    {
+      "name": "entries_invalidate_pick8_sync",
+      "table": "entries",
+      "definition": "CREATE TRIGGER entries_invalidate_pick8_sync AFTER INSERT OR DELETE OR UPDATE ON public.entries FOR EACH ROW EXECUTE FUNCTION invalidate_pick8_entry_sync()"
+    },
+    {
+      "name": "entries_protect_system_fields",
+      "table": "entries",
+      "definition": "CREATE TRIGGER entries_protect_system_fields BEFORE INSERT OR UPDATE ON public.entries FOR EACH ROW EXECUTE FUNCTION protect_entry_system_fields()"
+    },
+    {
+      "name": "entries_require_complete_submission",
+      "table": "entries",
+      "definition": "CREATE TRIGGER entries_require_complete_submission BEFORE INSERT OR UPDATE OF submitted_at, total_goals_prediction ON public.entries FOR EACH ROW EXECUTE FUNCTION require_complete_entry_submission()"
+    },
+    {
+      "name": "entries_set_updated_at",
+      "table": "entries",
+      "definition": "CREATE TRIGGER entries_set_updated_at BEFORE UPDATE ON public.entries FOR EACH ROW EXECUTE FUNCTION set_updated_at()"
+    },
+    {
+      "name": "validate_pick8_submission_trigger",
+      "table": "entries",
+      "definition": "CREATE TRIGGER validate_pick8_submission_trigger BEFORE UPDATE OF submitted_at ON public.entries FOR EACH ROW EXECUTE FUNCTION validate_pick8_submission()"
+    },
+    {
+      "name": "entry_selections_invalidate_pick8_sync",
+      "table": "entry_selections",
+      "definition": "CREATE TRIGGER entry_selections_invalidate_pick8_sync AFTER INSERT OR DELETE OR UPDATE ON public.entry_selections FOR EACH ROW EXECUTE FUNCTION invalidate_pick8_selection_sync()"
+    },
+    {
+      "name": "entry_selections_protect_scoring_fields",
+      "table": "entry_selections",
+      "definition": "CREATE TRIGGER entry_selections_protect_scoring_fields BEFORE INSERT OR UPDATE ON public.entry_selections FOR EACH ROW EXECUTE FUNCTION protect_selection_scoring_fields()"
+    },
+    {
+      "name": "entry_selections_protect_submitted_delete",
+      "table": "entry_selections",
+      "definition": "CREATE TRIGGER entry_selections_protect_submitted_delete BEFORE DELETE ON public.entry_selections FOR EACH ROW EXECUTE FUNCTION protect_submitted_entry_selections()"
+    },
+    {
+      "name": "entry_selections_require_valid_submitted",
+      "table": "entry_selections",
+      "definition": "CREATE CONSTRAINT TRIGGER entry_selections_require_valid_submitted AFTER INSERT OR DELETE OR UPDATE ON public.entry_selections DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION require_valid_submitted_entry_selections()"
+    },
+    {
+      "name": "entry_selections_set_updated_at",
+      "table": "entry_selections",
+      "definition": "CREATE TRIGGER entry_selections_set_updated_at BEFORE UPDATE ON public.entry_selections FOR EACH ROW EXECUTE FUNCTION set_updated_at()"
+    },
+    {
+      "name": "entry_selections_validate_matchday",
+      "table": "entry_selections",
+      "definition": "CREATE TRIGGER entry_selections_validate_matchday BEFORE INSERT OR UPDATE OF entry_id, fixture_id ON public.entry_selections FOR EACH ROW EXECUTE FUNCTION validate_entry_selection_matchday()"
+    },
+    {
+      "name": "fixtures_invalidate_pick8_sync",
+      "table": "fixtures",
+      "definition": "CREATE TRIGGER fixtures_invalidate_pick8_sync AFTER INSERT OR DELETE OR UPDATE ON public.fixtures FOR EACH ROW EXECUTE FUNCTION invalidate_pick8_fixture_sync()"
+    },
+    {
+      "name": "fixtures_prevent_provider_duplicates",
+      "table": "fixtures",
+      "definition": "CREATE TRIGGER fixtures_prevent_provider_duplicates BEFORE INSERT OR UPDATE OF matchday_id, home_team_name, away_team_name ON public.fixtures FOR EACH ROW EXECUTE FUNCTION prevent_provider_fixture_duplicates()"
+    },
+    {
+      "name": "fixtures_protect_manual_matchday_from_provider",
+      "table": "fixtures",
+      "definition": "CREATE TRIGGER fixtures_protect_manual_matchday_from_provider BEFORE INSERT OR UPDATE OF matchday_id, last_synced_at ON public.fixtures FOR EACH ROW EXECUTE FUNCTION protect_manual_matchday_from_provider_fixtures()"
+    },
+    {
+      "name": "fixtures_set_updated_at",
+      "table": "fixtures",
+      "definition": "CREATE TRIGGER fixtures_set_updated_at BEFORE UPDATE ON public.fixtures FOR EACH ROW EXECUTE FUNCTION set_updated_at()"
+    },
+    {
+      "name": "fixtures_sync_matchday_deadline",
+      "table": "fixtures",
+      "definition": "CREATE TRIGGER fixtures_sync_matchday_deadline AFTER INSERT OR DELETE OR UPDATE OF matchday_id, kickoff_at ON public.fixtures FOR EACH ROW EXECUTE FUNCTION sync_pick8_matchday_deadline_from_fixtures()"
+    },
+    {
+      "name": "matchdays_guard_sync_metadata",
+      "table": "matchdays",
+      "definition": "CREATE TRIGGER matchdays_guard_sync_metadata BEFORE INSERT OR UPDATE ON public.matchdays FOR EACH ROW EXECUTE FUNCTION protect_pick8_sync_metadata()"
+    },
+    {
+      "name": "matchdays_protect_fixture_sync_mode",
+      "table": "matchdays",
+      "definition": "CREATE TRIGGER matchdays_protect_fixture_sync_mode BEFORE UPDATE OF fixture_sync_mode ON public.matchdays FOR EACH ROW EXECUTE FUNCTION protect_matchday_fixture_sync_mode()"
+    },
+    {
+      "name": "matchdays_set_updated_at",
+      "table": "matchdays",
+      "definition": "CREATE TRIGGER matchdays_set_updated_at BEFORE UPDATE ON public.matchdays FOR EACH ROW EXECUTE FUNCTION set_updated_at()"
+    },
+    {
+      "name": "matchdays_track_sync_lifecycle",
+      "table": "matchdays",
+      "definition": "CREATE TRIGGER matchdays_track_sync_lifecycle BEFORE INSERT OR DELETE OR UPDATE ON public.matchdays FOR EACH ROW EXECUTE FUNCTION track_pick8_matchday_lifecycle()"
+    },
+    {
+      "name": "seasons_guard_sync_metadata",
+      "table": "seasons",
+      "definition": "CREATE TRIGGER seasons_guard_sync_metadata BEFORE INSERT OR UPDATE ON public.seasons FOR EACH ROW EXECUTE FUNCTION protect_pick8_sync_metadata()"
+    },
+    {
+      "name": "seasons_set_updated_at",
+      "table": "seasons",
+      "definition": "CREATE TRIGGER seasons_set_updated_at BEFORE UPDATE ON public.seasons FOR EACH ROW EXECUTE FUNCTION set_updated_at()"
+    }
+  ],
+  "functions": [
+    "CREATE OR REPLACE FUNCTION public.invalidate_pick8_entry_sync()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n  if tg_op = 'UPDATE' and row(new.matchday_id, new.submitted_at, new.total_goals_prediction)\n    is not distinct from row(old.matchday_id, old.submitted_at, old.total_goals_prediction) then return new; end if;\n  if tg_op <> 'INSERT' then perform public.invalidate_pick8_sync(old.matchday_id); end if;\n  if tg_op = 'INSERT' or (tg_op = 'UPDATE' and new.matchday_id is distinct from old.matchday_id) then\n    perform public.invalidate_pick8_sync(new.matchday_id);\n  end if;\n  return coalesce(new, old);\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.invalidate_pick8_fixture_sync()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n  if tg_op = 'UPDATE' and\n    (to_jsonb(new) - array['updated_at', 'created_at', 'last_synced_at']) is not distinct from\n    (to_jsonb(old) - array['updated_at', 'created_at', 'last_synced_at']) then return new; end if;\n  if tg_op <> 'INSERT' then perform public.invalidate_pick8_sync(old.matchday_id); end if;\n  if tg_op = 'INSERT' or (tg_op = 'UPDATE' and new.matchday_id is distinct from old.matchday_id) then\n    perform public.invalidate_pick8_sync(new.matchday_id);\n  end if;\n  return coalesce(new, old);\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.invalidate_pick8_selection_sync()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n  if tg_op = 'UPDATE' and row(new.entry_id, new.fixture_id, new.category, new.selected_team_side)\n    is not distinct from row(old.entry_id, old.fixture_id, old.category, old.selected_team_side) then return new; end if;\n  if tg_op <> 'INSERT' then\n    perform public.invalidate_pick8_sync(matchday_id) from public.entries where id = old.entry_id;\n  end if;\n  if tg_op = 'INSERT' or (tg_op = 'UPDATE' and new.entry_id is distinct from old.entry_id) then\n    perform public.invalidate_pick8_sync(matchday_id) from public.entries where id = new.entry_id;\n  end if;\n  return coalesce(new, old);\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.invalidate_pick8_sync(check_matchday_id uuid)\n RETURNS void\n LANGUAGE sql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  update public.matchdays set sync_pending = true, scoring_pending = true,\n    sync_revision = sync_revision + 1, scoring_revision = scoring_revision + 1\n  where id = check_matchday_id;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.prevent_provider_fixture_duplicates()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n  if exists (\n    select 1 from public.matchdays\n    where matchdays.id = new.matchday_id\n      and matchdays.fixture_sync_mode = 'provider'\n  ) and exists (\n    select 1 from public.fixtures\n    where fixtures.matchday_id = new.matchday_id\n      and fixtures.id <> new.id\n      and lower(btrim(fixtures.home_team_name)) = lower(btrim(new.home_team_name))\n      and lower(btrim(fixtures.away_team_name)) = lower(btrim(new.away_team_name))\n  ) then\n    raise exception 'Provider matchdays cannot contain duplicate logical fixtures';\n  end if;\n  return new;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.protect_entry_system_fields()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare\n  matchday_lock timestamptz;\nbegin\n  if auth.role() = 'service_role' or public.is_pick8_admin() then\n    return new;\n  end if;\n\n  if tg_op = 'INSERT' then\n    if new.user_id <> auth.uid() then\n      raise exception 'Entry user must match the authenticated user';\n    end if;\n    if new.locked_at is not null or new.calculated_score is not null\n      or new.score_calculated_at is not null then\n      raise exception 'Players cannot set entry lock or scoring fields';\n    end if;\n  else\n    if new.user_id is distinct from old.user_id\n      or new.matchday_id is distinct from old.matchday_id\n      or new.locked_at is distinct from old.locked_at\n      or new.calculated_score is distinct from old.calculated_score\n      or new.score_calculated_at is distinct from old.score_calculated_at then\n      raise exception 'Players cannot change entry ownership, lock, or scoring fields';\n    end if;\n    if old.submitted_at is not null and new.submitted_at is null then\n      raise exception 'Submitted entries cannot be changed back to drafts';\n    end if;\n    select locks_at into matchday_lock\n    from public.matchdays where id = old.matchday_id;\n    if matchday_lock is not null and now() >= matchday_lock\n      and (\n        new.total_goals_prediction is distinct from old.total_goals_prediction\n        or new.submitted_at is distinct from old.submitted_at\n      ) then\n      raise exception 'Submission and Total Goals are locked at the first kickoff';\n    end if;\n  end if;\n  return new;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.protect_manual_matchday_from_provider_fixtures()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n  if new.last_synced_at is not null and exists (\n    select 1\n    from public.matchdays\n    where matchdays.id = new.matchday_id\n      and matchdays.fixture_sync_mode = 'manual'\n  ) then\n    raise exception 'Provider-synced fixtures cannot be written to a manual matchday';\n  end if;\n  return new;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.protect_matchday_fixture_sync_mode()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n  if new.fixture_sync_mode is not distinct from old.fixture_sync_mode then\n    return new;\n  end if;\n  if not (auth.role() = 'service_role' or public.is_pick8_admin()) then\n    raise exception 'Only administrators can change fixture sync mode';\n  end if;\n  if old.status in ('locked', 'scoring', 'completed')\n    or exists (\n      select 1 from public.fixtures\n      where fixtures.matchday_id = old.id\n        and fixtures.kickoff_at <= now()\n    )\n    or exists (\n      select 1 from public.entries\n      where entries.matchday_id = old.id\n        and (\n          entries.submitted_at is not null\n          or entries.calculated_score is not null\n        )\n    )\n  then\n    raise exception 'Fixture sync mode cannot change after kickoff, submission, or scoring';\n  end if;\n  if new.fixture_sync_mode = 'provider' and exists (\n    select 1\n    from public.fixtures first_fixture\n    join public.fixtures duplicate_fixture\n      on duplicate_fixture.matchday_id = first_fixture.matchday_id\n     and duplicate_fixture.id > first_fixture.id\n     and lower(btrim(duplicate_fixture.home_team_name)) = lower(btrim(first_fixture.home_team_name))\n     and lower(btrim(duplicate_fixture.away_team_name)) = lower(btrim(first_fixture.away_team_name))\n    where first_fixture.matchday_id = old.id\n  ) then\n    raise exception 'Duplicate logical fixtures must be resolved before enabling provider sync';\n  end if;\n  return new;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.protect_pick8_sync_metadata()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\nbegin\n  if coalesce(auth.role(), '') not in ('', 'service_role') and pg_trigger_depth() = 1 then\n    if tg_table_name = 'matchdays' then\n      if tg_op = 'INSERT' then\n        if new.applied_fixture_fingerprint is not null or new.last_upstream_check_at is not null or new.sync_pending or new.scoring_pending or new.sync_revision <> 0 or new.scoring_revision <> 0 then\n          raise exception 'Sync metadata is server-managed';\n        end if;\n      elsif row(new.applied_fixture_fingerprint, new.last_upstream_check_at, new.sync_pending, new.scoring_pending, new.sync_revision, new.scoring_revision)\n        is distinct from row(old.applied_fixture_fingerprint, old.last_upstream_check_at, old.sync_pending, old.scoring_pending, old.sync_revision, old.scoring_revision) then\n        raise exception 'Sync metadata is server-managed';\n      end if;\n    else\n      if tg_op = 'INSERT' then\n        if not new.competition_refresh_pending or new.competition_revision <> 0 or new.competition_refresh_after is not null then raise exception 'Sync metadata is server-managed'; end if;\n      elsif row(new.competition_refresh_pending, new.competition_revision, new.competition_refresh_after)\n        is distinct from row(old.competition_refresh_pending, old.competition_revision, old.competition_refresh_after) then\n        raise exception 'Sync metadata is server-managed';\n      end if;\n    end if;\n  end if;\n  return new;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.protect_selection_scoring_fields()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n  if auth.role() = 'service_role' or public.is_pick8_admin() then\n    return new;\n  end if;\n\n  if tg_op = 'INSERT' then\n    if new.points_awarded is not null or new.is_correct is not null then\n      raise exception 'Players cannot set selection scoring fields';\n    end if;\n  elsif new.entry_id is distinct from old.entry_id\n    or new.points_awarded is distinct from old.points_awarded\n    or new.is_correct is distinct from old.is_correct\n  then\n    raise exception 'Players cannot change selection ownership or scoring fields';\n  end if;\n\n  return new;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.protect_submitted_entry_selections()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n  if auth.role() = 'service_role' or public.is_pick8_admin() then\n    return old;\n  end if;\n  if exists (\n    select 1 from public.entries\n    where entries.id = old.entry_id\n      and entries.submitted_at is not null\n  ) then\n    raise exception 'Submitted selections must be replaced, not deleted';\n  end if;\n  return old;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.refresh_pick8_matchday_deadline(check_matchday_id uuid)\n RETURNS void\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare\n  first_kickoff timestamptz;\nbegin\n  select min(fixtures.kickoff_at)\n  into first_kickoff\n  from public.fixtures\n  where fixtures.matchday_id = check_matchday_id;\n\n  update public.matchdays\n  set locks_at = first_kickoff,\n      updated_at = case\n        when locks_at is distinct from first_kickoff then now()\n        else updated_at\n      end\n  where id = check_matchday_id\n    and locks_at is distinct from first_kickoff;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.require_complete_entry_submission()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare\n  fixture_selection_count integer;\n  fixture_category_count integer;\nbegin\n  if new.submitted_at is null then\n    return new;\n  end if;\n\n  select count(*), count(distinct category)\n  into fixture_selection_count, fixture_category_count\n  from public.entry_selections\n  where entry_id = new.id\n    and category in (\n      'home_win',\n      'away_win',\n      'draw',\n      'team_win',\n      'team_lose',\n      'team_score',\n      'clean_sheet'\n    );\n\n  if new.total_goals_prediction is null\n    or fixture_selection_count <> 7\n    or fixture_category_count <> 7\n  then\n    raise exception using\n      errcode = '23514',\n      message = 'Entry must have all seven fixture selections and Total Goals before submission';\n  end if;\n\n  return new;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.require_valid_submitted_entry_selections()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare\n  target_entry_id uuid;\n  selection_count integer;\n  category_count integer;\nbegin\n  target_entry_id := case when tg_op = 'DELETE' then old.entry_id else new.entry_id end;\n\n  if not exists (\n    select 1 from public.entries\n    where entries.id = target_entry_id\n      and entries.submitted_at is not null\n  ) then\n    return null;\n  end if;\n\n  select count(*), count(distinct category)\n  into selection_count, category_count\n  from public.entry_selections\n  where entry_id = target_entry_id;\n\n  if selection_count <> 7 or category_count <> 7 then\n    raise exception using\n      errcode = '23514',\n      message = 'Submitted entry selections must contain each Pick8 category exactly once';\n  end if;\n\n  return null;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.set_updated_at()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\nbegin\n  new.updated_at := now();\n  return new;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.sync_pick8_matchday_deadline_from_fixtures()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n  if tg_op = 'DELETE' then\n    perform public.refresh_pick8_matchday_deadline(old.matchday_id);\n    return old;\n  end if;\n\n  perform public.refresh_pick8_matchday_deadline(new.matchday_id);\n  if tg_op = 'UPDATE' and old.matchday_id is distinct from new.matchday_id then\n    perform public.refresh_pick8_matchday_deadline(old.matchday_id);\n  end if;\n  return new;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.track_pick8_matchday_lifecycle()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nbegin\n  if tg_op = 'UPDATE' then\n    if row(new.season_id, new.matchday_number, new.fixture_sync_mode, new.is_accelerated_test, new.status, new.opens_at, new.locks_at)\n      is not distinct from row(old.season_id, old.matchday_number, old.fixture_sync_mode, old.is_accelerated_test, old.status, old.opens_at, old.locks_at) then return new; end if;\n    new.sync_pending := true;\n    new.sync_revision := old.sync_revision + 1;\n    -- Status is also a scoring output. Do not invalidate the scorer's own\n    -- input revision when it writes that output.\n    if row(new.season_id, new.matchday_number, new.fixture_sync_mode, new.is_accelerated_test, new.opens_at, new.locks_at)\n      is distinct from row(old.season_id, old.matchday_number, old.fixture_sync_mode, old.is_accelerated_test, old.opens_at, old.locks_at) then\n      new.scoring_pending := true;\n      new.scoring_revision := old.scoring_revision + 1;\n    end if;\n  end if;\n  if tg_op <> 'INSERT' then\n    update public.seasons set competition_refresh_pending = true, competition_revision = competition_revision + 1 where id = old.season_id;\n  end if;\n  if tg_op = 'INSERT' or (tg_op = 'UPDATE' and new.season_id is distinct from old.season_id) then\n    update public.seasons set competition_refresh_pending = true, competition_revision = competition_revision + 1 where id = new.season_id;\n  end if;\n  return coalesce(new, old);\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.validate_entry_selection_matchday()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare\n  entry_matchday_id uuid;\n  fixture_matchday_id uuid;\nbegin\n  select matchday_id\n  into entry_matchday_id\n  from public.entries\n  where id = new.entry_id;\n\n  select matchday_id\n  into fixture_matchday_id\n  from public.fixtures\n  where id = new.fixture_id;\n\n  if entry_matchday_id is null\n    or fixture_matchday_id is null\n    or entry_matchday_id <> fixture_matchday_id\n  then\n    raise exception 'Selection fixture must belong to the entry matchday';\n  end if;\n\n  return new;\nend;\n$function$\n",
+    "CREATE OR REPLACE FUNCTION public.validate_pick8_submission()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\ndeclare\n    v_selection_count integer;\nbegin\n    -- Only validate when an entry is being submitted.\n    -- Draft entries may remain incomplete.\n    if new.submitted_at is not null\n       and old.submitted_at is null then\n\n        select count(*)\n        into v_selection_count\n        from public.entry_selections\n        where entry_id = new.id;\n\n        if v_selection_count <> 7 then\n            raise exception\n                'Entry must contain all 7 fixture selections before submission. Current count: %.',\n                v_selection_count;\n        end if;\n\n        if new.total_goals_prediction is null then\n            raise exception\n                'Entry must include a Total Goals prediction before submission.';\n        end if;\n\n    end if;\n\n    return new;\nend;\n$function$\n"
+  ]
+}

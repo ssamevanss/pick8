@@ -238,6 +238,8 @@ export type Database = {
           sync_pending: boolean
           scoring_pending: boolean
           sync_revision: number
+          scored_revision: number | null
+          scoring_result: Json | null
           scoring_revision: number
           created_at: string
           fixture_sync_mode: string
@@ -256,6 +258,8 @@ export type Database = {
           sync_pending?: boolean
           scoring_pending?: boolean
           sync_revision?: number
+          scored_revision?: number | null
+          scoring_result?: Json | null
           scoring_revision?: number
           created_at?: string
           fixture_sync_mode?: string
@@ -274,6 +278,8 @@ export type Database = {
           sync_pending?: boolean
           scoring_pending?: boolean
           sync_revision?: number
+          scored_revision?: number | null
+          scoring_result?: Json | null
           scoring_revision?: number
           created_at?: string
           fixture_sync_mode?: string
@@ -376,6 +382,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      score_pick8_matchday: {
+        Args: { check_season_id: string; check_matchday_id: string; check_scoring_revision: number; allow_accelerated_test_completion?: boolean }
+        Returns: Json
+      }
       create_pick8_accelerated_test_matchday: {
         Args: { target_matchday_number: number }
         Returns: Json

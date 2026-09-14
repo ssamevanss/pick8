@@ -34,6 +34,7 @@ function harness() {
   const calls: Call[] = [];
   const logs: Row[] = [];
   let upstreamCalls = 0;
+  let rpcErrorCode: string | undefined;
   let fail: ((call: Call) => boolean) | undefined;
   let ambiguous: ((call: Call) => boolean) | undefined;
   let before: ((call: Call) => void) | undefined;
@@ -106,6 +107,55 @@ function harness() {
     };
     return builder;
   }
+  function rpc(_name: string, args: Record<string, unknown>) {
+    const builder = {
+      retry(enabled: boolean) { assert.equal(enabled, false); return builder; },
+      abortSignal() { return builder; },
+      then(resolve: (value: unknown) => unknown) {
+        const call = { table: "rpc", operation: "rpc", values: args };
+        calls.push(call); before?.(call);
+        if (rpcErrorCode) return Promise.resolve(resolve({ data: null, error: { message: "transaction rolled back", code: rpcErrorCode }, status: 400 }));
+        if (fail?.(call)) return Promise.resolve(resolve({ data: null, error: { message: "injected failure" } }));
+        const md = tables.matchdays[0];
+        if (md.scoring_revision !== args.check_scoring_revision) return Promise.resolve(resolve({ data: null, error: { message: "Scoring inputs changed during calculation" } }));
+        const scorer = load<typeof import("../utils/pick8-scoring")>("utils/pick8-scoring.ts");
+        const fixtures = tables.fixtures as unknown as import("../utils/pick8-scoring").ScoringFixture[];
+        const fixtureMap = new Map(fixtures.map(f => [f.id, f]));
+        const finalReady = scorer.isMatchdayReadyForFinalScoring(fixtures);
+        const entries = tables.entries.filter(e => e.submitted_at != null);
+        let selectionRowsChanged = 0, entryRowsChanged = 0, selectionsScored = 0, selectionRowsConsidered = 0;
+        for (const entry of tables.entries) {
+          const picks = tables.entry_selections.filter(s => s.entry_id === entry.id);
+          const result = scorer.scoreEntry({ selections: picks as never, fixturesById: fixtureMap,
+            totalGoalsPrediction: entry.total_goals_prediction as number | null, finalScoringReady: finalReady,
+            completedGoalTotal: scorer.calculateCompletedMatchdayGoalTotal(fixtures) });
+          if (entry.submitted_at != null) for (const selection of result.selectionScores) {
+            const row = tables.entry_selections.find(s => s.id === selection.id)!;
+            selectionRowsConsidered++; if (selection.pointsAwarded !== null) selectionsScored++;
+            if ((row.points_awarded ?? null) !== selection.pointsAwarded || (row.is_correct ?? null) !== selection.isCorrect) selectionRowsChanged++;
+            Object.assign(row, { points_awarded: selection.pointsAwarded, is_correct: selection.isCorrect });
+          }
+          const score = entry.submitted_at != null ? result.calculatedScore : null;
+          if ((entry.calculated_score ?? null) !== score) entryRowsChanged++;
+          entry.calculated_score = score;
+        }
+        const lifecycle = load<typeof import("../utils/pick8-fixture-state")>("utils/pick8-fixture-state.ts")
+          .resolveMatchdayScoringStatus({ currentStatus: String(md.status), fixtures, finalScoringReady: finalReady, now });
+        const old = { ...md }; md.status = lifecycle; changed("matchdays", old, md);
+        const result = { seasonId: "season", matchdayId: "matchday", matchdayNumber: md.matchday_number,
+          entriesFound: entries.length, selectionsScored, selectionsAwaitingResults: selectionRowsConsidered - selectionsScored,
+          voidSelections: 0, entriesFinalized: finalReady ? entries.length : 0, entriesSkipped: finalReady ? 0 : entries.length,
+          finalScoringReady: finalReady, recalculatedAt: new ClockDate().toISOString(), matchdayStatus: lifecycle,
+          requestedScoringRevision: args.check_scoring_revision, acknowledgedRevision: args.check_scoring_revision,
+          selectionRowsConsidered, selectionRowsChanged, entryRowsConsidered: tables.entries.length, entryRowsChanged, reused: false };
+        Object.assign(md, { scoring_pending: false, scored_revision: args.check_scoring_revision, scoring_result: result });
+        return Promise.resolve(resolve(ambiguous?.(call)
+          ? { data: null, error: { message: "gateway response lost" }, status: 504 }
+          : { data: result, error: null, status: 200 }));
+      },
+    };
+    return builder;
+  }
   const nativeRequire = createRequire(import.meta.url);
   const modules = new Map<string, unknown>();
   function load<T>(name: string): T {
@@ -117,7 +167,7 @@ function harness() {
     const source = ts.transpileModule(readFileSync(path, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
     const require = (id: string): unknown => {
       if (id === "server-only") return {};
-      if (id === "@/utils/supabase/admin") return { createAdminClient: () => ({ from }) };
+      if (id === "@/utils/supabase/admin") return { createAdminClient: () => ({ from, rpc }) };
       if (id === "next/server") return { NextResponse: Response };
       if (id.startsWith("@/")) return load(`${id.slice(2)}.ts`);
       if (id.startsWith(".")) return load(resolve(dirname(path), `${id}.ts`));
@@ -138,9 +188,14 @@ function harness() {
     fixtureOnly: () => sync.syncWhoYouGotFixtures({ season: 2026, matchday: 5 }),
     cron: () => cron.runConditionalResultSync(), reconcile: () => cron.runResultReconciliation(),
     upstreamCalls: () => upstreamCalls,
+    rpcError: (code: string) => { rpcErrorCode = code; },
     ambiguous: (handler?: (call: Call) => boolean) => { ambiguous = handler; },
     fail: (handler?: (call: Call) => boolean) => { fail = handler; },
     before: (handler?: (call: Call) => void) => { before = handler; },
+    limitBudget: (remaining: number) => {
+      const context = load<typeof import("../utils/supabase/cron-read")>("utils/supabase/cron-read.ts").currentCronReadContext();
+      if (context) context.remaining = () => remaining;
+    },
     upstream: () => upstream,
     resetUpstream: () => { upstream = providerPayload(); },
     clock: (value: string) => { now = Date.parse(value); },
@@ -170,7 +225,7 @@ test("10 fixtures / 10 entries: second result invocation does no fixture/scoring
 
 test("failed scoring never advances the applied fingerprint and unchanged content retries", async () => {
   const h = harness();
-  h.fail((call) => call.table === "entry_selections" && call.operation === "update");
+  h.fail((call) => call.table === "rpc");
   await assert.rejects(h.sync(), /injected failure/);
   assert.equal(h.tables.matchdays[0].applied_fixture_fingerprint, null);
   assert.equal(h.tables.matchdays[0].scoring_pending, true);
@@ -202,7 +257,7 @@ test("local dirty state and fixture-only calls cannot acknowledge pending scorin
 test("concurrent input edits cannot be cleared by scoring acknowledgement", async () => {
   const h = harness();
   h.before((call) => {
-    if (call.table === "matchdays" && call.values?.scoring_pending === false) { h.dirty(); h.before(); }
+    if (call.table === "rpc") { h.dirty(); h.before(); }
   });
   await assert.rejects(h.sync(), /inputs changed/);
   assert.equal(h.tables.matchdays[0].scoring_pending, true);
@@ -349,8 +404,8 @@ test("failed competition load cannot re-dirty another worker's successful refres
 
 test("committed scoring and fingerprint acknowledgements survive lost responses", async () => {
   const h = harness();
-  h.ambiguous((call) => call.table === "matchdays" &&
-    (call.values?.scoring_pending === false || typeof call.values?.applied_fixture_fingerprint === "string"));
+  h.ambiguous((call) => call.table === "rpc" || (call.table === "matchdays" &&
+    typeof call.values?.applied_fixture_fingerprint === "string"));
   const result = await h.cron();
   assert.equal(result.ok, true);
   assert.equal(h.tables.matchdays[0].sync_pending, false);
@@ -372,3 +427,98 @@ test("older competition refresh cannot overwrite a newer clock checkpoint at the
   assert.equal(h.tables.seasons[0].competition_refresh_after, "2026-09-15T12:00:00.000Z");
   assert.equal(h.tables.seasons[0].competition_refresh_pending, false);
 });
+
+
+test("fingerprint-only recovery reuses committed scoring and returns to fast path while scoring", async () => {
+  const h = harness();
+  const fixture = h.tables.fixtures[9]; fixture.status = "timed"; fixture.home_score = null; fixture.away_score = null;
+  h.tables.matchdays[0].status = "scoring"; h.resetUpstream();
+  h.fail(call => typeof call.values?.applied_fixture_fingerprint === "string");
+  await assert.rejects(h.sync(), /injected failure/);
+  assert.equal(h.tables.matchdays[0].scoring_pending, false);
+  assert.equal(h.tables.matchdays[0].sync_pending, true);
+  const checkpoint = h.tables.matchdays[0].scoring_result;
+  h.fail(); h.calls.length = 0;
+  const recovered = await h.sync();
+  assert.equal(recovered.scoring?.reused, true);
+  assert.equal(h.calls.filter(c=>c.table === "rpc").length, 0);
+  assert.equal(h.tables.matchdays[0].scoring_result, checkpoint);
+  assert.equal(h.tables.matchdays[0].status, "scoring");
+  assert.equal((await h.sync()).fastPath, true);
+});
+
+test("insufficient admission budget returns a durable deferred result without RPC or competition work", async () => {
+  const h = harness();
+  h.before(call => { if (call.table === "matchdays" && call.operation === "upsert") h.limitBudget(1000); });
+  const result = await h.cron();
+  assert.equal(result.ok, true);
+  assert.equal("complete" in result && result.complete, false);
+  assert.equal("deferred" in result && result.deferred.length, 1);
+  assert.equal(h.tables.matchdays[0].scoring_pending, true);
+  assert.equal(h.tables.matchdays[0].sync_pending, true);
+  assert.equal(h.calls.filter(c=>c.table === "rpc" || c.table === "competitions").length, 0);
+});
+
+test("ambiguous scoring response reads committed result once without repeating RPC", async () => {
+  const h = harness(); h.ambiguous(call => call.table === "rpc");
+  const result = await h.cron();
+  assert.equal(result.ok, true);
+  assert.equal(h.calls.filter(c=>c.table === "rpc").length, 1);
+  assert.ok(h.logs.some(l => l.readbackOutcome === "committed"));
+  assert.equal(h.tables.matchdays[0].scoring_pending, false);
+});
+
+test("ambiguous response cannot acknowledge a newer input revision or re-dirty an overlapping completion", async () => {
+  const h = harness();
+  h.ambiguous(call => {
+    if (call.table !== "rpc") return false;
+    h.dirty(); return true;
+  });
+  const result = await h.cron();
+  assert.equal("deferred" in result && result.deferred.length, 1);
+  assert.equal(h.tables.matchdays[0].scoring_pending, true);
+  assert.equal(h.calls.filter(c=>c.table === "rpc").length, 1);
+});
+
+test("failed ambiguous read-back returns deferred and preserves committed checkpoint", async () => {
+  const h = harness();
+  h.ambiguous(call => {
+    if (call.table !== "rpc") return false;
+    h.fail(read => read.table === "matchdays" && read.operation === "select"); return true;
+  });
+  const result = await h.cron();
+  assert.equal("deferred" in result && result.deferred.length, 1);
+  assert.equal(h.tables.matchdays[0].scoring_pending, false);
+  assert.equal(h.calls.filter(c=>c.table === "rpc").length, 1);
+  h.fail(); h.ambiguous(); h.calls.length = 0;
+  await h.sync();
+  assert.equal(h.calls.filter(c=>c.table === "rpc").length, 0);
+});
+
+
+test("fingerprint recovery never overwrites a concurrent writer's scoring pending flag", async () => {
+  const h = harness();
+  h.fail(call => typeof call.values?.applied_fixture_fingerprint === "string");
+  await assert.rejects(h.sync()); h.fail(); h.calls.length = 0;
+  h.before(call => {
+    if (call.table === "matchdays" && call.operation === "upsert") {
+      assert.equal(Object.hasOwn(call.values!, "scoring_pending"), false);
+      h.dirty(); h.before();
+    }
+  });
+  const result = await h.sync();
+  assert.equal(result.scoring?.reused, false);
+  assert.equal(h.calls.filter(c=>c.table === "rpc").length, 1);
+  assert.equal(h.tables.matchdays[0].scored_revision, h.tables.matchdays[0].scoring_revision);
+});
+
+for (const code of ["55P03", "40P01", "40001", "57014"]) {
+  test(`RPC ${code} rollback is deferred durably without retrying the mutation`, async () => {
+    const h = harness(); h.rpcError(code);
+    const result = await h.cron();
+    assert.equal("deferred" in result && result.deferred.length, 1);
+    assert.equal(h.calls.filter(c=>c.table === "rpc").length, 1);
+    assert.equal(h.tables.matchdays[0].scoring_pending, true);
+    assert.equal(h.tables.matchdays[0].sync_pending, true);
+  });
+}

@@ -1,12 +1,8 @@
-import { cronRead, isAmbiguousWriteResult, structuredCronError } from "@/utils/supabase/cron-read";
+import { cronRead, currentCronReadContext, isAmbiguousWriteResult, structuredCronError } from "@/utils/supabase/cron-read";
 import "server-only";
 
 import { createSyncDiagnostics } from "@/utils/pick8-sync-diagnostics";
 import { createAdminClient } from "@/utils/supabase/admin";
-import {
-  canFinalizeBeforeConfiguredKickoffs,
-  resolveMatchdayScoringStatus,
-} from "@/utils/pick8-fixture-state";
 import {
   calculatePick8FixtureSelectionPoints,
   getPick8SelectedTeamPerformance,
@@ -70,10 +66,16 @@ export type ScoreRecalculationSummary = {
   finalScoringReady: boolean;
   recalculatedAt: string;
   matchdayStatus: string;
+  requestedScoringRevision: number;
+  acknowledgedRevision: number;
+  selectionRowsConsidered: number;
+  selectionRowsChanged: number;
+  entryRowsConsidered: number;
+  entryRowsChanged: number;
+  reused: boolean;
 };
 
 const TERMINAL_STATUSES = new Set(["finished", "postponed", "cancelled"]);
-const VOID_STATUSES = new Set(["postponed", "cancelled"]);
 
 export function getSelectedTeamPerformance(
   fixture: Pick<ScoringFixture, "home_score" | "away_score">,
@@ -167,189 +169,106 @@ function databaseFailure(operation: string, message: string): never {
   throw new Error(`${operation} failed: ${message}`);
 }
 
-async function recalculateMatchdayScoresInternal({
-  seasonId,
-  matchdayId,
-  allowAcceleratedTestCompletion = false,
-}: {
-  seasonId: string;
-  matchdayId: string;
-  allowAcceleratedTestCompletion?: boolean;
-}): Promise<ScoreRecalculationSummary> {
-  const supabase = createAdminClient();
-  const recalculatedAt = new Date().toISOString();
-  const { data: matchday, error: matchdayError } = await cronRead("pick8-scoring.matchdays", () => supabase
-    .from("matchdays")
-    .select("id, season_id, matchday_number, status, fixture_sync_mode, is_accelerated_test, scoring_revision")
-    .eq("id", matchdayId)
-    .eq("season_id", seasonId)
-    .maybeSingle());
-  if (matchdayError) databaseFailure("Reading matchday", matchdayError.message);
-  if (!matchday) throw new Error("The selected matchday does not belong to that season.");
+// Five seconds for the RPC, with at least four seconds left for read-back and
+// fixture acknowledgement. Admission happens AFTER pending is durable.
+export const SCORING_RPC_TIMEOUT_MS = 5_000;
+export const SCORING_ADMISSION_MS = 9_000;
 
-  const { data: fixtureRows, error: fixtureError } = await cronRead("pick8-scoring.fixtures", () => supabase
-    .from("fixtures")
-    .select("id, kickoff_at, status, home_score, away_score")
-    .eq("matchday_id", matchdayId));
-  if (fixtureError) databaseFailure("Reading fixtures", fixtureError.message);
-  const fixtures = (fixtureRows ?? []) as ScoringFixture[];
-  const fixturesById = new Map(fixtures.map((fixture) => [fixture.id, fixture]));
-  const finalScoringReady = isMatchdayReadyForFinalScoring(fixtures);
-  const completedGoalTotal = calculateCompletedMatchdayGoalTotal(fixtures);
-  const hasFutureKickoff = fixtures.some((fixture) => Date.parse(fixture.kickoff_at) > Date.parse(recalculatedAt));
-  if (
-    finalScoringReady &&
-    hasFutureKickoff &&
-    !canFinalizeBeforeConfiguredKickoffs({
-      allowAcceleratedTestCompletion,
-      fixtureSyncMode: matchday.fixture_sync_mode,
-      isAcceleratedTest: matchday.is_accelerated_test,
-    })
-  ) {
-    throw new Error("A matchday cannot be completed before every configured kickoff.");
+export class ScoringDeferredError extends Error {
+  constructor(public readonly matchdayId: string, public readonly revision: number, reason: string) {
+    super(reason);
+    this.name = "ScoringDeferredError";
   }
-
-  const { data: entries, error: entriesError } = await cronRead("pick8-scoring.entries", () => supabase
-    .from("entries")
-    .select("id, total_goals_prediction")
-    .eq("matchday_id", matchdayId)
-    .not("submitted_at", "is", null));
-  if (entriesError) databaseFailure("Reading entries", entriesError.message);
-  const entryRows = entries ?? [];
-
-  // Drafts are never competition entries. Clear any score left by an older
-  // recalculation path so they cannot leak into tables or result labels.
-  const { error: draftResetError } = await supabase
-    .from("entries")
-    .update({ calculated_score: null, score_calculated_at: null, updated_at: recalculatedAt })
-    .eq("matchday_id", matchdayId)
-    .is("submitted_at", null);
-  if (draftResetError) databaseFailure("Resetting draft scores", draftResetError.message);
-  const entryIds = entryRows.map((entry) => entry.id);
-  const { data: selections, error: selectionsError } = entryIds.length
-    ? await cronRead("pick8-scoring.entry_selections", () => supabase
-        .from("entry_selections")
-        .select("id, entry_id, category, fixture_id, selected_team_side")
-        .in("entry_id", entryIds))
-    : { data: [], error: null };
-  if (selectionsError) databaseFailure("Reading selections", selectionsError.message);
-
-  let selectionsScored = 0;
-  let selectionsAwaitingResults = 0;
-  let voidSelections = 0;
-  for (const entry of entryRows) {
-    const entrySelections = (selections ?? [])
-      .filter((selection) => selection.entry_id === entry.id)
-      .map((selection) => ({
-        id: selection.id,
-        category: selection.category as SelectionCategory,
-        fixture_id: selection.fixture_id,
-        selected_team_side: selection.selected_team_side as TeamSide,
-      }));
-    const result = scoreEntry({
-      selections: entrySelections,
-      fixturesById,
-      totalGoalsPrediction: entry.total_goals_prediction,
-      finalScoringReady,
-      completedGoalTotal,
-    });
-
-    for (const selection of result.selectionScores) {
-      const fixture = fixturesById.get(selection.fixture_id)!;
-      if (selection.pointsAwarded !== null) selectionsScored += 1;
-      else if (VOID_STATUSES.has(fixture.status)) voidSelections += 1;
-      else selectionsAwaitingResults += 1;
-      const { error } = await supabase
-        .from("entry_selections")
-        .update({
-          points_awarded: selection.pointsAwarded,
-          is_correct: selection.isCorrect,
-          updated_at: recalculatedAt,
-        })
-        .eq("id", selection.id)
-        .eq("entry_id", entry.id);
-      if (error) databaseFailure("Updating selection score", error.message);
-    }
-
-    const { error: entryUpdateError } = await supabase
-      .from("entries")
-      .update({
-        calculated_score: result.calculatedScore,
-        score_calculated_at: finalScoringReady ? recalculatedAt : null,
-        updated_at: recalculatedAt,
-      })
-      .eq("id", entry.id)
-      .eq("matchday_id", matchdayId);
-    if (entryUpdateError) databaseFailure("Updating entry score", entryUpdateError.message);
-  }
-
-  const matchdayStatus = resolveMatchdayScoringStatus({
-    currentStatus: matchday.status, fixtures, finalScoringReady, now: Date.parse(recalculatedAt),
-  });
-  const { data: statusRow, error: statusError } = await supabase
-    .from("matchdays")
-    .update({
-      status: matchdayStatus,
-      updated_at: recalculatedAt,
-    })
-    .eq("id", matchdayId)
-    .eq("season_id", seasonId)
-    .eq("status", matchday.status)
-    .select("id")
-    .maybeSingle();
-  if (!statusError && !statusRow) throw new Error("Matchday lifecycle changed during scoring; retry required.");
-  if (statusError) databaseFailure("Updating matchday status", statusError.message);
-
-  const acknowledgement = await supabase
-    .from("matchdays")
-    .update({ scoring_pending: false })
-    .eq("id", matchdayId)
-    .eq("scoring_revision", matchday.scoring_revision)
-    .select("id")
-    .maybeSingle();
-  let acknowledged = Boolean(acknowledgement.data);
-  if (acknowledgement.error) {
-    console.error(JSON.stringify({ service: "pick8-sync-acknowledgement", operation: "scoring", ...structuredCronError(acknowledgement) }));
-    if (isAmbiguousWriteResult(acknowledgement)) {
-      const { data, error } = await cronRead("scoring.acknowledgement_readback", () => supabase.from("matchdays")
-        .select("scoring_revision, scoring_pending, status").eq("id", matchdayId).single());
-      acknowledged = !error && !!data && data.scoring_revision === matchday.scoring_revision &&
-        !data.scoring_pending && data.status === matchdayStatus;
-    }
-    if (!acknowledged) databaseFailure("Acknowledging scoring", acknowledgement.error.message);
-  }
-  if (!acknowledged) throw new Error("Scoring inputs changed during calculation; retry required.");
-
-  return {
-    matchdayStatus,
-    seasonId,
-    matchdayId,
-    matchdayNumber: matchday.matchday_number,
-    entriesFound: entryRows.length,
-    selectionsScored,
-    selectionsAwaitingResults,
-    voidSelections,
-    entriesFinalized: finalScoringReady ? entryRows.length : 0,
-    entriesSkipped: finalScoringReady ? 0 : entryRows.length,
-    finalScoringReady,
-    recalculatedAt,
-  };
 }
 
-/** Mark work before any scoring reads/writes; failed or concurrent work stays visible. */
+type ScoringCheckpoint = {
+  scoring_revision: number;
+  scored_revision: number | null;
+  scoring_pending: boolean;
+  scoring_result: unknown;
+  status: string;
+};
+
+function committedResult(state: ScoringCheckpoint, revision: number): ScoreRecalculationSummary | null {
+  const result = state.scoring_result as ScoreRecalculationSummary | null;
+  return state.scoring_revision === revision && state.scored_revision === revision &&
+    !state.scoring_pending && result?.acknowledgedRevision === revision &&
+    result.matchdayStatus === state.status ? result : null;
+}
+
 export async function recalculateMatchdayScores(input: {
   seasonId: string;
   matchdayId: string;
   allowAcceleratedTestCompletion?: boolean;
+  reuseAcknowledged?: boolean;
 }): Promise<ScoreRecalculationSummary> {
   const diagnostics = createSyncDiagnostics({ operation: "recalculate-scores", matchdayId: input.matchdayId });
-  const supabase = createAdminClient();
   return diagnostics.stage("scoring", async () => {
-    const { error } = await supabase.from("matchdays").update({ scoring_pending: true })
-      .eq("id", input.matchdayId).eq("season_id", input.seasonId);
-    if (error) databaseFailure("Marking scoring pending", error.message);
-    // Pending was persisted before work. A catch-block write could undo an
-    // acknowledged completion from this invocation or an overlapping scorer.
-    return recalculateMatchdayScoresInternal(input);
+    const supabase = createAdminClient();
+    const context = currentCronReadContext();
+    const { data: state, error } = await cronRead("scoring.checkpoint", () => supabase.from("matchdays")
+      .select("scoring_revision, scored_revision, scoring_pending, scoring_result, status")
+      .eq("id", input.matchdayId).eq("season_id", input.seasonId).single());
+    if (error) databaseFailure("Reading scoring checkpoint", error.message);
+    if (!state) throw new Error("The selected matchday does not belong to that season.");
+    const revision = state.scoring_revision;
+    const report = (fields: Record<string, unknown>) => diagnostics.event({
+      service: "pick8-scoring-rpc", requestedScoringRevision: revision,
+      acknowledgedRevision: null, rpcDurationMs: 0, selectionRowsConsidered: null,
+      selectionRowsChanged: null, entryRowsConsidered: null, entryRowsChanged: null, matchdayStatus: null,
+      remainingBudgetMs: context ? Math.round(context.remaining()) : null, ...fields,
+    });
+    const committed = committedResult(state, revision);
+    if (input.reuseAcknowledged && committed) {
+      report({ ...committed, selectionRowsChanged: 0, entryRowsChanged: 0,
+        rpcDurationMs: 0, outcome: "checkpoint_reused" });
+      return { ...committed, selectionRowsChanged: 0, entryRowsChanged: 0, reused: true };
+    }
+    if (!state.scoring_pending) {
+      const { data: pending, error: pendingError } = await supabase.from("matchdays")
+        .update({ scoring_pending: true }).eq("id", input.matchdayId).eq("season_id", input.seasonId)
+        .eq("scoring_revision", revision).select("id").maybeSingle();
+      if (pendingError) databaseFailure("Marking scoring pending", pendingError.message);
+      if (!pending) throw new Error("Scoring inputs changed before scoring; retry required.");
+    }
+    if (context && context.remaining() < SCORING_ADMISSION_MS) {
+      report({ outcome: "deferred", rpcDurationMs: 0, acknowledgedRevision: null });
+      throw new ScoringDeferredError(input.matchdayId, revision, "Insufficient scoring budget; durable work deferred.");
+    }
+    const started = performance.now();
+    // A mutation is attempted once. Never put this RPC through cronRead.
+    const response = await supabase.rpc("score_pick8_matchday", {
+      check_season_id: input.seasonId, check_matchday_id: input.matchdayId,
+      check_scoring_revision: revision,
+      allow_accelerated_test_completion: input.allowAcceleratedTestCompletion ?? false,
+    }).retry(false).abortSignal(AbortSignal.timeout(SCORING_RPC_TIMEOUT_MS));
+    const rpcDurationMs = Math.round(performance.now() - started);
+    if (!response.error && response.data) {
+      const result = response.data as unknown as ScoreRecalculationSummary;
+      if (result.acknowledgedRevision !== revision || result.requestedScoringRevision !== revision ||
+        result.matchdayId !== input.matchdayId || result.seasonId !== input.seasonId) {
+        databaseFailure("Scoring transaction", "Unexpected scoring acknowledgement.");
+      }
+      report({ ...result, rpcDurationMs, outcome: "committed" });
+      return result;
+    }
+    const ambiguous = isAmbiguousWriteResult(response);
+    report({ rpcDurationMs, outcome: ambiguous ? "ambiguous_response" : "failed",
+      acknowledgedRevision: null, ...structuredCronError(response) });
+    if (ambiguous) {
+      const { data: checkpoint, error: readError } = await cronRead("scoring.acknowledgement_readback", () => supabase.from("matchdays")
+        .select("scoring_revision, scored_revision, scoring_pending, scoring_result, status")
+        .eq("id", input.matchdayId).eq("season_id", input.seasonId).single());
+      const result = !readError && checkpoint ? committedResult(checkpoint, revision) : null;
+      report({ ...(result ?? {}), rpcDurationMs, outcome: "readback", readbackOutcome: result ? "committed" : readError ? "unavailable" : "not_acknowledged",
+        acknowledgedRevision: checkpoint?.scored_revision ?? null });
+      if (result) return result;
+      // Never write in recovery: a newer worker may already have committed.
+      throw new ScoringDeferredError(input.matchdayId, revision, "Scoring outcome unconfirmed; durable work will be checked next invocation.");
+    }
+    if (["55P03", "40P01", "40001", "57014"].includes(response.error?.code ?? "")) {
+      throw new ScoringDeferredError(input.matchdayId, revision, "Scoring contention or changed inputs; durable work deferred.");
+    }
+    databaseFailure("Scoring transaction", response.error?.message ?? "No scoring result returned.");
   });
 }

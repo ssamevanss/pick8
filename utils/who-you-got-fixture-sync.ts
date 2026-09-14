@@ -445,7 +445,7 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
 
     const { data: existingMatchday, error: matchdayReadError } = await cronRead("who-you-got-fixture-sync.matchdays", () => supabase
       .from("matchdays")
-      .select("id, status, locks_at, fixture_sync_mode, sync_pending, scoring_pending, sync_revision, applied_fixture_fingerprint")
+      .select("id, status, locks_at, fixture_sync_mode, sync_pending, scoring_pending, sync_revision, scored_revision, applied_fixture_fingerprint")
       .eq("season_id", seasonId)
       .eq("matchday_number", input.matchday)
       .maybeSingle());
@@ -474,13 +474,14 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
     fixtures.map((fixture) => ({ kickoff_at: fixture.kickoffAt })),
   );
   if (!locksAt) throw databaseError("Deriving matchday deadline", "No valid fixture kickoff was returned.");
+  const lifecycleChanged = !!existingMatchday && (existingMatchday.status !== matchdayStatus ||
+    !existingMatchday.locks_at || !representSameKickoff(existingMatchday.locks_at, locksAt));
   if (existingMatchday && canSkipMatchdayApplication({
     appliedFingerprint: existingMatchday.applied_fixture_fingerprint,
     fetchedFingerprint: fingerprint,
     syncPending: existingMatchday.sync_pending,
     scoringPending: existingMatchday.scoring_pending,
-    lifecycleChanged: existingMatchday.status !== matchdayStatus ||
-      !existingMatchday.locks_at || !representSameKickoff(existingMatchday.locks_at, locksAt),
+    lifecycleChanged,
   })) {
     const { data: checked, error } = await supabase.from("matchdays")
       .update({ last_upstream_check_at: new Date().toISOString() })
@@ -510,7 +511,11 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
           fixture_sync_mode: "provider",
           status: matchdayStatus,
           sync_pending: true,
-          scoring_pending: true,
+          // Preserve an acknowledged scoring checkpoint during fingerprint-only
+          // recovery. Fixture/input triggers mark actual changes dirty below.
+          ...(!existingMatchday || existingMatchday.scoring_pending ||
+            existingMatchday.scored_revision == null || lifecycleChanged
+            ? { scoring_pending: true } : {}),
           last_upstream_check_at: new Date().toISOString(),
           locks_at: locksAt,
           updated_at: syncedAt,
@@ -723,7 +728,7 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
   });
   const { matchdayId, ...summary } = applied;
   const scoring = input.recalculateScores
-    ? await recalculateMatchdayScores({ seasonId, matchdayId })
+    ? await recalculateMatchdayScores({ seasonId, matchdayId, reuseAcknowledged: true })
     : undefined;
   if (!input.recalculateScores) diagnostics.skipped("scoring", "fixture_only_call_keeps_recovery_pending");
 
@@ -732,7 +737,7 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
       // Snapshot the revision BEFORE reading back applied content. The CAS below
       // cannot acknowledge a local mutation racing with that validation.
       const { data: state, error: stateError } = await cronRead("who-you-got-fixture-sync.matchdays", () => supabase.from("matchdays")
-        .select("sync_revision, scoring_pending, status, locks_at, fixture_sync_mode")
+        .select("sync_revision, scoring_revision, scored_revision, scoring_pending, status, locks_at, fixture_sync_mode")
         .eq("id", matchdayId).single());
       if (stateError) throw databaseError("Reading applied state", stateError.message);
       const { data: rows, error: readError } = await cronRead("who-you-got-fixture-sync.fixtures", () => supabase.from("fixtures")
@@ -745,23 +750,26 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
         homeTeamCrestUrl: row.home_team_crest_url, awayTeamCrestUrl: row.away_team_crest_url,
         kickoffAt: row.kickoff_at, status: row.status, homeScore: row.home_score, awayScore: row.away_score,
       })));
-      if (localFingerprint !== fingerprint || state.scoring_pending || state.fixture_sync_mode !== "provider" ||
+      if (localFingerprint !== fingerprint || state.scoring_pending ||
+        state.scoring_revision !== scoring.acknowledgedRevision || state.scored_revision !== scoring.acknowledgedRevision || state.fixture_sync_mode !== "provider" ||
         state.status !== scoring.matchdayStatus || !state.locks_at || !representSameKickoff(state.locks_at, locksAt)) {
         throw databaseError("Verifying applied fixtures", "Local state changed during sync; recovery remains pending.");
       }
       const acknowledgement = await supabase.from("matchdays")
         .update({ applied_fixture_fingerprint: fingerprint, sync_pending: false })
         .eq("id", matchdayId).eq("sync_revision", state.sync_revision).eq("scoring_pending", false)
+        .eq("scoring_revision", scoring.acknowledgedRevision).eq("scored_revision", scoring.acknowledgedRevision)
         .select("id").maybeSingle();
       let acknowledged = Boolean(acknowledgement.data);
       if (acknowledgement.error) {
         console.error(JSON.stringify({ service: "pick8-sync-acknowledgement", operation: "fixture_fingerprint", ...structuredCronError(acknowledgement) }));
         if (isAmbiguousWriteResult(acknowledgement)) {
           const { data, error } = await cronRead("sync.fingerprint_acknowledgement_readback", () => supabase.from("matchdays")
-            .select("sync_revision, applied_fixture_fingerprint, sync_pending, scoring_pending")
+            .select("sync_revision, scoring_revision, scored_revision, applied_fixture_fingerprint, sync_pending, scoring_pending")
             .eq("id", matchdayId).single());
           acknowledged = !error && !!data && data.sync_revision === state.sync_revision &&
-            data.applied_fixture_fingerprint === fingerprint && !data.sync_pending && !data.scoring_pending;
+            data.applied_fixture_fingerprint === fingerprint && !data.sync_pending && !data.scoring_pending &&
+            data.scoring_revision === scoring.acknowledgedRevision && data.scored_revision === scoring.acknowledgedRevision;
         }
         if (!acknowledged) throw databaseError("Acknowledging applied fingerprint", acknowledgement.error.message);
       }

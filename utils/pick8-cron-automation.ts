@@ -1,4 +1,4 @@
-import { cronRead, withCronReadContext } from "@/utils/supabase/cron-read";
+import { cronRead, currentCronReadContext, withCronReadContext } from "@/utils/supabase/cron-read";
 import "server-only";
 
 import { createSyncDiagnostics } from "@/utils/pick8-sync-diagnostics";
@@ -6,7 +6,7 @@ import { competitionRefreshRequired } from "@/utils/pick8-sync-state";
 
 import { NextResponse } from "next/server";
 import type { Tables } from "@/types/database.types";
-import { recalculateMatchdayScores } from "@/utils/pick8-scoring";
+import { recalculateMatchdayScores, ScoringDeferredError } from "@/utils/pick8-scoring";
 import { createAdminClient } from "@/utils/supabase/admin";
 import {
   syncWhoYouGotFixtures,
@@ -166,10 +166,10 @@ async function syncMatchday({
       removed: sync.removed,
       invalidatedEntries: sync.invalidatedEntries,
       potentialRemovals: sync.potentialRemovals.length,
-      recalculated: Boolean(scoring),
+      recalculated: Boolean(scoring && !scoring.reused),
       fastPath: sync.fastPath ?? false,
     });
-    return { matchday: matchday.matchday_number, sync, recalculated: Boolean(scoring), scoring };
+    return { matchday: matchday.matchday_number, sync, recalculated: Boolean(scoring && !scoring.reused), scoring };
   } catch (error) {
     logRun({
       route,
@@ -198,6 +198,7 @@ async function runSelectedMatchdays({
 }) {
   const runs: MatchdayRun[] = [];
   const failures: MatchdayFailure[] = [];
+  const deferred: Array<{ matchday: number; revision: number; reason: string }> = [];
   const skippedInFlight: number[] = [];
   for (const matchday of uniqueMatchdays(matchdays)) {
     try {
@@ -210,10 +211,14 @@ async function runSelectedMatchdays({
       if (run) runs.push(run);
       else skippedInFlight.push(matchday.matchday_number);
     } catch (error) {
-      failures.push({ matchday: matchday.matchday_number, error: safeError(error) });
+      if (error instanceof ScoringDeferredError) {
+        deferred.push({ matchday: matchday.matchday_number, revision: error.revision, reason: error.message });
+      } else {
+        failures.push({ matchday: matchday.matchday_number, error: safeError(error) });
+      }
     }
   }
-  return { successes: runs, failures, skippedInFlight };
+  return { successes: runs, failures, deferred, skippedInFlight };
 }
 
 function totals(runs: MatchdayRun[]) {
@@ -255,7 +260,10 @@ async function discover(route: string, includeFixtures: boolean) {
 }
 
 async function refreshAfterSync(route: string, season: Season, result: Awaited<ReturnType<typeof runSelectedMatchdays>>) {
-  const changedOrRecovery = result.failures.length > 0 || result.successes.some((run) => !run.sync.fastPath);
+  if (result.deferred.length && (currentCronReadContext()?.remaining() ?? Infinity) < 4_000) {
+    return { deferred: true, reason: "Competition recovery retains its durable checkpoint." };
+  }
+  const changedOrRecovery = result.deferred.length > 0 || result.failures.length > 0 || result.successes.some((run) => !run.sync.fastPath);
   if (!changedOrRecovery && !competitionRefreshRequired(season)) {
     createSyncDiagnostics({ route, seasonId: season.id }).skipped("competition_refresh", "no_lifecycle_change_or_pending_recovery");
     return null;
@@ -287,6 +295,7 @@ async function runDailyFixtureSyncInternal() {
   const competitionRefresh = await refreshAfterSync(route, season, result);
   const response = {
     ok: result.failures.length === 0,
+    complete: result.failures.length === 0 && result.deferred.length === 0,
     skipped: selected.length === 0,
     season: season.provider_season,
     matchdaysAttempted: selected.map((matchday) => matchday.matchday_number),
@@ -328,6 +337,7 @@ async function runConditionalResultSyncInternal() {
   const competitionRefresh = await refreshAfterSync(route, season, result);
   const response = {
     ok: result.failures.length === 0,
+    complete: result.failures.length === 0 && result.deferred.length === 0,
     skipped: selected.length === 0,
     reason: selected.length === 0 ? "No matchday currently needs a result check." : undefined,
     season: season.provider_season,
@@ -369,6 +379,7 @@ async function runResultReconciliationInternal() {
   const competitionRefresh = await refreshAfterSync(route, season, result);
   const response = {
     ok: result.failures.length === 0,
+    complete: result.failures.length === 0 && result.deferred.length === 0,
     skipped: selected.length === 0,
     reason: selected.length === 0 ? "No recent or scoring matchday needs reconciliation." : undefined,
     season: season.provider_season,

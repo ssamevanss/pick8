@@ -8,6 +8,9 @@ export function createSyncDiagnostics(context: Record<string, unknown>) {
   const parent = diagnosticContext.getStore();
   const fields = { ...parent, runId: parent?.runId ?? globalThis.crypto.randomUUID(), ...context };
   return {
+    event(event: Record<string, unknown>) {
+      console.info(JSON.stringify({ ...fields, correlationId: fields.runId, ...event }));
+    },
     async stage<T>(stage: SyncStage, operation: () => Promise<T>): Promise<T> {
       const started = performance.now();
       try {
