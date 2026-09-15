@@ -1607,6 +1607,12 @@ Automation invokes three authenticated GET routes. Schedules are UTC:
 - The external scheduler calls `/api/cron/sync-results` every five minutes. It checks matchdays that are scoring, have a live/paused fixture, have any fixture near kickoff (30 minutes ahead through four hours behind), have a finished fixture whose matchday is not completed, or have pending recovery work. Completed fixtures are also eligible inside the kickoff window.
 - `/api/cron/reconcile-results` at `05:30` daily. It checks matchdays with fixtures from the previous two complete UTC calendar days, plus any matchday still scoring. Clean unchanged fingerprints skip application/scoring; changes and pending recovery are processed. This is the correction safety net for late provider changes.
 
+Keep daily jobs staggered away from the five-minute result-sync boundary. The
+checked-in schedules already use `02:15` and `05:30`; before changing any
+external scheduler, verify its ownership and choose a non-`:00`/`:05` boundary.
+The durable due-state model and rollout details are documented in
+`docs/result-sync-due-state-redesign.md`.
+
 Required production environment variables:
 
 ```text

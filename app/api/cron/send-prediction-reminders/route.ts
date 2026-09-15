@@ -429,3 +429,4 @@ export async function GET(request: Request) {
     errors: errorCount,
   });
 }
+/** @deprecated Legacy cron candidate. Verify external schedule ownership before retirement. */

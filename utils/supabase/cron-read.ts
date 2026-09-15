@@ -38,6 +38,7 @@ export function createCronReadContext({
   const combined = signal ? AbortSignal.any([signal, deadlineSignal]) : deadlineSignal;
   const runId = crypto.randomUUID();
   let active = 0, retries = 0, dropped = 0, attempts = 0;
+  let dbRequestCount = 0;
   let queueTotalMs = 0, requestTotalMs = 0;
   const queue: (() => void)[] = [];
   const events: Event[] = [];
@@ -75,8 +76,9 @@ export function createCronReadContext({
   return {
     signal: combined, remaining, cancelled, attemptMs, random, now, emit, acquire, release,
     consumeRetry: () => { if (retries >= 8) return false; retries++; return true; },
+    countDbRequest: () => { dbRequestCount++; },
     countAttempt: () => { attempts++; },
-    summary: () => ({ runId, attempts, retries, queueTotalMs, requestTotalMs, droppedEvents: dropped, events: [...events] }),
+    summary: () => ({ runId, attempts, retries, dbRequestCount, queueTotalMs, requestTotalMs, droppedEvents: dropped, events: [...events] }),
   };
 }
 export type CronReadContext = ReturnType<typeof createCronReadContext>;
@@ -247,6 +249,7 @@ export function cronDeadlineFetch(context: CronReadContext, fetchImpl: typeof fe
   return (input, init) => {
     context.signal.throwIfAborted();
     if (context.remaining() <= 0) throw new Error("Cron invocation deadline exhausted");
+    context.countDbRequest();
     const signal = init?.signal ? AbortSignal.any([context.signal, init.signal]) : context.signal;
     return fetchImpl(input, { ...init, signal });
   };

@@ -33,7 +33,7 @@ export function canSkipMatchdayApplication(input: {
   lifecycleChanged: boolean;
 }) {
   return input.appliedFingerprint === input.fetchedFingerprint &&
-    !input.syncPending && !input.scoringPending && !input.lifecycleChanged;
+    !input.syncPending && !input.lifecycleChanged;
 }
 
 export function competitionRefreshRequired(input: {
@@ -42,4 +42,35 @@ export function competitionRefreshRequired(input: {
 }, now = Date.now()) {
   return input.competition_refresh_pending ||
     (input.competition_refresh_after !== null && Date.parse(input.competition_refresh_after) <= now);
+}
+
+export type ProviderCadenceState = {
+  status: string;
+  firstKickoffAt: string | null;
+  lastKickoffAt: string | null;
+  hasLiveFixture: boolean;
+  allTerminal: boolean;
+  terminalConfirmed: boolean;
+};
+
+/** Durable provider cadence derived from lifecycle, never a historical cutoff. */
+export function nextProviderCheckAt(input: ProviderCadenceState, now = Date.now()) {
+  const firstKickoff = input.firstKickoffAt ? Date.parse(input.firstKickoffAt) : Number.NaN;
+  const lastKickoff = input.lastKickoffAt ? Date.parse(input.lastKickoffAt) : Number.NaN;
+  let delayMs: number;
+  if (input.hasLiveFixture || input.status === "scoring") {
+    delayMs = 5 * 60_000;
+  } else if (input.allTerminal && input.terminalConfirmed) {
+    delayMs = 24 * 60 * 60_000;
+  } else if (input.allTerminal || input.status === "completed") {
+    delayMs = 15 * 60_000;
+  } else if (Number.isFinite(firstKickoff) && firstKickoff <= now + 30 * 60_000 &&
+      (!Number.isFinite(lastKickoff) || lastKickoff >= now - 4 * 60 * 60_000)) {
+    delayMs = 5 * 60_000;
+  } else if (Number.isFinite(firstKickoff) && firstKickoff <= now + 24 * 60 * 60_000) {
+    delayMs = 60 * 60_000;
+  } else {
+    delayMs = 6 * 60 * 60_000;
+  }
+  return new Date(now + delayMs).toISOString();
 }

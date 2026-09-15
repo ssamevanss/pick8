@@ -241,3 +241,4 @@ export async function GET(request: Request) {
     );
   }
 }
+/** @deprecated Superseded by /api/cron/sync-results; retain until external schedule ownership is proven. */

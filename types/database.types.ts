@@ -234,7 +234,13 @@ export type Database = {
       matchdays: {
         Row: {
           applied_fixture_fingerprint: string | null
+          fixture_application_pending: boolean
           last_upstream_check_at: string | null
+          next_provider_check_at: string | null
+          provider_content_version: string | null
+          provider_content_fingerprint: string | null
+          terminal_confirmed_at: string | null
+          terminal_fixture_fingerprint: string | null
           sync_pending: boolean
           scoring_pending: boolean
           sync_revision: number
@@ -254,7 +260,13 @@ export type Database = {
         }
         Insert: {
           applied_fixture_fingerprint?: string | null
+          fixture_application_pending?: boolean
           last_upstream_check_at?: string | null
+          next_provider_check_at?: string | null
+          provider_content_version?: string | null
+          provider_content_fingerprint?: string | null
+          terminal_confirmed_at?: string | null
+          terminal_fixture_fingerprint?: string | null
           sync_pending?: boolean
           scoring_pending?: boolean
           sync_revision?: number
@@ -274,7 +286,13 @@ export type Database = {
         }
         Update: {
           applied_fixture_fingerprint?: string | null
+          fixture_application_pending?: boolean
           last_upstream_check_at?: string | null
+          next_provider_check_at?: string | null
+          provider_content_version?: string | null
+          provider_content_fingerprint?: string | null
+          terminal_confirmed_at?: string | null
+          terminal_fixture_fingerprint?: string | null
           sync_pending?: boolean
           scoring_pending?: boolean
           sync_revision?: number
@@ -382,6 +400,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      discover_pick8_due_work: {
+        Args: { check_policy?: string; check_now?: string; check_limit?: number }
+        Returns: Json
+      }
       score_pick8_matchday: {
         Args: { check_season_id: string; check_matchday_id: string; check_scoring_revision: number; allow_accelerated_test_completion?: boolean }
         Returns: Json

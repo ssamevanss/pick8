@@ -241,3 +241,4 @@ export async function GET(request: Request) {
     );
   }
 }
+/** @deprecated Legacy cron candidate. Verify external schedule ownership before retirement. */

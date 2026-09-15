@@ -240,11 +240,30 @@ try {
     assert.ok(performance.now()-start<1500);
     await writer.query('commit'); await verify(ids);
   });
+  await test('bounded due discovery separates provider, scoring and application recovery',async()=>{
+    const ids=await seed(admin,{entries:1});
+    await db.query(`update public.matchdays set sync_pending=false,fixture_application_pending=false,
+      scoring_pending=false,applied_fixture_fingerprint='v1:test',next_provider_check_at=now()+interval '1 day'
+      where id=$1`,[ids.matchday]);
+    await db.query('update public.seasons set competition_refresh_pending=false where id=$1',[ids.season]);
+    let work=(await db.query("select public.discover_pick8_due_work('results',now(),12) as work")).rows[0].work;
+    assert.equal(work.matchdays.length,0);
+    await db.query('update public.entries set total_goals_prediction=31 where matchday_id=$1',[ids.matchday]);
+    work=(await db.query("select public.discover_pick8_due_work('results',now(),12) as work")).rows[0].work;
+    assert.equal(work.matchdays.length,1);
+    assert.equal(work.matchdays[0].localScoringRecoveryDue,true);
+    assert.equal(work.matchdays[0].providerFreshnessDue,false);
+    assert.equal(work.matchdays[0].fixtureApplicationRecoveryDue,false);
+    await db.query(`update public.matchdays set scoring_pending=false,next_provider_check_at=now()-interval '1 second' where id=$1`,[ids.matchday]);
+    work=(await db.query("select public.discover_pick8_due_work('results',now(),12) as work")).rows[0].work;
+    assert.equal(work.matchdays[0].providerFreshnessDue,true);
+  });
   await test('ordinary authenticated/anonymous users cannot execute scorer or forge checkpoint',async()=>{
     const ids=await seed(admin,{entries:1}); const revision=(await snapshot(db,ids.matchday)).matchday.scoring_revision;
     for(const role of ['anon','authenticated']) {
       await writer.query(`set role ${role}; set request.jwt.claim.role='${role}'`);
       await assert.rejects(score(writer,ids,revision),e=>e.code==='42501');
+      await assert.rejects(writer.query("select public.discover_pick8_due_work('results',now(),12)"),e=>e.code==='42501');
     }
     // Even an authenticated admin with table UPDATE rights cannot forge it.
     const user=(await admin.query('select id from public.profiles limit 1')).rows[0].id;

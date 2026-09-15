@@ -1,7 +1,7 @@
 import { cronRead, currentCronReadContext, isAmbiguousWriteResult, structuredCronError } from "@/utils/supabase/cron-read";
 import "server-only";
 
-import { matchdayContentFingerprint, canSkipMatchdayApplication } from "@/utils/pick8-sync-state";
+import { matchdayContentFingerprint, canSkipMatchdayApplication, nextProviderCheckAt } from "@/utils/pick8-sync-state";
 import { createSyncDiagnostics } from "@/utils/pick8-sync-diagnostics";
 import { recalculateMatchdayScores, type ScoreRecalculationSummary } from "@/utils/pick8-scoring";
 
@@ -63,6 +63,9 @@ export type FixtureSyncSummary = {
   potentialRemovals: string[];
   syncedAt: string;
   fastPath?: boolean;
+  providerNotModified?: boolean;
+  providerContentVersion?: string | null;
+  nextProviderCheckAt?: string;
   scoring?: ScoreRecalculationSummary;
 };
 
@@ -287,7 +290,7 @@ function deriveMatchdayStatus(
     : "upcoming";
 }
 
-async function fetchFixtures(season: number, matchday: number) {
+async function fetchFixtures(season: number, matchday: number, contentVersion?: string | null) {
   const apiUrl = process.env.WHO_YOU_GOT_API_URL?.trim();
   const apiKey = process.env.WHO_YOU_GOT_API_KEY?.trim();
   if (!apiUrl || !apiKey) {
@@ -312,7 +315,10 @@ async function fetchFixtures(season: number, matchday: number) {
   let response: Response;
   try {
     response = await fetch(url, {
-      headers: { Authorization: `Bearer ${apiKey}` },
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        ...(contentVersion ? { "If-None-Match": contentVersion } : {}),
+      },
       cache: "no-store",
       signal: AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), ...(currentCronReadContext() ? [currentCronReadContext()!.signal] : [])]),
     });
@@ -326,6 +332,9 @@ async function fetchFixtures(season: number, matchday: number) {
     );
   }
 
+  if (response.status === 304) {
+    return { fixtures: null, contentVersion: response.headers.get("etag") ?? contentVersion ?? null };
+  }
   if (response.status === 401 || response.status === 403) {
     throw new FixtureSyncError(
       "authentication",
@@ -354,7 +363,10 @@ async function fetchFixtures(season: number, matchday: number) {
       "Who You Got returned invalid JSON.",
     );
   }
-  return parseFixtures(payload, matchday);
+  return {
+    fixtures: parseFixtures(payload, matchday),
+    contentVersion: response.headers.get("etag") ?? response.headers.get("x-content-version"),
+  };
 }
 
 function logicalFixtureKey(fixture: {
@@ -376,7 +388,22 @@ function databaseError(operation: string, message: string) {
 }
 
 /** Syncs one validated Premier League matchday. Callers must enforce access. */
-type SyncInput = { season: number; matchday: number; recalculateScores?: boolean };
+export type ExistingMatchdaySyncState = {
+  id: string; status: string; locks_at: string | null; fixture_sync_mode: string;
+  sync_pending: boolean; fixture_application_pending?: boolean; scoring_pending: boolean;
+  sync_revision: number; scoring_revision?: number; scored_revision: number | null;
+  applied_fixture_fingerprint: string | null; provider_content_version?: string | null;
+  provider_content_fingerprint?: string | null; provider_freshness_due?: boolean;
+  next_provider_check_at?: string | null;
+  terminal_fixture_fingerprint?: string | null; terminal_confirmed_at?: string | null;
+  first_kickoff_at?: string | null; last_kickoff_at?: string | null;
+  has_live_fixture?: boolean; all_terminal?: boolean; fixture_count?: number;
+};
+
+type SyncInput = {
+  season: number; matchday: number; recalculateScores?: boolean;
+  discovered?: { seasonId: string; matchday: ExistingMatchdaySyncState };
+};
 
 export async function syncWhoYouGotFixtures(input: SyncInput): Promise<FixtureSyncSummary> {
   const diagnostics = createSyncDiagnostics({ operation: "sync-matchday", season: input.season, matchday: input.matchday });
@@ -400,7 +427,9 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
   const supabase = createAdminClient();
   const syncedAt = new Date().toISOString();
 
-  const { seasonId, existingMatchday } = await diagnostics.stage("discovery", async () => {
+  const { seasonId, existingMatchday } = input.discovered
+    ? { seasonId: input.discovered.seasonId, existingMatchday: input.discovered.matchday }
+    : await diagnostics.stage("discovery", async () => {
     const { data: existingSeason, error: seasonReadError } = await cronRead("who-you-got-fixture-sync.seasons", () => supabase
       .from("seasons")
       .select("id, name, is_active")
@@ -445,7 +474,7 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
 
     const { data: existingMatchday, error: matchdayReadError } = await cronRead("who-you-got-fixture-sync.matchdays", () => supabase
       .from("matchdays")
-      .select("id, status, locks_at, fixture_sync_mode, sync_pending, scoring_pending, sync_revision, scored_revision, applied_fixture_fingerprint")
+      .select("id, status, locks_at, fixture_sync_mode, sync_pending, fixture_application_pending, scoring_pending, sync_revision, scoring_revision, scored_revision, applied_fixture_fingerprint, provider_content_version, provider_content_fingerprint, terminal_fixture_fingerprint, terminal_confirmed_at")
       .eq("season_id", seasonId)
       .eq("matchday_number", input.matchday)
       .maybeSingle());
@@ -460,10 +489,111 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
       );
     }
 
-    return { seasonId, existingMatchday };
+    return { seasonId, existingMatchday: existingMatchday as ExistingMatchdaySyncState | null };
   });
 
-  const fixtures = await diagnostics.stage("who_you_got", () => fetchFixtures(input.season, input.matchday));
+  if (input.discovered) diagnostics.skipped("discovery", "reused_due_state_metadata");
+
+  if (existingMatchday?.fixture_application_pending &&
+      existingMatchday.provider_freshness_due === false &&
+      existingMatchday.provider_content_fingerprint) {
+    const recovered = await diagnostics.stage("fixture_application", async () => {
+      const { data: rows, error: readError } = await cronRead("who-you-got-fixture-sync.application_recovery", () => supabase.from("fixtures")
+        .select("external_fixture_id, home_team_id, away_team_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score")
+        .eq("matchday_id", existingMatchday.id));
+      if (readError) throw databaseError("Reading application recovery fixtures", readError.message);
+      const localFingerprint = matchdayContentFingerprint(input.season, input.matchday, (rows ?? []).map((row) => ({
+        externalFixtureId: row.external_fixture_id, homeTeamId: row.home_team_id, awayTeamId: row.away_team_id,
+        homeTeamName: row.home_team_name, awayTeamName: row.away_team_name,
+        homeTeamCrestUrl: row.home_team_crest_url, awayTeamCrestUrl: row.away_team_crest_url,
+        kickoffAt: row.kickoff_at, status: row.status, homeScore: row.home_score, awayScore: row.away_score,
+      })));
+      if (localFingerprint !== existingMatchday.provider_content_fingerprint) return false;
+      const acknowledgement = await supabase.from("matchdays")
+        .update({ applied_fixture_fingerprint: localFingerprint, sync_pending: false, fixture_application_pending: false })
+        .eq("id", existingMatchday.id).eq("sync_revision", existingMatchday.sync_revision)
+        .eq("provider_content_fingerprint", localFingerprint).select("id").maybeSingle();
+      if (!acknowledgement.error) return Boolean(acknowledgement.data);
+      if (isAmbiguousWriteResult(acknowledgement)) {
+        const { data: checkpoint, error } = await cronRead("sync.application_recovery_readback", () => supabase.from("matchdays")
+          .select("sync_revision, applied_fixture_fingerprint, sync_pending, fixture_application_pending")
+          .eq("id", existingMatchday.id).single());
+        if (!error && checkpoint?.sync_revision === existingMatchday.sync_revision &&
+            checkpoint.applied_fixture_fingerprint === localFingerprint &&
+            !checkpoint.sync_pending && !checkpoint.fixture_application_pending) return true;
+      }
+      throw databaseError("Recovering provider application", acknowledgement.error.message);
+    });
+    if (recovered) {
+      diagnostics.skipped("who_you_got", "local_fingerprint_recovered_provider_application");
+      const scoring = input.recalculateScores && existingMatchday.scoring_pending
+        ? await recalculateMatchdayScores({ seasonId, matchdayId: existingMatchday.id, reuseAcknowledged: true })
+        : undefined;
+      if (!scoring) diagnostics.skipped("scoring", "no_local_scoring_recovery");
+      return { season: input.season, matchday: input.matchday,
+        matchdayStatus: scoring?.matchdayStatus ?? existingMatchday.status,
+        received: existingMatchday.fixture_count ?? 0, inserted: 0, updated: 0,
+        unchanged: existingMatchday.fixture_count ?? 0, removed: 0,
+        invalidatedEntries: 0, potentialRemovals: [], syncedAt: new Date().toISOString(),
+        fastPath: true, nextProviderCheckAt: existingMatchday.next_provider_check_at ?? undefined, scoring };
+    }
+  }
+
+  const providerStarted = performance.now();
+  const providerResult = await diagnostics.stage("who_you_got", () => fetchFixtures(
+    input.season,
+    input.matchday,
+    existingMatchday && !(existingMatchday.fixture_application_pending || existingMatchday.sync_pending)
+      ? existingMatchday.provider_content_version
+      : null,
+  ));
+  diagnostics.event({ service: "pick8-provider-call", providerCalls: 1,
+    providerLatencyMs: Math.round(performance.now() - providerStarted),
+    contentVersion: providerResult.contentVersion ?? null,
+    notModified: providerResult.fixtures === null });
+
+  if (providerResult.fixtures === null) {
+    if (!existingMatchday || !existingMatchday.applied_fixture_fingerprint) {
+      throw new FixtureSyncError("invalid_response", "Who You Got returned not-modified without an applied provider checkpoint.");
+    }
+    const checkedAt = Date.now();
+    const terminalConfirmed = Boolean(existingMatchday.all_terminal);
+    const nextCheck = nextProviderCheckAt({
+      status: existingMatchday.status,
+      firstKickoffAt: existingMatchday.first_kickoff_at ?? existingMatchday.locks_at,
+      lastKickoffAt: existingMatchday.last_kickoff_at ?? existingMatchday.locks_at,
+      hasLiveFixture: existingMatchday.has_live_fixture ?? false,
+      allTerminal: existingMatchday.all_terminal ?? existingMatchday.status === "completed",
+      terminalConfirmed,
+    }, checkedAt);
+    const { data: checked, error } = await supabase.from("matchdays").update({
+      last_upstream_check_at: new Date(checkedAt).toISOString(), next_provider_check_at: nextCheck,
+      provider_content_version: providerResult.contentVersion,
+      ...(terminalConfirmed ? {
+        terminal_fixture_fingerprint: existingMatchday.applied_fixture_fingerprint,
+        terminal_confirmed_at: new Date(checkedAt).toISOString(),
+      } : {}),
+    }).eq("id", existingMatchday.id).eq("sync_revision", existingMatchday.sync_revision)
+      .eq("fixture_application_pending", false).eq("sync_pending", false)
+      .select("id").maybeSingle();
+    if (error) throw databaseError("Recording provider check", error.message);
+    if (!checked) throw databaseError("Recording provider check", "Local fixture state changed during the provider check; retry required.");
+    diagnostics.skipped("fixture_application", "provider_not_modified");
+    const scoring = input.recalculateScores && existingMatchday.scoring_pending
+      ? await recalculateMatchdayScores({ seasonId, matchdayId: existingMatchday.id, reuseAcknowledged: true })
+      : undefined;
+    if (!scoring) diagnostics.skipped("scoring", "no_local_scoring_recovery");
+    return {
+      season: input.season, matchday: input.matchday,
+      matchdayStatus: scoring?.matchdayStatus ?? existingMatchday.status,
+      received: existingMatchday.fixture_count ?? 0, inserted: 0, updated: 0,
+      unchanged: existingMatchday.fixture_count ?? 0, removed: 0, invalidatedEntries: 0,
+      potentialRemovals: [], syncedAt: new Date(checkedAt).toISOString(), fastPath: true,
+      providerNotModified: true, providerContentVersion: providerResult.contentVersion,
+      nextProviderCheckAt: nextCheck, scoring,
+    };
+  }
+  const fixtures = providerResult.fixtures;
   const fingerprint = matchdayContentFingerprint(input.season, input.matchday, fixtures);
 
   const matchdayStatus = deriveMatchdayStatus(
@@ -474,30 +604,49 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
     fixtures.map((fixture) => ({ kickoff_at: fixture.kickoffAt })),
   );
   if (!locksAt) throw databaseError("Deriving matchday deadline", "No valid fixture kickoff was returned.");
+  const firstKickoffAt = locksAt;
+  const lastKickoffAt = fixtures.map((fixture) => fixture.kickoffAt).sort().at(-1) ?? locksAt;
+  const hasLiveFixture = fixtures.some((fixture) => fixture.status === "in_play" || fixture.status === "paused");
+  const allTerminal = fixtures.every((fixture) => ["finished", "postponed", "cancelled"].includes(fixture.status));
+  const terminalConfirmed = Boolean(allTerminal && existingMatchday?.applied_fixture_fingerprint === fingerprint);
+  const nextCheck = nextProviderCheckAt({
+    status: matchdayStatus, firstKickoffAt, lastKickoffAt, hasLiveFixture, allTerminal, terminalConfirmed,
+  });
   const lifecycleChanged = !!existingMatchday && (existingMatchday.status !== matchdayStatus ||
     !existingMatchday.locks_at || !representSameKickoff(existingMatchday.locks_at, locksAt));
   if (existingMatchday && canSkipMatchdayApplication({
     appliedFingerprint: existingMatchday.applied_fixture_fingerprint,
     fetchedFingerprint: fingerprint,
-    syncPending: existingMatchday.sync_pending,
+    syncPending: existingMatchday.sync_pending || existingMatchday.fixture_application_pending === true,
     scoringPending: existingMatchday.scoring_pending,
     lifecycleChanged,
   })) {
+    const checkedAt = new Date().toISOString();
     const { data: checked, error } = await supabase.from("matchdays")
-      .update({ last_upstream_check_at: new Date().toISOString() })
+      .update({ last_upstream_check_at: checkedAt, next_provider_check_at: nextCheck,
+        provider_content_version: providerResult.contentVersion,
+        provider_content_fingerprint: fingerprint,
+        ...(terminalConfirmed ? {
+          terminal_fixture_fingerprint: fingerprint, terminal_confirmed_at: checkedAt,
+        } : {}),
+      })
       .eq("id", existingMatchday.id).eq("sync_revision", existingMatchday.sync_revision)
-      .eq("sync_pending", false).eq("scoring_pending", false)
+      .eq("sync_pending", false).eq("fixture_application_pending", false)
       .eq("applied_fixture_fingerprint", fingerprint)
       .select("id").maybeSingle();
     if (error) throw databaseError("Recording upstream check", error.message);
     if (!checked) throw databaseError("Recording upstream check", "Local state changed during the upstream check; retry required.");
     diagnostics.skipped("fixture_application", "unchanged_clean_fingerprint");
-    diagnostics.skipped("scoring", "unchanged_clean_fingerprint");
+    const scoring = input.recalculateScores && existingMatchday.scoring_pending
+      ? await recalculateMatchdayScores({ seasonId, matchdayId: existingMatchday.id, reuseAcknowledged: true })
+      : undefined;
+    if (!scoring) diagnostics.skipped("scoring", "unchanged_provider_content_no_local_recovery");
     return {
-      season: input.season, matchday: input.matchday, matchdayStatus,
+      season: input.season, matchday: input.matchday, matchdayStatus: scoring?.matchdayStatus ?? matchdayStatus,
       received: fixtures.length, inserted: 0, updated: 0, unchanged: fixtures.length,
       removed: 0, invalidatedEntries: 0, potentialRemovals: [],
-      syncedAt: new Date().toISOString(), fastPath: true,
+      syncedAt: checkedAt, fastPath: true, providerContentVersion: providerResult.contentVersion,
+      nextProviderCheckAt: nextCheck, scoring,
     };
   }
 
@@ -511,12 +660,13 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
           fixture_sync_mode: "provider",
           status: matchdayStatus,
           sync_pending: true,
-          // Preserve an acknowledged scoring checkpoint during fingerprint-only
-          // recovery. Fixture/input triggers mark actual changes dirty below.
-          ...(!existingMatchday || existingMatchday.scoring_pending ||
-            existingMatchday.scored_revision == null || lifecycleChanged
-            ? { scoring_pending: true } : {}),
+          fixture_application_pending: true,
           last_upstream_check_at: new Date().toISOString(),
+          next_provider_check_at: nextCheck,
+          provider_content_version: providerResult.contentVersion,
+          provider_content_fingerprint: fingerprint,
+          terminal_fixture_fingerprint: allTerminal ? fingerprint : null,
+          terminal_confirmed_at: null,
           locks_at: locksAt,
           updated_at: syncedAt,
         },
@@ -629,27 +779,12 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
       const { error } = await supabase.from("fixtures").insert(inserts);
       if (error) throw databaseError("Inserting fixtures", error.message);
     }
-    for (const fixture of updates) {
-      const { error } = await supabase
-        .from("fixtures")
-        .update({
-          external_fixture_id: fixture.external_fixture_id,
-          matchday_id: fixture.matchday_id,
-          home_team_id: fixture.home_team_id,
-          away_team_id: fixture.away_team_id,
-          home_team_name: fixture.home_team_name,
-          away_team_name: fixture.away_team_name,
-          home_team_crest_url: fixture.home_team_crest_url,
-          away_team_crest_url: fixture.away_team_crest_url,
-          kickoff_at: fixture.kickoff_at,
-          status: fixture.status,
-          home_score: fixture.home_score,
-          away_score: fixture.away_score,
-          last_synced_at: syncedAt,
-          updated_at: syncedAt,
-        })
-        .eq("id", fixture.id);
-      if (error) throw databaseError("Updating fixture", error.message);
+    if (updates.length) {
+      const { error } = await supabase.from("fixtures").upsert(
+        updates.map((fixture) => ({ ...fixture, last_synced_at: syncedAt, updated_at: syncedAt })),
+        { onConflict: "id" },
+      );
+      if (error) throw databaseError("Bulk updating fixtures", error.message);
     }
     const { data: matchdayFixtures, error: missingReadError } = await cronRead("who-you-got-fixture-sync.fixtures", () => supabase
       .from("fixtures")
@@ -727,17 +862,11 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
     };
   });
   const { matchdayId, ...summary } = applied;
-  const scoring = input.recalculateScores
-    ? await recalculateMatchdayScores({ seasonId, matchdayId, reuseAcknowledged: true })
-    : undefined;
-  if (!input.recalculateScores) diagnostics.skipped("scoring", "fixture_only_call_keeps_recovery_pending");
-
-  if (scoring) {
-    await createSyncDiagnostics({ phase: "verify_and_acknowledge" }).stage("fixture_application", async () => {
+  await createSyncDiagnostics({ phase: "verify_and_acknowledge" }).stage("fixture_application", async () => {
       // Snapshot the revision BEFORE reading back applied content. The CAS below
       // cannot acknowledge a local mutation racing with that validation.
       const { data: state, error: stateError } = await cronRead("who-you-got-fixture-sync.matchdays", () => supabase.from("matchdays")
-        .select("sync_revision, scoring_revision, scored_revision, scoring_pending, status, locks_at, fixture_sync_mode")
+        .select("sync_revision, status, locks_at, fixture_sync_mode")
         .eq("id", matchdayId).single());
       if (stateError) throw databaseError("Reading applied state", stateError.message);
       const { data: rows, error: readError } = await cronRead("who-you-got-fixture-sync.fixtures", () => supabase.from("fixtures")
@@ -750,31 +879,39 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
         homeTeamCrestUrl: row.home_team_crest_url, awayTeamCrestUrl: row.away_team_crest_url,
         kickoffAt: row.kickoff_at, status: row.status, homeScore: row.home_score, awayScore: row.away_score,
       })));
-      if (localFingerprint !== fingerprint || state.scoring_pending ||
-        state.scoring_revision !== scoring.acknowledgedRevision || state.scored_revision !== scoring.acknowledgedRevision || state.fixture_sync_mode !== "provider" ||
-        state.status !== scoring.matchdayStatus || !state.locks_at || !representSameKickoff(state.locks_at, locksAt)) {
+      if (localFingerprint !== fingerprint || state.fixture_sync_mode !== "provider" ||
+        !state.locks_at || !representSameKickoff(state.locks_at, locksAt)) {
         throw databaseError("Verifying applied fixtures", "Local state changed during sync; recovery remains pending.");
       }
       const acknowledgement = await supabase.from("matchdays")
-        .update({ applied_fixture_fingerprint: fingerprint, sync_pending: false })
-        .eq("id", matchdayId).eq("sync_revision", state.sync_revision).eq("scoring_pending", false)
-        .eq("scoring_revision", scoring.acknowledgedRevision).eq("scored_revision", scoring.acknowledgedRevision)
+        .update({ applied_fixture_fingerprint: fingerprint, sync_pending: false,
+          fixture_application_pending: false, last_upstream_check_at: new Date().toISOString(),
+          next_provider_check_at: nextCheck, provider_content_version: providerResult.contentVersion,
+          provider_content_fingerprint: fingerprint,
+          terminal_fixture_fingerprint: allTerminal ? fingerprint : null,
+          terminal_confirmed_at: null,
+        })
+        .eq("id", matchdayId).eq("sync_revision", state.sync_revision)
         .select("id").maybeSingle();
       let acknowledged = Boolean(acknowledgement.data);
       if (acknowledgement.error) {
         console.error(JSON.stringify({ service: "pick8-sync-acknowledgement", operation: "fixture_fingerprint", ...structuredCronError(acknowledgement) }));
         if (isAmbiguousWriteResult(acknowledgement)) {
           const { data, error } = await cronRead("sync.fingerprint_acknowledgement_readback", () => supabase.from("matchdays")
-            .select("sync_revision, scoring_revision, scored_revision, applied_fixture_fingerprint, sync_pending, scoring_pending")
+            .select("sync_revision, applied_fixture_fingerprint, sync_pending, fixture_application_pending")
             .eq("id", matchdayId).single());
           acknowledged = !error && !!data && data.sync_revision === state.sync_revision &&
-            data.applied_fixture_fingerprint === fingerprint && !data.sync_pending && !data.scoring_pending &&
-            data.scoring_revision === scoring.acknowledgedRevision && data.scored_revision === scoring.acknowledgedRevision;
+            data.applied_fixture_fingerprint === fingerprint && !data.sync_pending && !data.fixture_application_pending;
         }
         if (!acknowledged) throw databaseError("Acknowledging applied fingerprint", acknowledgement.error.message);
       }
       if (!acknowledged) throw databaseError("Acknowledging applied fingerprint", "Local state changed during sync; retry required.");
-    });
-  }
-  return { ...summary, matchdayStatus: scoring?.matchdayStatus ?? summary.matchdayStatus, fastPath: false, scoring };
+  });
+  const scoring = input.recalculateScores
+    ? await recalculateMatchdayScores({ seasonId, matchdayId, reuseAcknowledged: true })
+    : undefined;
+  if (!input.recalculateScores) diagnostics.skipped("scoring", "provider_applied_local_scoring_recovery_retained");
+  return { ...summary, matchdayStatus: scoring?.matchdayStatus ?? summary.matchdayStatus,
+    fastPath: false, providerContentVersion: providerResult.contentVersion,
+    nextProviderCheckAt: nextCheck, scoring };
 }

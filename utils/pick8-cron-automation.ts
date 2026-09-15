@@ -1,30 +1,31 @@
-import { cronRead, currentCronReadContext, withCronReadContext } from "@/utils/supabase/cron-read";
+import { currentCronReadContext, withCronReadContext } from "@/utils/supabase/cron-read";
 import "server-only";
 
 import { createSyncDiagnostics } from "@/utils/pick8-sync-diagnostics";
 import { competitionRefreshRequired } from "@/utils/pick8-sync-state";
 
 import { NextResponse } from "next/server";
-import type { Tables } from "@/types/database.types";
 import { recalculateMatchdayScores, ScoringDeferredError } from "@/utils/pick8-scoring";
 import { createAdminClient } from "@/utils/supabase/admin";
 import {
   syncWhoYouGotFixtures,
   type FixtureSyncSummary,
+  type ExistingMatchdaySyncState,
 } from "@/utils/who-you-got-fixture-sync";
 import { refreshPick8Competitions } from "@/utils/pick8-competitions";
 import {
   getFixtureAutomationPlan,
   type FixtureSyncMode,
 } from "@/utils/pick8-fixture-sync-mode";
-import { getDailyFixtureSyncMatchdayNumbers } from "@/utils/pick8-matchday-generation";
-
-type Season = Pick<Tables<"seasons">, "id" | "name" | "provider_season" | "competition_refresh_pending" | "competition_refresh_after">;
-type Matchday = Pick<
-  Tables<"matchdays">,
-  "id" | "matchday_number" | "status" | "locks_at"
-> & { fixture_sync_mode: FixtureSyncMode; sync_pending: boolean; scoring_pending: boolean };
-type Fixture = Pick<Tables<"fixtures">, "matchday_id" | "kickoff_at" | "status">;
+type Season = { id: string; name: string; provider_season: number;
+  competition_refresh_pending: boolean; competition_revision: number;
+  competition_refresh_after: string | null; lifecycle_recovery_due: boolean };
+type Matchday = ExistingMatchdaySyncState & {
+  matchday_number: number; fixture_sync_mode: FixtureSyncMode;
+  provider_freshness_due: boolean; local_scoring_recovery_due: boolean;
+  fixture_application_recovery_due: boolean; competition_lifecycle_recovery_due: boolean;
+  due_reasons: string[];
+};
 
 type MatchdayFailure = { matchday: number; error: string };
 type MatchdayRun = {
@@ -34,7 +35,6 @@ type MatchdayRun = {
   scoring?: Awaited<ReturnType<typeof recalculateMatchdayScores>>;
 };
 
-const LIVE_STATUSES = new Set(["in_play", "paused"]);
 const inFlightMatchdays = new Set<string>();
 
 function jsonError(message: string, status: number) {
@@ -60,41 +60,6 @@ function safeError(error: unknown) {
 
 function logRun(fields: Record<string, unknown>) {
   console.info(JSON.stringify({ service: "pick8-cron", ...fields }));
-}
-
-async function loadActiveSeason() {
-  const supabase = createAdminClient();
-  const { data, error } = await cronRead("pick8-cron-automation.seasons", () => supabase
-    .from("seasons")
-    .select("id, name, provider_season, competition_refresh_pending, competition_refresh_after")
-    .eq("is_active", true)
-    .order("provider_season", { ascending: false })
-    .limit(1)
-    .maybeSingle());
-  if (error) throw new Error(`Loading the active season failed: ${error.message}`);
-  return (data ?? null) as Season | null;
-}
-
-async function loadMatchdays(seasonId: string) {
-  const supabase = createAdminClient();
-  const { data, error } = await cronRead("pick8-cron-automation.matchdays", () => supabase
-    .from("matchdays")
-    .select("id, matchday_number, status, locks_at, fixture_sync_mode, sync_pending, scoring_pending")
-    .eq("season_id", seasonId)
-    .order("matchday_number", { ascending: true }));
-  if (error) throw new Error(`Loading matchdays failed: ${error.message}`);
-  return (data ?? []) as Matchday[];
-}
-
-async function loadFixtures(matchdayIds: string[]) {
-  if (matchdayIds.length === 0) return [];
-  const supabase = createAdminClient();
-  const { data, error } = await cronRead("pick8-cron-automation.fixtures", () => supabase
-    .from("fixtures")
-    .select("matchday_id, kickoff_at, status")
-    .in("matchday_id", matchdayIds));
-  if (error) throw new Error(`Loading fixtures failed: ${error.message}`);
-  return (data ?? []) as Fixture[];
 }
 
 function uniqueMatchdays(matchdays: Matchday[]) {
@@ -147,10 +112,23 @@ async function syncMatchday({
         scoring,
       };
     }
+    if (!matchday.provider_freshness_due && !matchday.fixture_application_recovery_due) {
+      if (!matchday.local_scoring_recovery_due) return null;
+      const scoring = await recalculateMatchdayScores({ seasonId: season.id, matchdayId: matchday.id, reuseAcknowledged: true });
+      return { matchday: matchday.matchday_number, sync: {
+        season: season.provider_season, matchday: matchday.matchday_number,
+        matchdayStatus: scoring.matchdayStatus, received: matchday.fixture_count ?? 0,
+        inserted: 0, updated: 0, unchanged: matchday.fixture_count ?? 0, removed: 0,
+        invalidatedEntries: 0, potentialRemovals: [], syncedAt: new Date().toISOString(), fastPath: true,
+      }, recalculated: !scoring.reused, scoring };
+    }
     const sync = await syncWhoYouGotFixtures({
       season: season.provider_season,
       matchday: matchday.matchday_number,
       recalculateScores: recalculate !== "never",
+      ...(!matchday.id.startsWith("pending:")
+        ? { discovered: { seasonId: season.id, matchday } }
+        : {}),
     });
     const scoring = sync.scoring;
     logRun({
@@ -168,6 +146,9 @@ async function syncMatchday({
       potentialRemovals: sync.potentialRemovals.length,
       recalculated: Boolean(scoring && !scoring.reused),
       fastPath: sync.fastPath ?? false,
+      dueReasons: matchday.due_reasons,
+      providerCalls: 1,
+      nextProviderCheckAt: sync.nextProviderCheckAt ?? null,
     });
     return { matchday: matchday.matchday_number, sync, recalculated: Boolean(scoring && !scoring.reused), scoring };
   } catch (error) {
@@ -237,6 +218,22 @@ function totals(runs: MatchdayRun[]) {
   );
 }
 
+function operationalMetrics(result: Awaited<ReturnType<typeof runSelectedMatchdays>>) {
+  const providerRuns = result.successes.filter((run) => run.sync.providerContentVersion !== undefined);
+  return {
+    providerCalls: providerRuns.length,
+    fastPathCount: result.successes.filter((run) => run.sync.fastPath).length,
+    scoringRpcCount: result.successes.filter((run) => run.scoring && !run.scoring.reused).length,
+    localRecoveryOnlyCount: result.successes.filter((run) =>
+      run.sync.providerContentVersion === undefined && Boolean(run.scoring)).length,
+    changedFixtureCount: result.successes.reduce((count, run) =>
+      count + run.sync.inserted + run.sync.updated + run.sync.removed, 0),
+    deferredWorkCount: result.deferred.length,
+    nextProviderCheckAt: providerRuns.map((run) => run.sync.nextProviderCheckAt)
+      .filter((value): value is string => Boolean(value)).sort()[0] ?? null,
+  };
+}
+
 function noActiveSeason(route: string, startedAt: number) {
   const result = {
     ok: true,
@@ -249,13 +246,51 @@ function noActiveSeason(route: string, startedAt: number) {
 }
 
 
-async function discover(route: string, includeFixtures: boolean) {
+type DiscoveryPolicy = "results" | "fixtures" | "reconciliation";
+type DiscoveryPayload = { season: Record<string, unknown> | null; matchdays: Record<string, unknown>[]; dailyMatchdayNumbers?: number[] };
+
+function mapDiscoveredMatchday(row: Record<string, unknown>): Matchday {
+  return {
+    id: String(row.id), matchday_number: Number(row.matchdayNumber), status: String(row.status),
+    locks_at: row.locksAt as string | null, fixture_sync_mode: row.fixtureSyncMode as FixtureSyncMode,
+    sync_pending: Boolean(row.fixtureApplicationPending), fixture_application_pending: Boolean(row.fixtureApplicationPending),
+    scoring_pending: Boolean(row.scoringPending), sync_revision: Number(row.syncRevision),
+    scoring_revision: Number(row.scoringRevision), scored_revision: row.scoredRevision == null ? null : Number(row.scoredRevision),
+    applied_fixture_fingerprint: row.appliedFixtureFingerprint as string | null,
+    provider_content_version: row.providerContentVersion as string | null,
+    provider_content_fingerprint: row.providerContentFingerprint as string | null,
+    next_provider_check_at: row.nextProviderCheckAt as string | null,
+    terminal_fixture_fingerprint: row.terminalFixtureFingerprint as string | null,
+    terminal_confirmed_at: row.terminalConfirmedAt as string | null,
+    first_kickoff_at: row.firstKickoffAt as string | null, last_kickoff_at: row.lastKickoffAt as string | null,
+    has_live_fixture: Boolean(row.hasLiveFixture), all_terminal: Boolean(row.allTerminal), fixture_count: Number(row.fixtureCount ?? 0),
+    provider_freshness_due: Boolean(row.providerFreshnessDue), local_scoring_recovery_due: Boolean(row.localScoringRecoveryDue),
+    fixture_application_recovery_due: Boolean(row.fixtureApplicationRecoveryDue),
+    competition_lifecycle_recovery_due: Boolean(row.competitionLifecycleRecoveryDue),
+    due_reasons: Array.isArray(row.dueReasons) ? row.dueReasons.map(String) : [],
+  };
+}
+
+async function discover(route: string, policy: DiscoveryPolicy) {
   return createSyncDiagnostics({ route }).stage("discovery", async () => {
-    const season = await loadActiveSeason();
-    if (!season) return { season, matchdays: [], fixtures: [] };
-    const matchdays = await loadMatchdays(season.id);
-    const fixtures = includeFixtures ? await loadFixtures(matchdays.map((row) => row.id)) : [];
-    return { season, matchdays, fixtures };
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.rpc("discover_pick8_due_work", {
+      check_policy: policy, check_now: new Date().toISOString(), check_limit: 12,
+    });
+    if (error) throw new Error(`Discovering due Pick 8 work failed: ${error.message}`);
+    const payload = (data ?? {}) as unknown as DiscoveryPayload;
+    const raw = payload.season;
+    const season: Season | null = raw ? {
+      id: String(raw.id), name: String(raw.name), provider_season: Number(raw.providerSeason),
+      competition_refresh_pending: Boolean(raw.competitionRefreshPending),
+      competition_revision: Number(raw.competitionRevision),
+      competition_refresh_after: raw.competitionRefreshAfter as string | null,
+      lifecycle_recovery_due: Boolean(raw.lifecycleRecoveryDue),
+    } : null;
+    const matchdays = (payload.matchdays ?? []).map(mapDiscoveredMatchday);
+    createSyncDiagnostics({ route }).event({ service: "pick8-due-discovery", dbRequestCount: 1,
+      dueMatchdays: matchdays.length, dueReasons: matchdays.map((row) => ({ matchday: row.matchday_number, reasons: row.due_reasons })) });
+    return { season, matchdays, dailyMatchdayNumbers: payload.dailyMatchdayNumbers ?? [] };
   });
 }
 
@@ -274,12 +309,12 @@ async function refreshAfterSync(route: string, season: Season, result: Awaited<R
 async function runDailyFixtureSyncInternal() {
   const route = "sync-fixtures";
   const startedAt = Date.now();
-  const { season, matchdays } = await discover(route, false);
+  const { season, matchdays, dailyMatchdayNumbers } = await discover(route, "fixtures");
   if (!season) return noActiveSeason(route, startedAt);
   const matchdayByNumber = new Map(
     matchdays.map((matchday) => [matchday.matchday_number, matchday]),
   );
-  const selected = getDailyFixtureSyncMatchdayNumbers(matchdays).map(
+  const selected = dailyMatchdayNumbers.map(
     (matchdayNumber): Matchday =>
       matchdayByNumber.get(matchdayNumber) ?? {
         id: `pending:${season.id}:${matchdayNumber}`,
@@ -288,7 +323,17 @@ async function runDailyFixtureSyncInternal() {
         locks_at: null,
         fixture_sync_mode: "provider",
         sync_pending: false,
+        fixture_application_pending: false,
         scoring_pending: false,
+        sync_revision: 0,
+        scoring_revision: 0,
+        scored_revision: null,
+        applied_fixture_fingerprint: null,
+        provider_freshness_due: true,
+        local_scoring_recovery_due: false,
+        fixture_application_recovery_due: false,
+        competition_lifecycle_recovery_due: season.lifecycle_recovery_due,
+        due_reasons: ["daily_fixture_policy"],
       },
   );
   const result = await runSelectedMatchdays({ route, season, matchdays: selected, recalculate: "never" });
@@ -301,33 +346,20 @@ async function runDailyFixtureSyncInternal() {
     matchdaysAttempted: selected.map((matchday) => matchday.matchday_number),
     ...result,
     totals: totals(result.successes),
+    metrics: operationalMetrics(result),
     competitionRefresh,
     durationMs: Date.now() - startedAt,
   };
-  logRun({ route, success: response.ok, matchdays: selected.length, durationMs: response.durationMs });
+  logRun({ route, success: response.ok, matchdays: selected.length, durationMs: response.durationMs, ...response.metrics });
   return response;
 }
 
 async function runConditionalResultSyncInternal() {
   const route = "sync-results";
   const startedAt = Date.now();
-  const { season, matchdays, fixtures } = await discover(route, true);
+  const { season, matchdays } = await discover(route, "results");
   if (!season) return noActiveSeason(route, startedAt);
-  const now = Date.now();
-  const windowStart = now - 4 * 60 * 60 * 1000;
-  const windowEnd = now + 30 * 60 * 1000;
-  const fixturesByMatchday = Map.groupBy(fixtures, (fixture) => fixture.matchday_id);
-  const selected = matchdays.filter((matchday) => {
-    if ((matchday.fixture_sync_mode === "provider" && matchday.sync_pending) || matchday.scoring_pending || matchday.status === "scoring") return true;
-    return (fixturesByMatchday.get(matchday.id) ?? []).some((fixture) => {
-      const kickoff = Date.parse(fixture.kickoff_at);
-      return (
-        LIVE_STATUSES.has(fixture.status) ||
-        (fixture.status === "finished" && matchday.status !== "completed") ||
-        (Number.isFinite(kickoff) && kickoff >= windowStart && kickoff <= windowEnd)
-      );
-    });
-  });
+  const selected = matchdays;
   const result = await runSelectedMatchdays({
     route,
     season,
@@ -344,32 +376,20 @@ async function runConditionalResultSyncInternal() {
     matchdaysAttempted: selected.map((matchday) => matchday.matchday_number),
     ...result,
     totals: totals(result.successes),
+    metrics: operationalMetrics(result),
     competitionRefresh,
     durationMs: Date.now() - startedAt,
   };
-  logRun({ route, success: response.ok, matchdays: selected.length, durationMs: response.durationMs });
+  logRun({ route, success: response.ok, matchdays: selected.length, durationMs: response.durationMs, ...response.metrics });
   return response;
 }
 
 async function runResultReconciliationInternal() {
   const route = "reconcile-results";
   const startedAt = Date.now();
-  const { season, matchdays, fixtures } = await discover(route, true);
+  const { season, matchdays } = await discover(route, "reconciliation");
   if (!season) return noActiveSeason(route, startedAt);
-  const now = new Date();
-  const startUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 2);
-  const endUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const recentMatchdayIds = new Set(
-    fixtures
-      .filter((fixture) => {
-        const kickoff = Date.parse(fixture.kickoff_at);
-        return Number.isFinite(kickoff) && kickoff >= startUtc && kickoff < endUtc;
-      })
-      .map((fixture) => fixture.matchday_id),
-  );
-  const selected = matchdays.filter(
-    (matchday) => matchday.status === "scoring" || recentMatchdayIds.has(matchday.id),
-  );
+  const selected = matchdays;
   const result = await runSelectedMatchdays({
     route,
     season,
@@ -383,20 +403,21 @@ async function runResultReconciliationInternal() {
     skipped: selected.length === 0,
     reason: selected.length === 0 ? "No recent or scoring matchday needs reconciliation." : undefined,
     season: season.provider_season,
-    reconciliationWindowStartUtc: new Date(startUtc).toISOString(),
+    reconciliationPolicy: "due recovery plus previous two UTC days",
     matchdaysAttempted: selected.map((matchday) => matchday.matchday_number),
     ...result,
     totals: totals(result.successes),
+    metrics: operationalMetrics(result),
     competitionRefresh,
     durationMs: Date.now() - startedAt,
   };
-  logRun({ route, success: response.ok, matchdays: selected.length, durationMs: response.durationMs });
+  logRun({ route, success: response.ok, matchdays: selected.length, durationMs: response.durationMs, ...response.metrics });
   return response;
 }
 
 export async function runDailyFixtureSync() {
   const diagnostics = createSyncDiagnostics({ operation: "runDailyFixtureSync" });
-  return diagnostics.stage("total", () => runDailyFixtureSyncInternal());
+  return diagnostics.stage("total", () => withCronReadContext(() => runDailyFixtureSyncInternal()));
 }
 
 export async function runConditionalResultSync() {
@@ -406,5 +427,5 @@ export async function runConditionalResultSync() {
 
 export async function runResultReconciliation() {
   const diagnostics = createSyncDiagnostics({ operation: "runResultReconciliation" });
-  return diagnostics.stage("total", () => runResultReconciliationInternal());
+  return diagnostics.stage("total", () => withCronReadContext(() => runResultReconciliationInternal()));
 }

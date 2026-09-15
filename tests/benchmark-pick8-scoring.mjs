@@ -40,8 +40,12 @@ async function run(version, budgetMs) {
     try {
       if(url.pathname.includes('/rpc/')) {
         const a=JSON.parse(init.body);
-        const data=(await db.query('select public.score_pick8_matchday($1,$2,$3,$4) as result',
-          [a.check_season_id,a.check_matchday_id,a.check_scoring_revision,a.allow_accelerated_test_completion])).rows[0].result;
+        const rpcName=url.pathname.split('/').at(-1);
+        const data=rpcName==='discover_pick8_due_work'
+          ? (await db.query('select public.discover_pick8_due_work($1,$2,$3) as result',
+              [a.check_policy,a.check_now,a.check_limit])).rows[0].result
+          : (await db.query('select public.score_pick8_matchday($1,$2,$3,$4) as result',
+              [a.check_season_id,a.check_matchday_id,a.check_scoring_revision,a.allow_accelerated_test_completion])).rows[0].result;
         return Response.json(data);
       }
       const parameters=[]; const filters=[];
@@ -127,12 +131,12 @@ async function run(version, budgetMs) {
     calls.length=0;
     const fastStart=performance.now();
     const fast=await cron.runConditionalResultSync();
-    assert.equal(fast.successes[0].sync.fastPath,true);
-    assert.equal(fast.successes[0].recalculated,false);
-    assert.equal(calls.length,6);
+    assert.equal(fast.successes.length,0);
+    assert.equal(fast.skipped,true);
+    assert.equal(calls.length,1);
     const unchanged=await snapshot(db,ids.matchday);
     assert.deepEqual(unchanged.selections,after.selections); assert.deepEqual(unchanged.entries,after.entries);
-    console.log(JSON.stringify({version:'new-fast-path',supabaseRequests:calls.length,totalCronDurationMs:Math.round(performance.now()-fastStart),status:unchanged.matchday.status,rowsChanged:0}));
+    console.log(JSON.stringify({version:'new-nothing-due',supabaseRequests:calls.length,providerRequests:0,totalCronDurationMs:Math.round(performance.now()-fastStart),status:unchanged.matchday.status,rowsChanged:0}));
   }
 }
 try {

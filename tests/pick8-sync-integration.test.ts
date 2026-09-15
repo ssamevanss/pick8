@@ -20,7 +20,7 @@ function harness() {
   }
   const tables: Record<string, Row[]> = {
     seasons: [{ id: "season", name: "2026/27", provider_season: 2026, is_active: true, competition_refresh_pending: false, competition_revision: 0, competition_refresh_after: null }],
-    matchdays: [{ id: "matchday", season_id: "season", matchday_number: 5, fixture_sync_mode: "provider", status: "completed", locks_at: "2026-09-13T10:00:00.000Z", sync_pending: false, scoring_pending: false, sync_revision: 0, scoring_revision: 0, applied_fixture_fingerprint: null, is_accelerated_test: false }],
+    matchdays: [{ id: "matchday", season_id: "season", matchday_number: 5, fixture_sync_mode: "provider", status: "completed", locks_at: "2026-09-13T10:00:00.000Z", sync_pending: false, fixture_application_pending: false, scoring_pending: false, sync_revision: 0, scoring_revision: 0, applied_fixture_fingerprint: null, next_provider_check_at: null, provider_content_version: null, provider_content_fingerprint: null, terminal_fixture_fingerprint: null, terminal_confirmed_at: null, is_accelerated_test: false }],
     fixtures: Array.from({ length: 10 }, (_, i) => ({
       id: `fixture-${i}`, matchday_id: "matchday", external_fixture_id: String(i + 100),
       home_team_id: i * 2 + 1, away_team_id: i * 2 + 2, home_team_name: `Home ${i}`, away_team_name: `Away ${i}`,
@@ -34,6 +34,7 @@ function harness() {
   const calls: Call[] = [];
   const logs: Row[] = [];
   let upstreamCalls = 0;
+  let providerEtag: string | null = null;
   let rpcErrorCode: string | undefined;
   let fail: ((call: Call) => boolean) | undefined;
   let ambiguous: ((call: Call) => boolean) | undefined;
@@ -46,7 +47,13 @@ function harness() {
     const state = tables.matchdays[0];
     state.sync_revision = Number(state.sync_revision) + 1;
     state.sync_pending = true;
+    state.fixture_application_pending = true;
     if (scoring) { state.scoring_revision = Number(state.scoring_revision) + 1; state.scoring_pending = true; }
+  }
+  function localDirty() {
+    const state = tables.matchdays[0];
+    state.scoring_revision = Number(state.scoring_revision) + 1;
+    state.scoring_pending = true;
   }
   function changed(table: string, old: Row | undefined, row: Row) {
     if (table === "fixtures" && JSON.stringify(old) !== JSON.stringify(row)) dirty();
@@ -86,11 +93,15 @@ function harness() {
         if (fail?.(call)) return Promise.resolve(onfulfilled({ data: null, error: { message: "injected failure" } }));
         let rows = tables[table].filter((row) => filters.every((filter) => filter(row)));
         if (operation === "upsert") {
-          rows = tables[table].filter((row) => row.season_id === (values as Row).season_id && row.matchday_number === (values as Row).matchday_number);
-          if (!rows.length) { const row = { id: "matchday", ...(values as Row) }; tables[table].push(row); rows = [row]; }
+          if (Array.isArray(values)) {
+            rows = values.map((value) => tables[table].find((row) => row.id === value.id) ?? value);
+          } else {
+            rows = tables[table].filter((row) => row.season_id === values!.season_id && row.matchday_number === values!.matchday_number);
+            if (!rows.length) { const row = { id: "matchday", ...values }; tables[table].push(row); rows = [row]; }
+          }
         }
         if (operation === "update" || operation === "upsert") {
-          for (const row of rows) { const old = { ...row }; Object.assign(row, values); changed(table, old, row); }
+          for (const [index, row] of rows.entries()) { const old = { ...row }; Object.assign(row, Array.isArray(values) ? values[index] : values); changed(table, old, row); }
         }
         if (operation === "insert") {
           rows = (Array.isArray(values) ? values : [values!]).map((row, i) => ({ id: `insert-${i}`, ...row }));
@@ -107,13 +118,53 @@ function harness() {
     };
     return builder;
   }
-  function rpc(_name: string, args: Record<string, unknown>) {
+  function rpc(name: string, args: Record<string, unknown>) {
     const builder = {
       retry(enabled: boolean) { assert.equal(enabled, false); return builder; },
       abortSignal() { return builder; },
       then(resolve: (value: unknown) => unknown) {
-        const call = { table: "rpc", operation: "rpc", values: args };
+        const call = { table: name === "discover_pick8_due_work" ? "discovery_rpc" : "rpc", operation: "rpc", values: args };
         calls.push(call); before?.(call);
+        if (name === "discover_pick8_due_work") {
+          const season = tables.seasons[0];
+          const policy = String(args.check_policy ?? "results");
+          const providerIsDue = (md: Row) => {
+            const fixtures = tables.fixtures.filter((fixture) => fixture.matchday_id === md.id);
+            const lastKickoff = Math.max(...fixtures.map((fixture) => Date.parse(String(fixture.kickoff_at))));
+            return md.fixture_sync_mode === "provider" &&
+              (md.next_provider_check_at != null ? Date.parse(String(md.next_provider_check_at)) <= now :
+                md.status === "scoring" || fixtures.some(f => ["in_play", "paused"].includes(String(f.status))) ||
+                (Number.isFinite(lastKickoff) && lastKickoff >= now - 4 * 60 * 60_000 && lastKickoff <= now + 30 * 60_000) ||
+                (md.status === "completed" && md.applied_fixture_fingerprint == null && lastKickoff >= now - 2 * 24 * 60 * 60_000));
+          };
+          const due = tables.matchdays.filter((md) => {
+            const providerDue = providerIsDue(md);
+            if (policy === "fixtures" || policy === "reconciliation") return true;
+            return providerDue || Boolean(md.scoring_pending || md.fixture_application_pending || md.sync_pending);
+          }).map((md) => {
+            const fixtures = tables.fixtures.filter((fixture) => fixture.matchday_id === md.id);
+            const allTerminal = fixtures.length > 0 && fixtures.every((fixture) => ["finished", "postponed", "cancelled"].includes(String(fixture.status)));
+            const providerDue = policy !== "results" || providerIsDue(md);
+            return { id: md.id, matchdayNumber: md.matchday_number, status: md.status, locksAt: md.locks_at,
+              fixtureSyncMode: md.fixture_sync_mode, syncRevision: md.sync_revision, scoringRevision: md.scoring_revision,
+              scoredRevision: md.scored_revision ?? null, appliedFixtureFingerprint: md.applied_fixture_fingerprint,
+              fixtureApplicationPending: Boolean(md.fixture_application_pending || md.sync_pending), scoringPending: Boolean(md.scoring_pending),
+              nextProviderCheckAt: md.next_provider_check_at ?? null, providerContentVersion: md.provider_content_version ?? null,
+              providerContentFingerprint: md.provider_content_fingerprint ?? null,
+              terminalFixtureFingerprint: md.terminal_fixture_fingerprint ?? null, terminalConfirmedAt: md.terminal_confirmed_at ?? null,
+              fixtureCount: fixtures.length, firstKickoffAt: fixtures.map(f => f.kickoff_at).sort()[0] ?? null,
+              lastKickoffAt: fixtures.map(f => f.kickoff_at).sort().at(-1) ?? null,
+              hasLiveFixture: fixtures.some(f => ["in_play", "paused"].includes(String(f.status))), allTerminal,
+              providerFreshnessDue: providerDue, localScoringRecoveryDue: Boolean(md.scoring_pending),
+              fixtureApplicationRecoveryDue: Boolean(md.fixture_application_pending || md.sync_pending),
+              competitionLifecycleRecoveryDue: Boolean(season.competition_refresh_pending),
+              dueReasons: [providerDue ? "provider_freshness" : null, md.scoring_pending ? "local_scoring_recovery" : null].filter(Boolean) };
+          });
+          return Promise.resolve(resolve({ data: { season: { id: season.id, name: season.name, providerSeason: season.provider_season,
+            competitionRefreshPending: season.competition_refresh_pending, competitionRevision: season.competition_revision,
+            competitionRefreshAfter: season.competition_refresh_after, lifecycleRecoveryDue: season.competition_refresh_pending },
+            matchdays: due, dailyMatchdayNumbers: policy === "fixtures" ? due.map(md => md.matchdayNumber) : [] }, error: null }));
+        }
         if (rpcErrorCode) return Promise.resolve(resolve({ data: null, error: { message: "transaction rolled back", code: rpcErrorCode }, status: 400 }));
         if (fail?.(call)) return Promise.resolve(resolve({ data: null, error: { message: "injected failure" } }));
         const md = tables.matchdays[0];
@@ -177,17 +228,24 @@ function harness() {
       exports, module: loadedModule, require, Date: ClockDate, Map, Set, URL, AbortSignal, performance, setTimeout, clearTimeout, crypto: globalThis.crypto,
       process: { env: { WHO_YOU_GOT_API_URL: "https://example.test", WHO_YOU_GOT_API_KEY: "test" } },
       console: { info: (value: string) => logs.push(JSON.parse(value)), error: () => {} },
-      fetch: async () => { upstreamCalls++; return Response.json(upstream); },
+      fetch: async (_input: unknown, init?: RequestInit) => {
+        upstreamCalls++;
+        const ifNoneMatch = new Headers(init?.headers).get("if-none-match");
+        if (providerEtag && ifNoneMatch === providerEtag) return new Response(null, { status: 304, headers: { etag: providerEtag } });
+        return Response.json(upstream, { headers: providerEtag ? { etag: providerEtag } : undefined });
+      },
     }, { filename: path });
     return loadedModule.exports as T;
   }
   const sync = load<typeof SyncModule>("utils/who-you-got-fixture-sync.ts");
   const cron = load<typeof CronModule>("utils/pick8-cron-automation.ts");
   return {
-    tables, calls, logs, dirty, sync: () => sync.syncWhoYouGotFixtures({ season: 2026, matchday: 5, recalculateScores: true }),
+    tables, calls, logs, dirty, localDirty, sync: () => sync.syncWhoYouGotFixtures({ season: 2026, matchday: 5, recalculateScores: true }),
     fixtureOnly: () => sync.syncWhoYouGotFixtures({ season: 2026, matchday: 5 }),
-    cron: () => cron.runConditionalResultSync(), reconcile: () => cron.runResultReconciliation(),
+    cron: () => cron.runConditionalResultSync(), daily: () => cron.runDailyFixtureSync(),
+    reconcile: () => cron.runResultReconciliation(),
     upstreamCalls: () => upstreamCalls,
+    etag: (value: string | null) => { providerEtag = value; },
     rpcError: (code: string) => { rpcErrorCode = code; },
     ambiguous: (handler?: (call: Call) => boolean) => { ambiguous = handler; },
     fail: (handler?: (call: Call) => boolean) => { fail = handler; },
@@ -202,43 +260,82 @@ function harness() {
   };
 }
 
-test("10 fixtures / 10 entries: second result invocation does no fixture/scoring/competition work", async () => {
+test("10 fixtures / 10 entries: nothing due exits after one database request", async () => {
   const h = harness();
   await h.cron();
   h.calls.length = 0;
   const result = await h.cron();
-  assert.equal(result.successes[0].sync.fastPath, true);
-  assert.equal(result.successes[0].recalculated, false);
+  assert.equal(result.successes.length, 0);
   assert.equal(result.competitionRefresh, null);
-  assert.equal(h.upstreamCalls(), 2);
-  // Discovery still reads fixtures once; the sync helper does not reread them.
-  assert.equal(h.calls.filter((c) => c.table === "fixtures").length, 1);
-  assert.deepEqual(JSON.parse(JSON.stringify(h.calls.filter((c) => c.operation !== "select"))), [
-    { table: "matchdays", operation: "update", values: { last_upstream_check_at: "2026-09-13T12:00:00.000Z" } },
-  ]);
-  assert.equal(h.calls.length, 6);
+  assert.equal(h.upstreamCalls(), 1);
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].table, "discovery_rpc");
   assert.equal(h.tables.fixtures[0].last_synced_at, "old-check");
   for (const stage of ["discovery", "who_you_got", "fixture_application", "scoring", "competition_refresh", "total"]) {
     assert.ok(h.logs.some((log) => log.stage === stage));
   }
 });
 
-test("failed scoring never advances the applied fingerprint and unchanged content retries", async () => {
+test("one due unchanged matchday uses two Pick 8 requests and one provider request", async () => {
+  const h = harness(); await h.sync();
+  h.tables.matchdays[0].next_provider_check_at = "2026-09-13T11:59:00.000Z";
+  const providerBefore = h.upstreamCalls(); h.calls.length = 0;
+  const result = await h.cron();
+  assert.equal(result.successes[0].sync.fastPath, true);
+  assert.equal(h.upstreamCalls() - providerBefore, 1);
+  assert.equal(h.calls.length, 2);
+});
+
+test("WhoYouGot ETag acknowledgements avoid fixture reads and confirm terminal cadence", async () => {
+  const h = harness(); h.etag('"terminal-v1"'); await h.sync();
+  h.tables.matchdays[0].next_provider_check_at = "2026-09-13T11:59:00.000Z";
+  h.calls.length = 0;
+  const result = await h.cron();
+  assert.equal(result.successes[0].sync.providerNotModified, true);
+  assert.equal(result.successes[0].sync.nextProviderCheckAt, "2026-09-14T12:00:00.000Z");
+  assert.equal(h.calls.filter((call) => call.table === "fixtures").length, 0);
+  assert.equal(h.calls.length, 2);
+});
+
+test("local scoring-only recovery uses three Pick 8 requests and no provider request", async () => {
+  const h = harness(); await h.sync(); h.localDirty();
+  const providerBefore = h.upstreamCalls(); h.calls.length = 0;
+  const result = await h.cron();
+  assert.equal(result.metrics.localRecoveryOnlyCount, 1);
+  assert.equal(h.upstreamCalls(), providerBefore);
+  assert.equal(h.calls.length, 3);
+});
+
+test("future matchday not due uses bounded discovery only", async () => {
+  const h = harness();
+  h.tables.matchdays[0].status = "upcoming";
+  h.tables.matchdays[0].locks_at = "2026-09-20T10:00:00.000Z";
+  for (const fixture of h.tables.fixtures) fixture.kickoff_at = "2026-09-20T10:00:00.000Z";
+  h.calls.length = 0;
+  const result = await h.cron();
+  assert.equal(result.skipped, true);
+  assert.equal(h.upstreamCalls(), 0);
+  assert.equal(h.calls.length, 1);
+});
+
+test("failed scoring preserves local recovery without undoing provider application", async () => {
   const h = harness();
   h.fail((call) => call.table === "rpc");
   await assert.rejects(h.sync(), /injected failure/);
-  assert.equal(h.tables.matchdays[0].applied_fixture_fingerprint, null);
+  assert.ok(h.tables.matchdays[0].applied_fixture_fingerprint);
+  assert.equal(h.tables.matchdays[0].fixture_application_pending, false);
   assert.equal(h.tables.matchdays[0].scoring_pending, true);
-  h.fail();
-  assert.equal((await h.sync()).fastPath, false);
-  assert.equal((await h.sync()).fastPath, true);
+  const calls = h.upstreamCalls(); h.fail();
+  await h.cron();
+  assert.equal(h.upstreamCalls(), calls);
+  assert.equal(h.tables.matchdays[0].scoring_pending, false);
 });
 
 test("a failed changed-fixture write keeps the old applied fingerprint and recovery pending", async () => {
   const h = harness(); await h.sync();
   const old = h.tables.matchdays[0].applied_fixture_fingerprint;
   h.upstream().fixtures[0].home_score = 3;
-  h.fail((call) => call.table === "fixtures" && call.operation === "update");
+  h.fail((call) => call.table === "fixtures" && call.operation === "upsert");
   await assert.rejects(h.sync(), /injected failure/);
   assert.equal(h.tables.matchdays[0].applied_fixture_fingerprint, old);
   assert.equal(h.tables.matchdays[0].sync_pending, true);
@@ -246,22 +343,34 @@ test("a failed changed-fixture write keeps the old applied fingerprint and recov
   assert.notEqual(h.tables.matchdays[0].applied_fixture_fingerprint, old);
 });
 
+test("changed provider fixtures use one bulk upsert request", async () => {
+  const h = harness(); await h.sync();
+  h.tables.matchdays[0].next_provider_check_at = "2026-09-13T11:59:00.000Z";
+  h.upstream().fixtures[0].home_score = 3; h.calls.length = 0;
+  const result = await h.cron();
+  assert.equal(result.totals.updated, 1);
+  assert.equal(h.calls.filter((call) => call.table === "fixtures" && call.operation === "upsert").length, 1);
+});
+
 test("local dirty state and fixture-only calls cannot acknowledge pending scoring", async () => {
-  const h = harness(); await h.fixtureOnly();
-  assert.equal(h.tables.matchdays[0].applied_fixture_fingerprint, null);
+  const h = harness(); h.upstream().fixtures[0].home_score = 3; await h.fixtureOnly();
+  assert.ok(h.tables.matchdays[0].applied_fixture_fingerprint);
+  assert.equal(h.tables.matchdays[0].fixture_application_pending, false);
   assert.equal(h.tables.matchdays[0].scoring_pending, true);
-  await h.sync(); h.dirty();
-  assert.equal((await h.sync()).fastPath, false);
+  const calls = h.upstreamCalls(); await h.cron();
+  assert.equal(h.upstreamCalls(), calls);
+  assert.equal(h.tables.matchdays[0].scoring_pending, false);
 });
 
 test("concurrent input edits cannot be cleared by scoring acknowledgement", async () => {
   const h = harness();
   h.before((call) => {
-    if (call.table === "rpc") { h.dirty(); h.before(); }
+    if (call.table === "rpc") { h.localDirty(); h.before(); }
   });
   await assert.rejects(h.sync(), /inputs changed/);
   assert.equal(h.tables.matchdays[0].scoring_pending, true);
-  assert.equal(h.tables.matchdays[0].applied_fixture_fingerprint, null);
+  assert.ok(h.tables.matchdays[0].applied_fixture_fingerprint);
+  assert.equal(h.tables.matchdays[0].fixture_application_pending, false);
 });
 
 test("concurrent local edits during the unchanged check cannot be acknowledged", async () => {
@@ -294,15 +403,16 @@ test("competition refresh failure retries independently of an unchanged provider
   assert.equal(h.tables.seasons[0].competition_refresh_pending, true);
   h.fail();
   const result = await h.cron();
-  assert.equal(result.successes[0].sync.fastPath, true);
+  assert.equal(result.successes.length, 0);
   assert.equal(h.tables.seasons[0].competition_refresh_pending, false);
 });
 
 test("daily reconciliation also uses the clean fingerprint fast path", async () => {
-  const h = harness(); await h.sync(); h.clock("2026-09-14T05:30:00Z");
+  const h = harness(); await h.sync(); h.clock("2026-09-14T05:30:00Z"); h.calls.length = 0;
   const result = await h.reconcile();
   assert.equal(result.successes[0].sync.fastPath, true);
   assert.equal(result.successes[0].recalculated, false);
+  assert.equal(h.calls.length, 2);
 });
 
 test("a revision change during fingerprint acknowledgement retains dirty state", async () => {
@@ -359,7 +469,7 @@ test("ambiguous competition acknowledgement reads back committed checkpoint with
   assert.equal(h.calls.filter(competitionAck).length, 1);
   h.calls.length = 0;
   await h.cron();
-  assert.equal(h.calls.length, 6);
+  assert.equal(h.calls.length, 1);
 });
 
 test("ambiguous acknowledgement preserves a newer revision and its pending work", async () => {
@@ -412,7 +522,7 @@ test("committed scoring and fingerprint acknowledgements survive lost responses"
   assert.equal(h.tables.matchdays[0].scoring_pending, false);
   h.calls.length = 0;
   await h.cron();
-  assert.equal(h.calls.length, 6);
+  assert.equal(h.calls.length, 1);
 });
 
 test("older competition refresh cannot overwrite a newer clock checkpoint at the same revision", async () => {
@@ -429,22 +539,19 @@ test("older competition refresh cannot overwrite a newer clock checkpoint at the
 });
 
 
-test("fingerprint-only recovery reuses committed scoring and returns to fast path while scoring", async () => {
+test("failed provider-application acknowledgement retains recovery and retries safely", async () => {
   const h = harness();
-  const fixture = h.tables.fixtures[9]; fixture.status = "timed"; fixture.home_score = null; fixture.away_score = null;
-  h.tables.matchdays[0].status = "scoring"; h.resetUpstream();
   h.fail(call => typeof call.values?.applied_fixture_fingerprint === "string");
   await assert.rejects(h.sync(), /injected failure/);
   assert.equal(h.tables.matchdays[0].scoring_pending, false);
   assert.equal(h.tables.matchdays[0].sync_pending, true);
-  const checkpoint = h.tables.matchdays[0].scoring_result;
-  h.fail(); h.calls.length = 0;
-  const recovered = await h.sync();
-  assert.equal(recovered.scoring?.reused, true);
+  const providerBefore = h.upstreamCalls(); h.fail(); h.calls.length = 0;
+  const result = await h.cron();
+  assert.equal(result.successes[0].sync.fastPath, true);
+  assert.equal(h.upstreamCalls(), providerBefore);
   assert.equal(h.calls.filter(c=>c.table === "rpc").length, 0);
-  assert.equal(h.tables.matchdays[0].scoring_result, checkpoint);
-  assert.equal(h.tables.matchdays[0].status, "scoring");
-  assert.equal((await h.sync()).fastPath, true);
+  assert.equal(h.tables.matchdays[0].sync_pending, false);
+  assert.equal(h.tables.matchdays[0].status, "completed");
 });
 
 test("insufficient admission budget returns a durable deferred result without RPC or competition work", async () => {
@@ -455,7 +562,7 @@ test("insufficient admission budget returns a durable deferred result without RP
   assert.equal("complete" in result && result.complete, false);
   assert.equal("deferred" in result && result.deferred.length, 1);
   assert.equal(h.tables.matchdays[0].scoring_pending, true);
-  assert.equal(h.tables.matchdays[0].sync_pending, true);
+  assert.equal(h.tables.matchdays[0].sync_pending, false);
   assert.equal(h.calls.filter(c=>c.table === "rpc" || c.table === "competitions").length, 0);
 });
 
@@ -519,6 +626,6 @@ for (const code of ["55P03", "40P01", "40001", "57014"]) {
     assert.equal("deferred" in result && result.deferred.length, 1);
     assert.equal(h.calls.filter(c=>c.table === "rpc").length, 1);
     assert.equal(h.tables.matchdays[0].scoring_pending, true);
-    assert.equal(h.tables.matchdays[0].sync_pending, true);
+    assert.equal(h.tables.matchdays[0].sync_pending, false);
   });
 }
