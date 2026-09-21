@@ -12,8 +12,8 @@ import {
   getDuplicatePick8Categories,
   getMissingPick8Categories,
   parsePick8DraftSelections,
-  PICK8_CATEGORIES,
 } from "@/utils/pick8-entry-validation";
+import { getPick8Rules, normalizePick8RulesVersion } from "@/utils/pick8-rules";
 import {
   persistedEntryMatchesIntent,
   resolvePick8Mutation,
@@ -26,7 +26,6 @@ import {
   isTransientDatabaseError,
 } from "@/utils/supabase/resilience";
 
-const REQUIRED_CATEGORIES = PICK8_CATEGORIES;
 const ENTRY_PRIMARY_ACTION_TIMEOUT_MS = 20_000;
 const ENTRY_TOTAL_ACTION_TIMEOUT_MS = 30_000;
 const ENTRY_RPC_TIMEOUT_MS = 17_000;
@@ -204,7 +203,7 @@ export async function savePickEntry(
 
   const { data: matchday, error: matchdayError } = await supabase
     .from("matchdays")
-    .select("id, status, locks_at, seasons!inner(is_active)")
+    .select("id, status, locks_at, pick8_rules_version, seasons!inner(is_active)")
     .eq("id", matchdayId)
     .eq("seasons.is_active", true)
     .maybeSingle();
@@ -249,7 +248,9 @@ export async function savePickEntry(
     return failure("This entry is already submitted. Enter edit mode to change it before the first kickoff.");
   }
 
-  const parsed = parsePick8DraftSelections(formData, fixtureIds);
+  const rulesVersion = normalizePick8RulesVersion(matchday.pick8_rules_version);
+  const rules = getPick8Rules(rulesVersion);
+  const parsed = parsePick8DraftSelections(formData, fixtureIds, rulesVersion);
   if ("error" in parsed) {
     return failure(parsed.error ?? "One or more selections are malformed.");
   }
@@ -263,8 +264,8 @@ export async function savePickEntry(
     return failure("Total Goals must be a whole number between 0 and 100.");
   }
   if (intent === "submit" || intent === "save_changes") {
-    const missingCategories = getMissingPick8Categories(parsed.selections);
-    if (totalGoals === null || parsed.selections.length !== REQUIRED_CATEGORIES.length || missingCategories.length) {
+    const missingCategories = getMissingPick8Categories(parsed.selections, rulesVersion);
+    if (totalGoals === null || parsed.selections.length !== rules.fixtureSelectionCount || missingCategories.length) {
       const missing = [
         ...missingCategories.map((category) => category.replaceAll("_", " ")),
         ...(totalGoals === null ? ["total goals"] : []),
@@ -345,9 +346,9 @@ export async function savePickEntry(
     if (entryUpdateError.message.includes("Matchday has locked")) {
       return failure(PICK8_MATCHDAY_LOCKED_MESSAGE);
     }
-    if (entryUpdateError.message.includes("Entry must have all seven fixture selections and Total Goals before submission")) {
+    if (entryUpdateError.message.includes("Entry must have every required fixture selection and Total Goals before submission")) {
       return failure(
-        "This entry is incomplete and could not be submitted. Complete all seven fixture picks and Total Goals, then try again.",
+        `This entry is incomplete and could not be submitted. Complete all ${rules.fixtureSelectionCount} fixture picks and Total Goals, then try again.`,
       );
     }
     return failure("Your entry could not be saved.");

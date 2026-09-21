@@ -29,6 +29,7 @@ import {
   groupFixturePicks,
   PICK8_CATEGORY_LABELS,
 } from "@/utils/pick8-selection-display";
+import { getPick8Rules } from "@/utils/pick8-rules";
 
 function scoreLabel(score: number | null) {
   if (score === null) return "Pending";
@@ -86,6 +87,7 @@ export default function ReadOnlyMatchdayPicks({
   showCurrentPlayerSummary?: boolean;
   now: number;
 }) {
+  const rules = getPick8Rules(matchday.pick8_rules_version);
   const fixtureById = new Map(fixtures.map((fixture) => [fixture.id, fixture]));
   const [expandedPlayers, setExpandedPlayers] = useState<Set<string>>(
     () =>
@@ -150,6 +152,7 @@ export default function ReadOnlyMatchdayPicks({
           finalReady={finalReady}
           finalMatchdayScore={currentSubmittedEntry.calculated_score}
           totalGoalsPoints={submittedCurrentPlayer?.totalGoalsPoints ?? null}
+          totalSelectionCount={rules.totalSelectionCount}
           now={now}
         />
       ) : showCurrentPlayerSummary ? <section className="brand-card p-4 sm:p-5"><p className="brand-eyebrow">Your Pick8</p><h2 className="mt-1 text-xl font-black text-white">No entry submitted</h2><p className="mt-2 text-sm text-slate-400">You did not submit a Pick8 entry for Matchday {matchday.matchday_number}.</p></section> : null}
@@ -192,7 +195,7 @@ export default function ReadOnlyMatchdayPicks({
                       ? selection.selected_team_side
                       : null,
                   },
-                  { home_score: fixture.home_score, away_score: fixture.away_score },
+                  { status: fixture.status, home_score: fixture.home_score, away_score: fixture.away_score },
                 ) : null;
                 const displayedPoints = fixture.status === "finished" && selection.points_awarded !== null
                   ? selection.points_awarded

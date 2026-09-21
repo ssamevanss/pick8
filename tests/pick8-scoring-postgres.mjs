@@ -1,7 +1,7 @@
 // Run with PICK8_PG_TEST_DEPENDENCIES=/path/to/test-deps node --test tests/pick8-scoring-postgres.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTestDatabase, referenceScorer, seed, snapshot, score } from './helpers/pick8-postgres.mjs';
+import { categoriesV2, createTestDatabase, referenceScorer, seed, snapshot, score } from './helpers/pick8-postgres.mjs';
 
 const cluster = await createTestDatabase();
 const admin = cluster.admin;
@@ -72,6 +72,69 @@ try {
       assert.equal((await db.query("select points_awarded from public.entry_selections where category='draw'")).rows[0].points_awarded,15+goals);
     }
   });
+  await test('rules version 1 historical entries retain seven picks and recalculate unchanged', async () => {
+    const ids = await seed(admin, { entries: 2, rulesVersion: 1 });
+    const before = await snapshot(db, ids.matchday);
+    assert.equal(before.matchday.pick8_rules_version, 1);
+    assert.equal(before.selections.length, 14);
+    assert.equal(before.selections.some(selection => selection.category === 'btts'), false);
+    const first = await verify(ids);
+    await db.query('update public.matchdays set scoring_pending=true where id=$1', [ids.matchday]);
+    const second = await verify(ids);
+    assert.deepEqual(second.after.entries, first.after.entries);
+    assert.deepEqual(second.after.selections, first.after.selections);
+  });
+  await test('rules version 2 validates and scores mandatory BTTS at +10/-10', async () => {
+    const ids = await seed(admin, { entries: 1, rulesVersion: 2 });
+    const btts = (await db.query("select fixture_id from public.entry_selections where category='btts'")).rows[0];
+    assert.ok(btts);
+    for (const [home, away, points] of [[1,1,10],[2,1,10],[0,0,-10],[1,0,-10],[0,3,-10]]) {
+      await db.query('update public.fixtures set status=\'finished\',home_score=$1,away_score=$2 where id=$3', [home, away, btts.fixture_id]);
+      await verify(ids);
+      const row = (await db.query("select points_awarded,is_correct from public.entry_selections where category='btts'")).rows[0];
+      assert.equal(row.points_awarded, points, `${home}-${away}`);
+      assert.equal(row.is_correct, points === 10, `${home}-${away}`);
+    }
+  });
+  await test('database submission validation is rules-version aware', async () => {
+    await seed(admin, { entries: 1, rulesVersion: 1, draft: true });
+    await assert.rejects(
+      admin.query("update public.entry_selections set category='btts',selected_team_side=null where category='clean_sheet'"),
+      error => error.code === '23514',
+    );
+    const current = await seed(admin, { entries: 1, rulesVersion: 2, draft: true });
+    await admin.query("delete from public.entry_selections where category='btts'");
+    await assert.rejects(
+      admin.query('update public.entries set submitted_at=now() where matchday_id=$1', [current.matchday]),
+      error => error.code === '23514',
+    );
+    const userId = (await admin.query(
+      'select user_id from public.entries where matchday_id=$1',
+      [current.matchday],
+    )).rows[0].user_id;
+    await db.query("select set_config('request.jwt.claim.sub',$1,false)", [userId]);
+    await admin.query("update public.matchdays set status='open' where id=$1", [current.matchday]);
+    await admin.query(
+      "update public.fixtures set status='timed',kickoff_at=now()+interval '1 day' where matchday_id=$1",
+      [current.matchday],
+    );
+    const selections = categoriesV2.map((category, index) => ({
+      category,
+      fixture_id: current.fixtures[index].id,
+      selected_team_side: category === 'draw' || category === 'btts'
+        ? null
+        : category === 'away_win' ? 'away' : 'home',
+    }));
+    const saved = await db.query(
+      'select public.save_pick8_entry($1,$2,$3,$4::jsonb) as result',
+      [current.matchday, 'submit', 30, JSON.stringify(selections)],
+    );
+    assert.ok(saved.rows[0].result.submitted_at);
+    assert.equal((await db.query(
+      'select count(*)::int as count from public.entry_selections where entry_id=$1',
+      [saved.rows[0].result.entry_id],
+    )).rows[0].count, 8);
+  });
   await test('unfinished/null/void fixtures and finished fixtures with missing scores retain exact semantics', async () => {
     for (const status of ['scheduled','timed','in_play','paused','postponed','cancelled','finished']) {
       for (const home of [null,2]) for (const away of [null,1]) {
@@ -82,6 +145,16 @@ try {
     const ids = await seed(admin, { entries:1, status:'finished' });
     await db.query("update public.fixtures set status='postponed',home_score=9,away_score=9 where id=$1",[ids.fixtures[0].id]);
     await verify(ids);
+  });
+  await test('a finished fixture with either score missing prevents finalization', async () => {
+    for (const [home, away] of [[null,1],[2,null],[null,null]]) {
+      const ids = await seed(admin, { entries: 1, status: 'finished', home, away, rulesVersion: 2 });
+      const { result, after } = await verify(ids);
+      assert.equal(result.finalScoringReady, false);
+      assert.equal(result.entriesFinalized, 0);
+      assert.equal(after.matchday.status, 'scoring');
+      assert.equal(after.entries[0].calculated_score, null);
+    }
   });
   await test('26 entries / 182 selections: final scoring, exact Total Goals bonus, then zero changed output rows', async () => {
     const ids = await seed(admin);

@@ -4,6 +4,7 @@ export type BreakdownMatchday = {
   matchday_number: number;
   status: string;
   locks_at: string | null;
+  pick8_rules_version?: number;
 };
 export type BreakdownFixture = {
   id: string;

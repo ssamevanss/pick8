@@ -254,6 +254,7 @@ export type Database = {
           locks_at: string | null
           matchday_number: number
           opens_at: string | null
+          pick8_rules_version: number
           season_id: string
           status: string
           updated_at: string
@@ -280,6 +281,7 @@ export type Database = {
           locks_at?: string | null
           matchday_number: number
           opens_at?: string | null
+          pick8_rules_version?: number
           season_id: string
           status?: string
           updated_at?: string
@@ -306,6 +308,7 @@ export type Database = {
           locks_at?: string | null
           matchday_number?: number
           opens_at?: string | null
+          pick8_rules_version?: number
           season_id?: string
           status?: string
           updated_at?: string

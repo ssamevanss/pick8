@@ -221,7 +221,7 @@ function harness() {
       if (id === "@/utils/supabase/admin") return { createAdminClient: () => ({ from, rpc }) };
       if (id === "next/server") return { NextResponse: Response };
       if (id.startsWith("@/")) return load(`${id.slice(2)}.ts`);
-      if (id.startsWith(".")) return load(resolve(dirname(path), `${id}.ts`));
+      if (id.startsWith(".")) return load(resolve(dirname(path), id.endsWith(".ts") ? id : `${id}.ts`));
       return nativeRequire(id);
     };
     runInNewContext(source, {
@@ -304,6 +304,23 @@ test("local scoring-only recovery uses three Pick 8 requests and no provider req
   assert.equal(result.metrics.localRecoveryOnlyCount, 1);
   assert.equal(h.upstreamCalls(), providerBefore);
   assert.equal(h.calls.length, 3);
+});
+
+test("Who You Got finished-score sync calculates a BTTS pick and updates entry scoring", async () => {
+  const h = harness();
+  const selection = h.tables.entry_selections[0];
+  selection.category = "btts";
+  selection.selected_team_side = null;
+  h.tables.fixtures[0].home_score = 0;
+  h.tables.fixtures[0].away_score = 0;
+  h.upstream().fixtures[0].home_score = 1;
+  h.upstream().fixtures[0].away_score = 1;
+
+  await h.sync();
+
+  assert.equal(selection.points_awarded, 10);
+  assert.equal(selection.is_correct, true);
+  assert.equal(h.tables.entries[0].calculated_score, 46);
 });
 
 test("future matchday not due uses bounded discovery only", async () => {

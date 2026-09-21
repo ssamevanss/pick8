@@ -20,9 +20,13 @@ import {
   buildPick8EditorSnapshot,
   copyPick8EditorSnapshot,
   parsePick8DraftSelections,
-  PICK8_CATEGORIES,
   restorePick8DraftChoices,
 } from "../utils/pick8-entry-validation.ts";
+import {
+  getPick8Rules,
+  PICK8_V1_CATEGORIES,
+  PICK8_V2_CATEGORIES,
+} from "../utils/pick8-rules.ts";
 import { logicalPick8FixtureKey } from "../utils/pick8-fixture-identity.ts";
 import {
   getFixtureAutomationPlan,
@@ -155,12 +159,26 @@ test("an early results refresh cannot move a matchday to scoring before kickoff"
   assert.equal(isInitialPick8EntryWindowOpen("scoring", kickoffAt, kickoff), false);
 });
 
-test("submission requires seven unique categories, seven fixtures and Total Goals", () => {
-  const complete = PICK8_CATEGORIES.map((category, index) => ({ category, fixtureId: `fixture-${index}` }));
+test("rules version 1 requires seven fixture categories and Total Goals", () => {
+  const complete = PICK8_V1_CATEGORIES.map((category, index) => ({ category, fixtureId: `fixture-${index}` }));
   assert.equal(isCompletePick8Entry(complete, 25), true);
   assert.equal(isCompletePick8Entry(complete.slice(0, 6), 25), false);
   assert.equal(isCompletePick8Entry(complete, null), false);
   assert.equal(isCompletePick8Entry(complete.map((pick) => ({ ...pick, fixtureId: "same" })), 25), false);
+});
+
+test("rules version 2 requires BTTS as an eighth unique fixture category", () => {
+  const complete = PICK8_V2_CATEGORIES.map((category, index) => ({ category, fixtureId: `fixture-${index}` }));
+  assert.deepEqual(getPick8Rules(1), {
+    version: 1,
+    categories: PICK8_V1_CATEGORIES,
+    fixtureSelectionCount: 7,
+    totalSelectionCount: 8,
+  });
+  assert.equal(getPick8Rules(2).totalSelectionCount, 9);
+  assert.equal(isCompletePick8Entry(complete, 25, 2), true);
+  assert.equal(isCompletePick8Entry(complete.slice(0, 7), 25, 2), false);
+  assert.equal(isCompletePick8Entry(complete, 25, 1), false);
 });
 
 test("entry state is derived only from row existence and submitted_at", () => {
@@ -211,7 +229,7 @@ test("admin users sort participating, paused, then inactive and alphabetically",
 test("an incomplete seven-pick draft survives form serialization and reload", () => {
   const fixtureIds = Array.from({ length: 10 }, (_, index) => `fixture-${index + 1}`);
   const formData = new FormData();
-  PICK8_CATEGORIES.forEach((category, index) => {
+  PICK8_V1_CATEGORIES.forEach((category, index) => {
     formData.set(`fixture_category_${fixtureIds[index]}`, category);
     formData.set(`fixture_side_${fixtureIds[index]}`, category === "draw" ? "" : index % 2 ? "away" : "home");
   });
@@ -224,11 +242,37 @@ test("an incomplete seven-pick draft survives form serialization and reload", ()
 
   const restored = restorePick8DraftChoices(fixtureIds, parsed.selections);
   assert.equal(Object.values(restored).filter((choice) => choice.category).length, 7);
-  PICK8_CATEGORIES.forEach((category, index) => {
+  PICK8_V1_CATEGORIES.forEach((category, index) => {
     assert.equal(restored[fixtureIds[index]]?.category, category);
   });
 
   assert.equal(isCompletePick8Entry(parsed.selections, 27), true);
+});
+
+test("version 2 form parsing saves and restores a mandatory BTTS pick", () => {
+  const fixtureIds = Array.from({ length: 10 }, (_, index) => `fixture-v2-${index + 1}`);
+  const formData = new FormData();
+  PICK8_V2_CATEGORIES.forEach((category, index) => {
+    formData.set(`fixture_category_${fixtureIds[index]}`, category);
+    formData.set(
+      `fixture_side_${fixtureIds[index]}`,
+      category === "draw" || category === "btts" ? "" : index % 2 ? "away" : "home",
+    );
+  });
+
+  const parsed = parsePick8DraftSelections(formData, fixtureIds, 2);
+  assert.ok("selections" in parsed);
+  assert.equal(parsed.selections.length, 8);
+  assert.deepEqual(parsed.selections.find(({ category }) => category === "btts"), {
+    category: "btts",
+    fixtureId: fixtureIds[7],
+    selectedTeamSide: null,
+  });
+  assert.equal(isCompletePick8Entry(parsed.selections, 28, 2), true);
+  const legacyParsed = parsePick8DraftSelections(formData, fixtureIds, 1);
+  assert.ok("error" in legacyParsed);
+  assert.equal(legacyParsed.error, "One or more fixture categories are invalid for this Matchday.");
+  assert.equal(restorePick8DraftChoices(fixtureIds, parsed.selections, 2)[fixtureIds[7]].category, "btts");
 });
 
 test("draft parsing permits temporary duplicate categories but completion rejects them", () => {
@@ -300,6 +344,8 @@ test("live Pick8 outcome states use the same category semantics as final scoring
   assert.equal(getPick8FixtureSelectionOutcome({ category: "clean_sheet", selected_team_side: "home" }, liveHomeLead), "negative");
   assert.equal(getPick8FixtureSelectionOutcome({ category: "clean_sheet", selected_team_side: "home" }, { status: "finished", home_score: 1, away_score: 0 }), "positive");
   assert.equal(getPick8FixtureSelectionOutcome({ category: "team_score", selected_team_side: "away" }, { status: "finished", home_score: 1, away_score: 0 }), "negative");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "btts", selected_team_side: null }, liveDraw), "neutral");
+  assert.equal(getPick8FixtureSelectionOutcome({ category: "btts", selected_team_side: null }, { status: "finished", home_score: 1, away_score: 1 }), "positive");
 });
 
 test("live Pick8 points recalculate from the current score without requiring final status", () => {
@@ -310,6 +356,16 @@ test("live Pick8 points recalculate from the current score without requiring fin
   assert.deepEqual(calculatePick8FixtureSelectionPoints(homeWinner, { home_score: 0, away_score: 1 }), { pointsAwarded: -5, isCorrect: false });
   assert.deepEqual(calculatePick8FixtureSelectionPoints(homeWinner, { home_score: 2, away_score: 0 }), { pointsAwarded: 7, isCorrect: true });
   assert.deepEqual(calculatePick8FixtureSelectionPoints({ category: "draw", selected_team_side: null }, { home_score: 1, away_score: 0 }), { pointsAwarded: 0, isCorrect: false });
+});
+
+test("BTTS awards +10 or -10 only from finished final scores", () => {
+  const btts = { category: "btts" as const, selected_team_side: null };
+  assert.deepEqual(calculatePick8FixtureSelectionPoints(btts, { status: "finished", home_score: 1, away_score: 1 }), { pointsAwarded: 10, isCorrect: true });
+  assert.deepEqual(calculatePick8FixtureSelectionPoints(btts, { status: "finished", home_score: 2, away_score: 1 }), { pointsAwarded: 10, isCorrect: true });
+  assert.deepEqual(calculatePick8FixtureSelectionPoints(btts, { status: "finished", home_score: 0, away_score: 0 }), { pointsAwarded: -10, isCorrect: false });
+  assert.deepEqual(calculatePick8FixtureSelectionPoints(btts, { status: "finished", home_score: 1, away_score: 0 }), { pointsAwarded: -10, isCorrect: false });
+  assert.deepEqual(calculatePick8FixtureSelectionPoints(btts, { status: "finished", home_score: 0, away_score: 3 }), { pointsAwarded: -10, isCorrect: false });
+  assert.equal(calculatePick8FixtureSelectionPoints(btts, { status: "in_play", home_score: 1, away_score: 1 }), null);
 });
 
 test("current Matchday score sums shared card points and only legitimate Total Goals points", () => {

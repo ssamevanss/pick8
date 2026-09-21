@@ -4,7 +4,7 @@ export type StandingsProfile = {
   is_active?: boolean;
   pick8_participation_active?: boolean;
 };
-export type StandingsMatchday = { id: string; matchday_number: number; status: string; locks_at: string | null };
+export type StandingsMatchday = { id: string; matchday_number: number; status: string; locks_at: string | null; pick8_rules_version?: number };
 export type StandingsCompetition = { id: string; name: string; start_matchday: number; end_matchday: number; status: string };
 export type StandingsEntry = { id: string; user_id: string; matchday_id: string; submitted_at: string | null; calculated_score: number | null };
 

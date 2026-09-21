@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve, join } from 'node:path';
+import { resolve, join, dirname, extname } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { runInNewContext } from 'node:vm';
@@ -18,6 +18,10 @@ export function referenceScorer() {
     const require = id => {
       if (id === 'server-only') return {};
       if (id === '@/utils/supabase/admin') return { createAdminClient() { throw Error('Reference scorer cannot access database'); } };
+      if (id.startsWith('.')) {
+        const relativePath = resolve(dirname(file), id).replace(`${root}/`, '');
+        return load(extname(relativePath) ? relativePath : `${relativePath}.ts`);
+      }
       return id.startsWith('@/') ? load(id.slice(2) + '.ts') : native(id);
     };
     runInNewContext(source, { module: loadedModule, exports: loadedModule.exports, require, Date, Map, Set, console, performance, crypto: globalThis.crypto });
@@ -79,19 +83,21 @@ export async function createTestDatabase() {
 }
 
 export const categories = ['home_win','away_win','draw','team_win','team_lose','team_score','clean_sheet'];
-export async function seed(db, { entries = 26, status = 'finished', home = 2, away = 1, future = false, manual = false, accelerated = false, draft = false } = {}) {
+export const categoriesV2 = [...categories, 'btts'];
+export async function seed(db, { entries = 26, status = 'finished', home = 2, away = 1, future = false, manual = false, accelerated = false, draft = false, rulesVersion = 1 } = {}) {
   await db.query('truncate public.seasons, auth.users cascade');
   const season = (await db.query("insert into public.seasons(name,provider_season,is_active) values('2026/27',2026,true) returning id")).rows[0].id;
-  const matchday = (await db.query("insert into public.matchdays(season_id,matchday_number,status,fixture_sync_mode,is_accelerated_test) values($1,4,'scoring',$2,$3) returning id", [season, manual ? 'manual' : 'provider', accelerated])).rows[0].id;
+  const matchday = (await db.query("insert into public.matchdays(season_id,matchday_number,status,fixture_sync_mode,is_accelerated_test,pick8_rules_version) values($1,4,'scoring',$2,$3,$4) returning id", [season, manual ? 'manual' : 'provider', accelerated, rulesVersion])).rows[0].id;
   const fixtures = (await db.query(`insert into public.fixtures(matchday_id,external_fixture_id,home_team_name,away_team_name,kickoff_at,status,home_score,away_score)
     select $1,'test-'||i,'Home '||i,'Away '||i,now() + $5::interval,$2,$3,$4 from generate_series(1,10) i returning *`,
     [matchday, status, home, away, future ? '1 day' : '-1 day'])).rows;
   const players = (await db.query(`insert into auth.users(id,email) select gen_random_uuid(),'player'||i||'@test.invalid' from generate_series(1,$1::int) i returning id`, [entries])).rows;
   for (const player of players) {
     const entry = (await db.query('insert into public.entries(user_id,matchday_id,total_goals_prediction) values($1,$2,$3) returning id', [player.id, matchday, Math.min(200, (home ?? 0)*10+(away ?? 0)*10)])).rows[0].id;
+    const selectedCategories = rulesVersion === 2 ? categoriesV2 : categories;
     await db.query(`insert into public.entry_selections(entry_id,fixture_id,category,selected_team_side)
-      select $1,f,c,case when c='draw' then null when c='away_win' then 'away' else 'home' end
-      from unnest($2::uuid[],$3::text[]) as t(f,c)`, [entry, fixtures.slice(0,7).map(f=>f.id), categories]);
+      select $1,f,c,case when c in ('draw','btts') then null when c='away_win' then 'away' else 'home' end
+      from unnest($2::uuid[],$3::text[]) as t(f,c)`, [entry, fixtures.slice(0,selectedCategories.length).map(f=>f.id), selectedCategories]);
     if (!draft) await db.query('update public.entries set submitted_at=now() where id=$1', [entry]);
   }
   return { season, matchday, fixtures };

@@ -20,13 +20,11 @@ import {
 import type { BreakdownEntry, BreakdownFixture, BreakdownSelection } from "@/utils/pick8-breakdown-types";
 import {
   getPick8EntryState,
-  PICK8_CATEGORIES,
   type Pick8Category,
 } from "@/utils/pick8-entry-validation";
+import { getPick8Rules, PICK8_CATEGORY_METADATA } from "@/utils/pick8-rules";
 
 type StandingRow = ReturnType<typeof buildStandings>[number];
-
-const TEAM_PICK_CATEGORIES = new Set<Pick8Category>(["team_win", "team_lose", "team_score", "clean_sheet"]);
 
 function matchdayTiming(matchday: StandingsMatchday, now: number) {
   const lifecycle = playerMatchdayLifecycle(matchday, now);
@@ -40,17 +38,22 @@ function matchdayTiming(matchday: StandingsMatchday, now: number) {
   return `Picks lock in ${[days ? `${days}d` : "", hours ? `${hours}h` : "", `${minutes}m`].filter(Boolean).join(" ")}`;
 }
 
-function selectionProgress(entry: BreakdownEntry | undefined, selections: BreakdownSelection[]) {
+function selectionProgress(
+  entry: BreakdownEntry | undefined,
+  selections: BreakdownSelection[],
+  rulesVersion: number | undefined,
+) {
   if (!entry) return 0;
+  const categories = getPick8Rules(rulesVersion).categories;
   const counts = new Map<Pick8Category, number>();
   for (const selection of selections) {
-    if (!PICK8_CATEGORIES.includes(selection.category as Pick8Category)) continue;
+    if (!categories.includes(selection.category as Pick8Category)) continue;
     const category = selection.category as Pick8Category;
     counts.set(category, (counts.get(category) ?? 0) + 1);
   }
-  const completedPicks = PICK8_CATEGORIES.filter((category) => {
+  const completedPicks = categories.filter((category) => {
     if (counts.get(category) !== 1) return false;
-    if (!TEAM_PICK_CATEGORIES.has(category)) return true;
+    if (!PICK8_CATEGORY_METADATA[category].needsTeam) return true;
     return selections.some((selection) => selection.category === category && (selection.selected_team_side === "home" || selection.selected_team_side === "away"));
   }).length;
   const totalGoals = entry.total_goals_prediction;
@@ -61,12 +64,13 @@ function selectionProgress(entry: BreakdownEntry | undefined, selections: Breakd
 function entryPresentation(matchday: StandingsMatchday, entry: BreakdownEntry | undefined, now: number, progress: number) {
   const lifecycle = playerMatchdayLifecycle(matchday, now);
   const entryState = getPick8EntryState(entry);
+  const totalSelectionCount = getPick8Rules(matchday.pick8_rules_version).totalSelectionCount;
   if (lifecycle === "Completed") return { status: "Completed", detail: "Final scores confirmed", cta: "View Results" };
   if (lifecycle === "In progress") return { status: "In progress", detail: "Your picks and other players’ picks become visible fixture by fixture.", cta: "View Matchday" };
-  if (entryState === "not_started") return { status: "Not started", detail: "0 of 8 complete", cta: "Make Picks" };
+  if (entryState === "not_started") return { status: "Not started", detail: `0 of ${totalSelectionCount} complete`, cta: "Make Picks" };
   if (entryState === "submitted") return { status: "Submitted", detail: "Your Pick8 is locked in.", cta: "View Picks" };
-  if (progress === 8) return { status: "Ready to submit", detail: "8 of 8 complete · Ready to submit", cta: "Submit Picks" };
-  return { status: "Draft — Not submitted", detail: `${progress} of 8 complete · Not submitted`, cta: "Continue Picks" };
+  if (progress === totalSelectionCount) return { status: "Ready to submit", detail: `${totalSelectionCount} of ${totalSelectionCount} complete · Ready to submit`, cta: "Submit Picks" };
+  return { status: "Draft — Not submitted", detail: `${progress} of ${totalSelectionCount} complete · Not submitted`, cta: "Continue Picks" };
 }
 
 function contextualRows(rows: StandingRow[], userId: string) {
@@ -98,7 +102,7 @@ export default async function DashboardPage() {
 
   const [profilesResult, matchdaysResult, competitionsResult] = await Promise.all([
     admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
-    admin.from("matchdays").select("id, matchday_number, status, locks_at").eq("season_id", season.id).order("matchday_number"),
+    admin.from("matchdays").select("id, matchday_number, status, locks_at, pick8_rules_version").eq("season_id", season.id).order("matchday_number"),
     admin.from("competitions").select("id, name, start_matchday, end_matchday, status").eq("season_id", season.id).order("start_matchday"),
   ]);
   requireSuccessfulDatabaseOperation(profilesResult.error);
@@ -142,7 +146,7 @@ export default async function DashboardPage() {
     requireSuccessfulDatabaseOperation(error);
     latestFixtures = (data ?? []) as (BreakdownFixture & { matchday_id: string })[];
   }
-  const currentProgress = selectionProgress(currentEntry, relevantSelections.filter((selection) => selection.entry_id === currentEntry?.id));
+  const currentProgress = selectionProgress(currentEntry, relevantSelections.filter((selection) => selection.entry_id === currentEntry?.id), currentMatchday?.pick8_rules_version);
   const currentEntryUi = currentMatchday
     ? !profile.pick8_participation_active && playerMatchdayLifecycle(currentMatchday, now) !== "Completed"
       ? {

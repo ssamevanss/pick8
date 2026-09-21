@@ -7,16 +7,11 @@ import {
   calculatePick8FixtureSelectionPoints,
   getPick8SelectedTeamPerformance,
   scorePick8TotalGoals,
+  type Pick8ScoringCategory,
 } from "@/utils/pick8-scoring-rules";
+import { PICK8_CATEGORY_METADATA } from "@/utils/pick8-rules";
 
-export type SelectionCategory =
-  | "home_win"
-  | "away_win"
-  | "draw"
-  | "team_win"
-  | "team_lose"
-  | "team_score"
-  | "clean_sheet";
+export type SelectionCategory = Pick8ScoringCategory;
 export type TeamSide = "home" | "away" | null;
 
 export type ScoringFixture = {
@@ -96,7 +91,7 @@ export function scoreFixtureSelection(
     return { pointsAwarded: null, isCorrect: null };
   }
   if (
-    ["team_win", "team_lose", "team_score", "clean_sheet"].includes(selection.category) &&
+    PICK8_CATEGORY_METADATA[selection.category].needsTeam &&
     selection.selected_team_side !== "home" &&
     selection.selected_team_side !== "away"
   ) {
@@ -111,7 +106,13 @@ export function scoreFixtureSelection(
 }
 
 export function isMatchdayReadyForFinalScoring(fixtures: ScoringFixture[]) {
-  return fixtures.length > 0 && fixtures.every((fixture) => TERMINAL_STATUSES.has(fixture.status));
+  return fixtures.length > 0 && fixtures.every((fixture) =>
+    TERMINAL_STATUSES.has(fixture.status) &&
+    (
+      fixture.status !== "finished" ||
+      (fixture.home_score !== null && fixture.away_score !== null)
+    )
+  );
 }
 
 export function calculateCompletedMatchdayGoalTotal(fixtures: ScoringFixture[]) {

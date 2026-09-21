@@ -18,6 +18,11 @@ import {
 } from "@/utils/pick8-entry-validation";
 import { PICK8_MATCHDAY_LOCKED_MESSAGE } from "@/utils/pick8-entry-lock";
 import type { Pick8Category } from "@/utils/pick8-entry-validation";
+import {
+  getPick8Rules,
+  PICK8_CATEGORY_METADATA,
+  type Pick8RulesVersion,
+} from "@/utils/pick8-rules";
 
 export type PickFixture = { id: string; homeTeamName: string; awayTeamName: string; homeTeamCrestUrl: string | null; awayTeamCrestUrl: string | null; kickoffAt: string; status: string; homeScore: number | null; awayScore: number | null };
 type Category = Pick8Category;
@@ -25,16 +30,6 @@ type TeamSide = "home" | "away" | "";
 type FixtureChoice = { category: Category | ""; side: TeamSide };
 type InitialSelection = { category: string; fixtureId: string; selectedTeamSide: string | null; pointsAwarded: number | null };
 
-const CATEGORIES: Array<{ key: Category; label: string; needsTeam: boolean }> = [
-  { key: "home_win", label: "Home Winner", needsTeam: false },
-  { key: "away_win", label: "Away Winner", needsTeam: false },
-  { key: "draw", label: "Draw", needsTeam: false },
-  { key: "team_win", label: "Team to Win", needsTeam: true },
-  { key: "team_lose", label: "Team to Lose", needsTeam: true },
-  { key: "team_score", label: "Team to Score", needsTeam: true },
-  { key: "clean_sheet", label: "Clean Sheet", needsTeam: true },
-];
-const CATEGORY_BY_KEY = new Map(CATEGORIES.map((category) => [category.key, category]));
 const initialActionState: PickEntryActionState = { ok: false, message: "" };
 
 function remainingLabel(locksAt: string, now: number) {
@@ -61,8 +56,9 @@ function submittedTime(value: string | null) {
   }).format(submittedAt);
 }
 
-export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fixtures, initialSelections, initialTotalGoals, initiallyEditable, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry, actualGoals, finalReady, finalMatchdayScore, totalGoalsPoints, fixtureSlate }: {
+export default function MatchdayEntryForm({ matchdayId, rulesVersion, reloadHref, locksAt, fixtures, initialSelections, initialTotalGoals, initiallyEditable, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry, actualGoals, finalReady, finalMatchdayScore, totalGoalsPoints, fixtureSlate }: {
   matchdayId: string;
+  rulesVersion: Pick8RulesVersion;
   reloadHref: string;
   locksAt: string;
   fixtures: PickFixture[];
@@ -78,14 +74,25 @@ export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fix
   totalGoalsPoints: number | null;
   fixtureSlate?: ReactNode;
 }) {
+  const rules = getPick8Rules(rulesVersion);
+  const categories = useMemo(
+    () => getPick8Rules(rulesVersion).categories.map(
+      (key) => ({ key, ...PICK8_CATEGORY_METADATA[key] }),
+    ),
+    [rulesVersion],
+  );
+  const categoryByKey = useMemo(
+    () => new Map(categories.map((category) => [category.key, category])),
+    [categories],
+  );
   const incomingPersistedState = useMemo(
     () => ({
-      snapshot: buildPick8EditorSnapshot(fixtures.map((fixture) => fixture.id), initialSelections, initialTotalGoals),
+      snapshot: buildPick8EditorSnapshot(fixtures.map((fixture) => fixture.id), initialSelections, initialTotalGoals, rulesVersion),
       submitted: initiallySubmitted,
       submittedAt: initiallySubmittedAt,
       hasEntry: initiallyHasEntry,
     }),
-    [fixtures, initialSelections, initialTotalGoals, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry],
+    [fixtures, initialSelections, initialTotalGoals, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry, rulesVersion],
   );
   const [choices, setChoices] = useState<Record<string, FixtureChoice>>(() => copyPick8EditorSnapshot(incomingPersistedState.snapshot).choices as Record<string, FixtureChoice>);
   const [savedChoices, setSavedChoices] = useState<Record<string, FixtureChoice>>(() => copyPick8EditorSnapshot(incomingPersistedState.snapshot).choices as Record<string, FixtureChoice>);
@@ -162,15 +169,15 @@ export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fix
     const category = choices[fixture.id]?.category;
     if (category) counts.set(category, (counts.get(category) ?? 0) + 1);
   }
-  const duplicates = CATEGORIES.filter((category) => (counts.get(category.key) ?? 0) > 1);
+  const duplicates = categories.filter((category) => (counts.get(category.key) ?? 0) > 1);
   const duplicateKeys = new Set(duplicates.map((category) => category.key));
-  const missing = CATEGORIES.filter((category) => !counts.has(category.key));
+  const missing = categories.filter((category) => !counts.has(category.key));
   const missingTeams = eligibleFixtures.flatMap((fixture) => {
     const choice = choices[fixture.id];
-    const category = choice?.category ? CATEGORY_BY_KEY.get(choice.category) : undefined;
+    const category = choice?.category ? categoryByKey.get(choice.category) : undefined;
     return category?.needsTeam && !choice.side ? [category.label] : [];
   });
-  const completedFixtureCount = CATEGORIES.filter((category) => {
+  const completedFixtureCount = categories.filter((category) => {
     if ((counts.get(category.key) ?? 0) !== 1) return false;
     if (!category.needsTeam) return true;
     return eligibleFixtures.some((fixture) => choices[fixture.id]?.category === category.key && choices[fixture.id]?.side !== "");
@@ -178,7 +185,7 @@ export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fix
   const parsedTotalGoals = Number(totalGoals);
   const totalGoalsComplete = totalGoals !== "" && Number.isInteger(parsedTotalGoals) && parsedTotalGoals >= 0 && parsedTotalGoals <= 100;
   const completedCount = completedFixtureCount + (totalGoalsComplete ? 1 : 0);
-  const complete = completedCount === 8 && !duplicates.length;
+  const complete = completedCount === rules.totalSelectionCount && !duplicates.length;
   const topStatus = submitted
     ? "Submitted ✓"
     : complete
@@ -188,7 +195,7 @@ export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fix
         : "Not started";
   const topStatusDetail = submitted && submittedAt
     ? `Submitted ${submittedTime(submittedAt)}`
-    : `${completedCount} of 8 selections completed · ${hasSavedEntry ? "Draft — Not submitted" : "Entry has not been submitted"}`;
+    : `${completedCount} of ${rules.totalSelectionCount} selections completed · ${hasSavedEntry ? "Draft — Not submitted" : "Entry has not been submitted"}`;
 
   function changeCategory(fixtureId: string, category: Category | "") {
     setChoices((current) => {
@@ -196,14 +203,14 @@ export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fix
       let side: TeamSide = "";
       if (category === "home_win") side = "home";
       else if (category === "away_win") side = "away";
-      else if (category && CATEGORY_BY_KEY.get(category)?.needsTeam) side = previous.side || "";
+      else if (category && categoryByKey.get(category)?.needsTeam) side = previous.side || "";
       return { ...current, [fixtureId]: { category, side } };
     });
   }
 
   const selectedChoices = fixtures.flatMap((fixture) => {
     const choice = choices[fixture.id];
-    const category = choice?.category ? CATEGORY_BY_KEY.get(choice.category) : null;
+    const category = choice?.category ? categoryByKey.get(choice.category) : null;
     if (!choice?.category || !category) return [];
     const persistedSelection = initialSelections.find((selection) => selection.fixtureId === fixture.id && selection.category === category.key);
     return [{ category: category.key, fixtureId: fixture.id, selectedTeamSide: choice.side || null, pointsAwarded: persistedSelection?.pointsAwarded ?? null }];
@@ -230,6 +237,7 @@ export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fix
             finalReady={finalReady}
             finalMatchdayScore={finalMatchdayScore}
             totalGoalsPoints={totalGoalsPoints}
+            totalSelectionCount={rules.totalSelectionCount}
             now={now}
             action={entryWindowOpen && initiallyEditable ? <button type="button" className="brand-button-primary w-full sm:w-auto" onClick={enterEditMode}>Edit submission</button> : <span className="brand-pill">Matchday locked</span>}
           />
@@ -244,7 +252,7 @@ export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fix
             const fixtureState = getFixtureLifecycle({ kickoff_at: fixture.kickoffAt, status: fixture.status }, now || 0);
             const fixtureEditable = editable && now > 0 && isFixtureSelectionEditable({ kickoff_at: fixture.kickoffAt, status: fixture.status }, now);
             const choice = choices[fixture.id] ?? { category: "", side: "" };
-            const category = choice.category ? CATEGORY_BY_KEY.get(choice.category) : undefined;
+            const category = choice.category ? categoryByKey.get(choice.category) : undefined;
             const duplicated = Boolean(choice.category && duplicateKeys.has(choice.category));
             const fixtureComplete = Boolean(choice.category && !duplicated && (!category?.needsTeam || choice.side));
             return (
@@ -261,7 +269,7 @@ export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fix
                   disabled={!fixtureEditable || pending || unavailable}
                   invalid={duplicated}
                   ariaLabel={`Category for ${fixture.homeTeamName} v ${fixture.awayTeamName}`}
-                  options={CATEGORIES.map((item) => ({
+                  options={categories.map((item) => ({
                     key: item.key,
                     label: item.label,
                     muted: item.key !== choice.category && (counts.get(item.key) ?? 0) > 0,
@@ -278,7 +286,7 @@ export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fix
           <div className={`p-4 text-center sm:p-5 ${totalGoalsComplete ? "bg-emerald-400/[0.07]" : "bg-white/[0.02]"}`}>
             <input type="hidden" name="total_goals" value={totalGoals} />
             <div className="min-w-0" id="total-goals-description">
-              <h3 className={`text-lg font-black ${totalGoalsComplete ? "text-emerald-200" : "text-white"}`}>8. Total Goals Across All Matches</h3>
+              <h3 className={`text-lg font-black ${totalGoalsComplete ? "text-emerald-200" : "text-white"}`}>{rules.totalSelectionCount}. Total Goals Across All Matches</h3>
             </div>
             <label className="mx-auto mt-4 block min-w-0 max-w-48">
               <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-400">Your prediction</span>
@@ -301,7 +309,7 @@ export default function MatchdayEntryForm({ matchdayId, reloadHref, locksAt, fix
       </section>
 
       <div className={`rounded-xl border p-4 text-sm ${duplicates.length ? "border-red-400/40 bg-red-500/10 text-red-100" : complete ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-100" : "border-white/10 bg-white/5 text-slate-300"}`}>
-        {complete ? <p><strong>Ready to submit.</strong> 8 of 8 selections completed.</p> : <><p>{completedCount} of 8 selections completed.</p><p className="mt-1">Missing: {[...missing.map((item) => item.label), ...missingTeams.map((label) => `${label} team`), ...(!totalGoalsComplete ? ["Total Goals"] : [])].join(", ") || "Resolve the duplicate categories below"}.</p>{duplicates.map((item) => <p key={item.key} className="mt-1 font-semibold">{item.label} is selected more than once.</p>)}</>}
+        {complete ? <p><strong>Ready to submit.</strong> {rules.totalSelectionCount} of {rules.totalSelectionCount} selections completed.</p> : <><p>{completedCount} of {rules.totalSelectionCount} selections completed.</p><p className="mt-1">Missing: {[...missing.map((item) => item.label), ...missingTeams.map((label) => `${label} team`), ...(!totalGoalsComplete ? ["Total Goals"] : [])].join(", ") || "Resolve the duplicate categories below"}.</p>{duplicates.map((item) => <p key={item.key} className="mt-1 font-semibold">{item.label} is selected more than once.</p>)}</>}
       </div>
 
       {editable ? submitted ? (

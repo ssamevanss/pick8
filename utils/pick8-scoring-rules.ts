@@ -1,12 +1,7 @@
-export type Pick8ScoringCategory =
-  | "home_win"
-  | "away_win"
-  | "draw"
-  | "team_win"
-  | "team_lose"
-  | "team_score"
-  | "clean_sheet";
-export type Pick8ScoringTeamSide = "home" | "away" | null;
+import type { Pick8Category, Pick8TeamSide } from "./pick8-rules.ts";
+
+export type Pick8ScoringCategory = Pick8Category;
+export type Pick8ScoringTeamSide = Pick8TeamSide;
 export type Pick8OutcomeState = "positive" | "negative" | "neutral";
 
 export type Pick8ScoreFixture = {
@@ -57,6 +52,9 @@ export function isPick8FixtureSelectionSatisfied(
   fixture: Pick<Pick8ScoreFixture, "home_score" | "away_score">,
 ) {
   if (fixture.home_score === null || fixture.away_score === null) return null;
+  if (selection.category === "btts") {
+    return fixture.home_score > 0 && fixture.away_score > 0;
+  }
   const side = selection.category === "home_win"
     ? "home"
     : selection.category === "away_win"
@@ -75,9 +73,11 @@ export function isPick8FixtureSelectionSatisfied(
 
 export function calculatePick8FixtureSelectionPoints(
   selection: Pick8ScoreSelection,
-  fixture: Pick<Pick8ScoreFixture, "home_score" | "away_score">,
+  fixture: Pick<Pick8ScoreFixture, "home_score" | "away_score"> &
+    Partial<Pick<Pick8ScoreFixture, "status">>,
 ): Pick8SelectionPoints | null {
   if (fixture.home_score === null || fixture.away_score === null) return null;
+  if (selection.category === "btts" && fixture.status !== "finished") return null;
   if (selection.category === "home_win") {
     const performance = getPick8SelectedTeamPerformance(fixture, "home");
     return performance.result === "win"
@@ -110,6 +110,7 @@ export function getPick8FixtureSelectionOutcome(
 ): Pick8OutcomeState {
   if (fixture.home_score === null || fixture.away_score === null) return "neutral";
   const finished = fixture.status === "finished";
+  if (selection.category === "btts" && !finished) return "neutral";
   const satisfied = isPick8FixtureSelectionSatisfied(selection, fixture);
   if (finished) return satisfied ? "positive" : "negative";
 

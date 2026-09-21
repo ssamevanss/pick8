@@ -86,3 +86,13 @@ test("the same category remains separate when a different team is selected", () 
   assert.equal(groups.length, 2);
   assert.notEqual(groups[0].key, groups[1].key);
 });
+
+test("BTTS is displayed and grouped as a no-team fixture category", () => {
+  const groups = groupFixturePicks([
+    pick({ selectionId: "b1", playerId: "p1", playerName: "A", category: "btts", selectedTeamSide: null, displayedPoints: 10 }),
+    pick({ selectionId: "b2", playerId: "p2", playerName: "B", category: "btts", selectedTeamSide: null, displayedPoints: 10 }),
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].selectedTeamSide, null);
+  assert.equal(formatPick8FixtureSelection("btts", null, { homeTeamName: "Home", awayTeamName: "Away" }), "Both Teams To Score");
+});

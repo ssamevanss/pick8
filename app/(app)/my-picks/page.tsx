@@ -21,6 +21,7 @@ import {
   playerMatchdayLifecycle,
   resolveRelevantMatchday,
 } from "@/utils/pick8-standings";
+import { normalizePick8RulesVersion } from "@/utils/pick8-rules";
 
 function formatDateTime(value: string | null) {
   if (!value) return "Not set";
@@ -63,7 +64,7 @@ export default async function MyPicksPage({
   });
   const { data: matchdayRows, error: matchdayError } = await admin
     .from("matchdays")
-    .select("id, matchday_number, status, locks_at")
+    .select("id, matchday_number, status, locks_at, pick8_rules_version")
     .eq("season_id", season.id)
     .order("matchday_number");
   if (matchdayError) {
@@ -169,6 +170,7 @@ export default async function MyPicksPage({
       {effectiveLocksAt && ownEntry?.submitted_at ? (
         <MatchdayEntryForm
           matchdayId={selectedMatchday.id}
+          rulesVersion={normalizePick8RulesVersion(selectedMatchday.pick8_rules_version)}
           reloadHref={`/my-picks?matchday=${selectedMatchday.matchday_number}`}
           locksAt={effectiveLocksAt}
           fixtures={fixtures.map((fixture): PickFixture => ({ id: fixture.id, homeTeamName: fixture.home_team_name, awayTeamName: fixture.away_team_name, homeTeamCrestUrl: fixture.home_team_crest_url, awayTeamCrestUrl: fixture.away_team_crest_url, kickoffAt: fixture.kickoff_at, status: fixture.status, homeScore: fixture.home_score, awayScore: fixture.away_score }))}
@@ -187,6 +189,7 @@ export default async function MyPicksPage({
       ) : showEntryEditor && effectiveLocksAt ? (
         <MatchdayEntryForm
           matchdayId={selectedMatchday.id}
+          rulesVersion={normalizePick8RulesVersion(selectedMatchday.pick8_rules_version)}
           reloadHref={`/my-picks?matchday=${selectedMatchday.matchday_number}`}
           locksAt={effectiveLocksAt}
           fixtures={fixtures.map((fixture): PickFixture => ({ id: fixture.id, homeTeamName: fixture.home_team_name, awayTeamName: fixture.away_team_name, homeTeamCrestUrl: fixture.home_team_crest_url, awayTeamCrestUrl: fixture.away_team_crest_url, kickoffAt: fixture.kickoff_at, status: fixture.status, homeScore: fixture.home_score, awayScore: fixture.away_score }))}

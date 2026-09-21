@@ -51,6 +51,7 @@ export default function SubmittedPick8Summary({
   finalReady,
   finalMatchdayScore,
   totalGoalsPoints,
+  totalSelectionCount,
   now,
   action,
 }: {
@@ -61,6 +62,7 @@ export default function SubmittedPick8Summary({
   finalReady: boolean;
   finalMatchdayScore: number | null;
   totalGoalsPoints: number | null;
+  totalSelectionCount: number;
   now: number;
   action?: ReactNode;
 }) {
@@ -85,7 +87,7 @@ export default function SubmittedPick8Summary({
     );
     const liveResult = calculatePick8FixtureSelectionPoints(
       { category: selection.category, selected_team_side: selection.selectedTeamSide },
-      { home_score: fixture.homeScore, away_score: fixture.awayScore },
+      { status: fixture.status, home_score: fixture.homeScore, away_score: fixture.awayScore },
     );
     const displayedPoints = fixture.status === "finished" && selection.pointsAwarded !== null && selection.pointsAwarded !== undefined
       ? selection.pointsAwarded
@@ -103,16 +105,18 @@ export default function SubmittedPick8Summary({
   return (
     <section className="brand-card p-4">
       <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div><p className="brand-eyebrow">Your Pick8</p><h2 className="mt-1 text-xl font-black text-white">Seven picks + Total Goals</h2></div>
+        <div><p className="brand-eyebrow">Your Pick8</p><h2 className="mt-1 text-xl font-black text-white">{totalSelectionCount - 1} picks + Total Goals</h2></div>
         {action ? <div className="w-full sm:w-auto">{action}</div> : null}
       </div>
-      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {scoredSelections.map(({ fixture, selection, lifecycle, displayedPoints }) => {
           const selectedTeam = selection.selectedTeamSide === "home"
             ? fixture.homeTeamName
             : selection.selectedTeamSide === "away"
               ? fixture.awayTeamName
-              : "Draw / no team";
+              : selection.category === "btts"
+                ? "Both teams"
+                : "Draw / no team";
           const selectedCrest = selection.selectedTeamSide === "home"
             ? fixture.homeTeamCrestUrl
             : selection.selectedTeamSide === "away"

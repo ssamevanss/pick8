@@ -102,7 +102,7 @@ export default async function TablesPage({
 
   const [profilesResult, matchdaysResult, competitionsResult] = await Promise.all([
     admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
-    admin.from("matchdays").select("id, matchday_number, status, locks_at").eq("season_id", season.id).order("matchday_number"),
+    admin.from("matchdays").select("id, matchday_number, status, locks_at, pick8_rules_version").eq("season_id", season.id).order("matchday_number"),
     admin.from("competitions").select("id, name, start_matchday, end_matchday, status").eq("season_id", season.id).order("start_matchday"),
   ]);
   requireSuccessfulDatabaseOperation(profilesResult.error);

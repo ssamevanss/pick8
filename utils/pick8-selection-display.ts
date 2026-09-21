@@ -2,26 +2,16 @@ import type {
   Pick8Category,
   Pick8TeamSide,
 } from "./pick8-entry-validation";
+import {
+  PICK8_CATEGORY_METADATA,
+  PICK8_V2_CATEGORIES,
+} from "./pick8-rules.ts";
 
-const PICK8_CATEGORY_DISPLAY_ORDER: readonly Pick8Category[] = [
-  "home_win",
-  "away_win",
-  "draw",
-  "team_win",
-  "team_lose",
-  "team_score",
-  "clean_sheet",
-];
+const PICK8_CATEGORY_DISPLAY_ORDER: readonly Pick8Category[] = PICK8_V2_CATEGORIES;
 
-export const PICK8_CATEGORY_LABELS: Record<Pick8Category, string> = {
-  home_win: "Home Winner",
-  away_win: "Away Winner",
-  draw: "Draw",
-  team_win: "Team to Win",
-  team_lose: "Team to Lose",
-  team_score: "Team to Score",
-  clean_sheet: "Clean Sheet",
-};
+export const PICK8_CATEGORY_LABELS: Record<Pick8Category, string> = Object.fromEntries(
+  Object.entries(PICK8_CATEGORY_METADATA).map(([category, metadata]) => [category, metadata.label]),
+) as Record<Pick8Category, string>;
 
 export function pick8CategoryDisplayOrder(category: string) {
   const index = PICK8_CATEGORY_DISPLAY_ORDER.indexOf(category as Pick8Category);
@@ -34,7 +24,7 @@ export function canonicalPick8SelectionSide(
 ): Pick8TeamSide {
   if (category === "home_win") return "home";
   if (category === "away_win") return "away";
-  if (category === "draw") return null;
+  if (category === "draw" || category === "btts") return null;
   return selectedTeamSide === "home" || selectedTeamSide === "away"
     ? selectedTeamSide
     : null;
@@ -66,6 +56,7 @@ export function formatPick8FixtureSelection(
   const categoryLabel = PICK8_CATEGORY_LABELS[category as Pick8Category] ?? category;
 
   if (category === "draw") return "Draw";
+  if (category === "btts") return "Both Teams To Score";
   if (category === "home_win") return `${categoryLabel} — ${fixture.homeTeamName}`;
   if (category === "away_win") return `${categoryLabel} — ${fixture.awayTeamName}`;
   if (!selectedTeam) return categoryLabel;
