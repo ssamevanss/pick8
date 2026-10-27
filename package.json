@@ -9,7 +9,10 @@
     "start": "next start",
     "spike:football-data": "node --experimental-strip-types scripts/spike-football-data.ts",
     "test": "node --experimental-strip-types --test tests/*.test.ts tests/*.test.mjs",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.json",
+    "check": "npm run typecheck && npm run lint && npm test"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

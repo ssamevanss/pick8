@@ -1,5 +1,7 @@
 # Football Predictor App - 1.0 Release Checklist
 
+> **Status: inherited from Who You Got — not authoritative for Pick8.** Only the "Pick8 MVP auth and automation" section applies. Current procedure: [DEVELOPMENT.md](DEVELOPMENT.md). See [docs/README.md](README.md) for what is current.
+
 Use this checklist before inviting real users, launching a real season, or deploying a major production change.
 
 ## 1. Auth And Users

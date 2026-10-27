@@ -1,5 +1,7 @@
 # Football Predictor App - Operations Guide
 
+> **Status: inherited from Who You Got — not authoritative for Pick8.** Only the Pick8 sections (signup/automation, Monitoring) apply; the scoring "not a transaction" remarks and the Backups/Common-issues sections are outdated. Current runbook: [pick8-operations.md](pick8-operations.md). See [docs/README.md](README.md) for what is current.
+
 ## Multi-League Migration (2026-07-31)
 
 Before deploying the multi-league application code:

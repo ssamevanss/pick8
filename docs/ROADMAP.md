@@ -1,5 +1,7 @@
 # Football Predictor App - Roadmap
 
+> **Status: inherited from Who You Got — not authoritative for Pick8.** WYG roadmap. The current plan is tracked by the maintainer outside this repository. See [docs/README.md](README.md) for what is current.
+
 ## Version framing
 
 ```text
