@@ -52,11 +52,13 @@ Detail lives in `docs/`: start at [docs/README.md](docs/README.md). This file is
 
 Retained but not part of the Pick8 product and written for a schema the Pick8 database does not have
 (`gameweeks`, `predictions`, `leaderboard_entries`, `profiles.role/status`, …): `/predictions`,
-`/pick-fixtures`, `/leaderboard`, `/league*`, `/leagues*`, `/test-supabase`, `/admin/maintenance/export`,
-`/api/admin/*`, `/api/predictions/*`, the six non-Pick8 `/api/cron/*` routes, `utils/legacy-*`,
+`/pick-fixtures`, `/leaderboard`, `/league*`, `/leagues*`, `/admin/maintenance/export`,
+`/api/predictions/*`, `utils/legacy-*`,
 `utils/email*.ts`, `utils/external-*`, `utils/football-data/`, `utils/supabase/{legacy-*,route-auth}.ts`.
 Don't add features there. Removal is a tracked roadmap item; until then treat them as attack surface
 (see `.claude/rules/legacy-code.md`).
+Retired: `/test-supabase`, `/api/admin/*` and the WYG `admin/actions.ts` server actions were deleted; the six WYG
+`/api/cron/*` routes now answer 410 (`utils/pick8-retired-routes.ts`) and log `pick8-retired-route` if called.
 
 ## Business rules (do not change without explicit instruction)
 
