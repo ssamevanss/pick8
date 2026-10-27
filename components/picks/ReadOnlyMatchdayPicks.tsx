@@ -165,7 +165,7 @@ export default function ReadOnlyMatchdayPicks({
               <p className="text-2xl font-black text-emerald-200">{finalReady ? actualGoals : goalProgress.hasStarted ? goalProgress.currentGoals : "Pending"}</p>
             </div>
           </div>
-          <div className="mt-5 grid gap-2 sm:grid-cols-2">
+          <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
             {fixtures.map((fixture) => {
               const started = hasFixtureKickedOff(fixture.kickoff_at, now);
               const fixtureLifecycle = getFixtureLifecycle(fixture, now);
