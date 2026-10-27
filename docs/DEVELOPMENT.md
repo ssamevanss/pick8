@@ -8,7 +8,7 @@ to `.env.local`. **Point local/Preview at a non-production Supabase project** (s
 ## Validation
 | Command | What it proves | State at 2026-10-27 (base `320009c`) |
 |---|---|---|
-| `npm run typecheck` | App code type-checks (tests excluded) | pass |
+| `npm run typecheck` | App code type-checks (`tsconfig.json` excludes `tests/`, so `next build` ignores test types too) | pass |
 | `npm run lint` | ESLint (next core-web-vitals + TS) | pass |
 | `npm test` | 164 node:test tests (state, sync, resilience, auth middleware, locks) | pass |
 | `npm run build` | Production build, also from a clean checkout with placeholder env | pass |

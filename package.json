@@ -10,8 +10,8 @@
     "spike:football-data": "node --experimental-strip-types scripts/spike-football-data.ts",
     "test": "node --experimental-strip-types --test tests/*.test.ts tests/*.test.mjs",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
-    "typecheck:tests": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "check": "npm run typecheck && npm run lint && npm test"
   },
   "dependencies": {
@@ -19,7 +19,7 @@
     "@supabase/supabase-js": "^2.108.2",
     "date-fns": "^4.4.0",
     "date-fns-tz": "^3.2.0",
-    "next": "16.2.9",
+    "next": "16.4.3",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
@@ -29,7 +29,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.9",
+    "eslint-config-next": "16.4.3",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
