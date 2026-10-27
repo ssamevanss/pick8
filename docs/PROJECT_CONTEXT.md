@@ -1,5 +1,7 @@
 # Football Predictor App - Project Context
 
+> **Status: inherited from Who You Got — not authoritative for Pick8.** Describes the WYG multi-league app. See [docs/README.md](README.md) for what is current.
+
 ## Multi-League Foundation (2026-07-31)
 
 Player requests now resolve through an approved user, active league membership,

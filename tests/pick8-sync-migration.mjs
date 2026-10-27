@@ -40,7 +40,7 @@ const deadlines = readFileSync(new URL('../supabase/migrations/20260813000000_re
 await db.exec(deadlines + '\ncommit;');
 await db.exec(readFileSync(new URL('../supabase/migrations/20260913000000_pick8_sync_fingerprints.sql', import.meta.url), 'utf8'));
 await db.exec(readFileSync(new URL('../supabase/migrations/20260914120012_transactional_pick8_scoring.sql', import.meta.url), 'utf8'));
-await db.exec(readFileSync(new URL('../supabase/migrations/20260915074746_pick8_due_state_model.sql', import.meta.url), 'utf8'));
+await db.exec(readFileSync(new URL('../supabase/migrations/20260915113321_pick8_due_state_model.sql', import.meta.url), 'utf8'));
 const state = async () => (await db.query('select * from public.matchdays where id=$1', [matchday])).rows[0];
 const clean = async () => db.exec(`update public.matchdays set sync_pending=false, fixture_application_pending=false, scoring_pending=false;
   update public.seasons set competition_refresh_pending=false;`);

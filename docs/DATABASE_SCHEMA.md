@@ -1,5 +1,7 @@
 # Football Predictor App - Database Schema Notes
 
+> **Status: inherited from Who You Got — not authoritative for Pick8.** Describes WYG's schema (`predictions`, `gameweeks`, `profiles.role/status`), which Pick8's database does not have. Pick8's schema is `supabase/migrations/` and `types/database.types.ts`. See [docs/README.md](README.md) for what is current.
+
 This document records the current intended database model and business rules. It should be kept up to date whenever Supabase schema changes are made.
 
 ## Enums

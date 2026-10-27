@@ -28,7 +28,8 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
+# env files (names only live in .env.example)
+.env
 .env*.local
 
 # vercel
@@ -37,3 +38,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local tooling
+.claude/settings.local.json
+.claude/worktrees/
