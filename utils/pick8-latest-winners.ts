@@ -64,6 +64,10 @@ export type MatchdayWinner = {
   totalGoalsPrediction: number | null;
   totalGoalsPoints: number | null;
   picks: WinnerPick[];
+  expectedPickCount: number;
+  // False when fewer picks than the matchday's rules require are available to this viewer. Total Goals
+  // points are then withheld, because they are derived as score minus the visible picks' points.
+  complete: boolean;
 };
 export type LatestMatchdayWinners = {
   matchdayNumber: number;
@@ -81,6 +85,7 @@ export function buildLatestMatchdayWinners({
   players,
   fixtures,
   actualGoals,
+  expectedPickCount,
 }: {
   matchday: StandingsMatchday;
   rows: ReturnType<typeof buildStandings>;
@@ -88,6 +93,7 @@ export function buildLatestMatchdayWinners({
   players: BreakdownPlayer[];
   fixtures: BreakdownFixture[];
   actualGoals: number | null;
+  expectedPickCount: number;
 }): LatestMatchdayWinners {
   const fixtureById = new Map(fixtures.map((fixture) => [fixture.id, fixture]));
   const winners = rows.map((row): MatchdayWinner => {
@@ -116,14 +122,17 @@ export function buildLatestMatchdayWinners({
       })
       .sort((a, b) => a.order - b.order)
       .map(({ pick }) => pick);
+    const complete = picks.length === expectedPickCount;
     return {
       playerId: row.profile.id,
       rank: row.rank,
       name: playerDisplayName(row.profile),
       points: row.points,
       totalGoalsPrediction: detail?.entry?.total_goals_prediction ?? null,
-      totalGoalsPoints: detail?.totalGoalsPoints ?? null,
+      totalGoalsPoints: complete ? detail?.totalGoalsPoints ?? null : null,
       picks,
+      expectedPickCount,
+      complete,
     };
   });
   return { matchdayNumber: matchday.matchday_number, actualGoals, winners, hiddenTied };

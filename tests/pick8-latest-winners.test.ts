@@ -119,7 +119,7 @@ test("presentation: picks in rule order with fixture, score, points and Total Go
     ],
     totalGoalsPoints: 10,
   }];
-  const view = buildLatestMatchdayWinners({ matchday: matchday(1), rows, hiddenTied: 0, players, fixtures, actualGoals: 3 });
+  const view = buildLatestMatchdayWinners({ matchday: matchday(1), rows, hiddenTied: 0, players, fixtures, actualGoals: 3, expectedPickCount: 4 });
   const [winner] = view.winners;
   assert.equal(view.matchdayNumber, 1);
   assert.equal(view.actualGoals, 3);
@@ -134,12 +134,46 @@ test("presentation: picks in rule order with fixture, score, points and Total Go
   assert.deepEqual(winner.picks[3], { id: "s4", label: "Chelsea Clean Sheet", fixture: "Arsenal v Chelsea", result: "2–1", points: -10, state: "incorrect" });
 });
 
+const V1 = ["home_win", "away_win", "draw", "team_win", "team_lose", "team_score", "clean_sheet"];
+const V2 = [...V1, "btts"];
+function fullPlayer(categories: string[], tgPoints: number): BreakdownPlayer {
+  return {
+    player: { id: "a", display_name: "A" },
+    entry: { ...entry(1, "a", 25), total_goals_prediction: 4, score_calculated_at: null },
+    selections: categories.map((category, index) => selection(`s${index}`, category, "f1", ["draw", "btts"].includes(category) ? null : "home", 5, true)),
+    totalGoalsPoints: tgPoints,
+  };
+}
+
+test("rules v1 shows all seven picks and v2 all eight, each with Total Goals", () => {
+  const { rows } = selectPodiumRows(profiles, [entry(1, "a", 25)], matchday(1));
+  const v1 = buildLatestMatchdayWinners({ matchday: matchday(1), rows, hiddenTied: 0, players: [fullPlayer(V1, 10)], fixtures, actualGoals: 3, expectedPickCount: 7 }).winners[0];
+  assert.equal(v1.picks.length, 7);
+  assert.equal(v1.complete, true);
+  assert.equal(v1.totalGoalsPoints, 10);
+  const v2 = buildLatestMatchdayWinners({ matchday: matchday(1, { pick8_rules_version: 2 }), rows, hiddenTied: 0, players: [fullPlayer(V2, 0)], fixtures, actualGoals: 3, expectedPickCount: 8 }).winners[0];
+  assert.equal(v2.picks.length, 8);
+  assert.ok(v2.picks.some((pick) => pick.label === "Both Teams To Score"));
+  assert.equal(v2.complete, true);
+  assert.equal(v2.totalGoalsPoints, 0, "a genuine zero Total Goals result is shown, not treated as missing");
+});
+
+test("fewer picks than the rules require marks the winner incomplete and withholds Total Goals points", () => {
+  const { rows } = selectPodiumRows(profiles, [entry(1, "a", 25)], matchday(1));
+  const winner = buildLatestMatchdayWinners({ matchday: matchday(1), rows, hiddenTied: 0, players: [fullPlayer(V1.slice(0, 5), 10)], fixtures, actualGoals: 3, expectedPickCount: 7 }).winners[0];
+  assert.equal(winner.picks.length, 5);
+  assert.equal(winner.complete, false);
+  assert.equal(winner.totalGoalsPoints, null);
+  assert.equal(winner.expectedPickCount, 7);
+});
+
 test("a winner whose breakdown is missing still renders without picks", () => {
   const { rows } = selectPodiumRows(profiles, [entry(1, "a", 25)], matchday(1));
-  const view = buildLatestMatchdayWinners({ matchday: matchday(1), rows, hiddenTied: 0, players: [], fixtures, actualGoals: null });
+  const view = buildLatestMatchdayWinners({ matchday: matchday(1), rows, hiddenTied: 0, players: [], fixtures, actualGoals: null, expectedPickCount: 7 });
   assert.deepEqual(view.winners[0].picks, []);
   assert.equal(view.winners[0].totalGoalsPoints, null);
   assert.equal(view.winners[0].totalGoalsPrediction, null);
+  assert.equal(view.winners[0].complete, false);
 });
 
 // The real breakdown builder (server-only) is transpiled in memory so visibility is tested end to end.
@@ -176,12 +210,14 @@ test("picks for a fixture that has not kicked off stay hidden from other viewers
   const inconsistent = fixtures.map((fixture) => fixture.id === "f3" ? { ...fixture, status: "scheduled", home_score: null, away_score: null } : fixture);
   const breakdown = buildMatchdayBreakdown({ matchday: md, profiles: [{ id: "a", display_name: "A" }], entries: [owner], selections, fixtures: inconsistent, viewerId: "viewer", now });
   const { rows } = selectPodiumRows(profiles, [owner], md);
-  const view = buildLatestMatchdayWinners({ matchday: md, rows, hiddenTied: 0, players: breakdown.players, fixtures: inconsistent, actualGoals: breakdown.actualGoals });
+  const view = buildLatestMatchdayWinners({ matchday: md, rows, hiddenTied: 0, players: breakdown.players, fixtures: inconsistent, actualGoals: breakdown.actualGoals, expectedPickCount: 2 });
   assert.deepEqual(view.winners[0].picks.map((pick) => pick.id), ["s1"]);
+  assert.equal(view.winners[0].complete, false);
+  assert.equal(view.winners[0].totalGoalsPoints, null, "Total Goals points derived from partial picks must not be shown");
   assert.equal(view.actualGoals, null, "actual goals are withheld until every fixture is final");
 
   const ownerView = buildMatchdayBreakdown({ matchday: md, profiles: [{ id: "a", display_name: "A" }], entries: [owner], selections, fixtures: inconsistent, viewerId: "a", now });
-  assert.equal(buildLatestMatchdayWinners({ matchday: md, rows, hiddenTied: 0, players: ownerView.players, fixtures: inconsistent, actualGoals: ownerView.actualGoals }).winners[0].picks.length, 2);
+  assert.equal(buildLatestMatchdayWinners({ matchday: md, rows, hiddenTied: 0, players: ownerView.players, fixtures: inconsistent, actualGoals: ownerView.actualGoals, expectedPickCount: 2 }).winners[0].picks.length, 2);
 });
 
 test("drafts of other players are never picked up by the winners breakdown", () => {

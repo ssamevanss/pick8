@@ -65,6 +65,9 @@ export default function MatchdayWinners({ data, currentUserId }: { data: LatestM
               </button>
               {open ? (
                 <div id={panelId} className="space-y-2 border-t border-white/10 p-3">
+                  <p className="px-0.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                    {winner.complete ? `${winner.picks.length} picks + Total Goals` : `${winner.picks.length} of ${winner.expectedPickCount} picks available`}
+                  </p>
                   {winner.picks.length ? winner.picks.map((pick) => (
                     <div key={pick.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-0.5 rounded-lg bg-white/[0.03] p-2.5 text-sm">
                       <p className="font-bold leading-tight text-white [overflow-wrap:anywhere]">{pick.label}</p>
@@ -82,6 +85,7 @@ export default function MatchdayWinners({ data, currentUserId }: { data: LatestM
                     </div>
                     <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-black tabular-nums ${pointsClass(winner.totalGoalsPoints)}`}>{pointsLabel(winner.totalGoalsPoints)}</span>
                   </div>
+                  {!winner.complete ? <p className="px-0.5 text-xs text-amber-200">Some picks are not available, so Total Goals points are not shown.</p> : null}
                 </div>
               ) : null}
             </li>

@@ -170,7 +170,7 @@ export default async function DashboardPage() {
       viewerId: user.id,
       now,
     });
-    return buildLatestMatchdayWinners({ matchday: settledMatchday, rows: podium.rows, hiddenTied: podium.hiddenTied, players: breakdown.players, fixtures, actualGoals: breakdown.actualGoals });
+    return buildLatestMatchdayWinners({ matchday: settledMatchday, rows: podium.rows, hiddenTied: podium.hiddenTied, players: breakdown.players, fixtures, actualGoals: breakdown.actualGoals, expectedPickCount: getPick8Rules(settledMatchday.pick8_rules_version).totalSelectionCount - 1 });
   })() : null;
   const currentProgress = selectionProgress(currentEntry, relevantSelections.filter((selection) => selection.entry_id === currentEntry?.id), currentMatchday?.pick8_rules_version);
   const currentEntryUi = currentMatchday
