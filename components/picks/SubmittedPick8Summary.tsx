@@ -108,7 +108,7 @@ export default function SubmittedPick8Summary({
         <div><p className="brand-eyebrow">Your Pick8</p><h2 className="mt-1 text-xl font-black text-white">{totalSelectionCount - 1} picks + Total Goals</h2></div>
         {action ? <div className="w-full sm:w-auto">{action}</div> : null}
       </div>
-      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {scoredSelections.map(({ fixture, selection, lifecycle, displayedPoints }) => {
           const selectedTeam = selection.selectedTeamSide === "home"
             ? fixture.homeTeamName

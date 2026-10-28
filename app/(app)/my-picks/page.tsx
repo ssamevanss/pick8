@@ -156,7 +156,7 @@ export default async function MyPicksPage({
     <div className="space-y-6">
       <header className="brand-card p-5 sm:p-7">
         <p className="brand-eyebrow">{season.name}</p>
-        <div className="mt-2 grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+        <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
           <div><h1 className="brand-title">Matchday {selectedMatchday.matchday_number}</h1><p className="brand-subtitle mt-2">{matchdayUnderway ? "Initial submissions closed · Matchday in progress" : `Initial submission locks ${formatDateTime(effectiveLocksAt)} Melbourne time`}</p><span className="brand-pill mt-3">{lifecycleLabel} · {entryLabel}</span></div>
           <MatchdaySelectNavigation
             currentMatchday={selectedMatchday.matchday_number}

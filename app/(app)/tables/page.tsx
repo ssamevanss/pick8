@@ -45,19 +45,25 @@ function StandingsTable({
   latestColumn: "latest" | "average";
 }) {
   return (
-    <div className="brand-table overflow-x-auto">
-      <table className="w-full min-w-[34rem] text-left text-sm">
-        <thead className="border-b border-white/10 text-xs uppercase tracking-wide text-slate-400">
-          <tr><th className="px-4 py-3">Rank</th><th className="px-4 py-3">Player</th><th className="px-4 py-3 text-right">Points</th><th className="px-4 py-3 text-right">Played</th><th className="px-4 py-3 text-right">{latestColumn === "latest" ? "Latest" : "Average"}</th></tr>
+    <div className="brand-table">
+      <table className="w-full table-auto text-left text-sm">
+        <thead className="border-b border-white/10 text-[11px] uppercase tracking-wide text-slate-400 sm:text-xs">
+          <tr>
+            <th scope="col" className="px-2 py-3 sm:px-4">Rank</th>
+            <th scope="col" className="px-2 py-3 sm:px-4">Player</th>
+            <th scope="col" className="px-2 py-3 text-right sm:px-4"><span className="sm:hidden" aria-hidden="true">Pts</span><span className="sr-only sm:not-sr-only">Points</span></th>
+            <th scope="col" className="px-2 py-3 text-right sm:px-4"><span className="sm:hidden" aria-hidden="true">Pld</span><span className="sr-only sm:not-sr-only">Played</span></th>
+            <th scope="col" className="px-2 py-3 text-right sm:px-4">{latestColumn === "latest" ? "Latest" : <><span className="sm:hidden" aria-hidden="true">Avg</span><span className="sr-only sm:not-sr-only">Average</span></>}</th>
+          </tr>
         </thead>
         <tbody className="divide-y divide-white/10">
           {rows.map((row) => (
             <tr key={row.profile.id}>
-              <td className="px-4 py-3"><span className="brand-pill">#{row.rank}</span></td>
-              <td className="px-4 py-3 font-bold text-white">{playerDisplayName(row.profile)}</td>
-              <td className="px-4 py-3 text-right font-black text-emerald-200">{scoreLabel(row.points)}</td>
-              <td className="px-4 py-3 text-right text-slate-300">{row.played}</td>
-              <td className="px-4 py-3 text-right text-slate-300">{latestColumn === "latest" ? scoreLabel(row.latest) : row.played ? row.average.toFixed(1) : "0.0"}</td>
+              <td className="px-2 py-3 sm:px-4"><span className="brand-pill whitespace-nowrap">#{row.rank}</span></td>
+              <td className="px-2 py-3 font-bold leading-tight text-white [overflow-wrap:anywhere] sm:px-4">{playerDisplayName(row.profile)}</td>
+              <td className="whitespace-nowrap px-2 py-3 text-right font-black text-emerald-200 sm:px-4">{scoreLabel(row.points)}</td>
+              <td className="whitespace-nowrap px-2 py-3 text-right text-slate-300 sm:px-4">{row.played}</td>
+              <td className="whitespace-nowrap px-2 py-3 text-right text-slate-300 sm:px-4">{latestColumn === "latest" ? scoreLabel(row.latest) : row.played ? row.average.toFixed(1) : "0.0"}</td>
             </tr>
           ))}
         </tbody>
@@ -189,7 +195,7 @@ export default async function TablesPage({
   return (
     <div className="space-y-6">
       <header className="brand-card p-5 sm:p-7"><p className="brand-eyebrow">{season.name}</p><h1 className="brand-title mt-2">Tables</h1><p className="brand-subtitle mt-2">Competition standings, overall scores, and locked-matchday picks.</p></header>
-      <nav className="grid gap-2 sm:grid-cols-3" aria-label="Tables views">{tabs.map((tab) => <Link key={tab.key} href={`/tables?view=${tab.key}`} className={view === tab.key ? "brand-button-primary" : "brand-button-secondary"}>{tab.label}</Link>)}</nav>
+      <nav className="grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="Tables views">{tabs.map((tab) => <Link key={tab.key} href={`/tables?view=${tab.key}`} className={view === tab.key ? "brand-button-primary" : "brand-button-secondary"}>{tab.label}</Link>)}</nav>
       {view === "competition" ? currentCompetition ? <section className="space-y-4"><div><p className="brand-eyebrow">Current competition</p><h2 className="mt-1 text-2xl font-black text-white">{currentCompetition.name}</h2></div><StandingsTable rows={competitionRowsBuilt} latestColumn="latest" /></section> : <p className={profile.is_admin ? "brand-alert-warning" : "brand-card p-5 text-sm text-slate-300"}>{profile.is_admin ? "No competition is configured for the active season. Refresh competitions from Admin." : "Competition standings are not configured yet. Overall and Matchday Breakdown remain available."}</p> : null}
       {view === "overall" ? <section className="space-y-4"><div><p className="brand-eyebrow">Season standings</p><h2 className="mt-1 text-2xl font-black text-white">Overall</h2><p className="mt-1 text-sm text-slate-400">Submitted entries with finalized scores only · standard tied ranking.</p></div><StandingsTable rows={overallRows} latestColumn="average" /></section> : null}
       {view === "matchday" ? selectedMatchday ? <><div className="brand-card p-4"><MatchdaySelectNavigation currentMatchday={selectedMatchday.matchday_number} matchdays={matchdays.map((matchday) => ({ number: matchday.matchday_number, label: `Matchday ${matchday.matchday_number} · ${matchday.status}` }))} /></div>{breakdown}</> : <p className="brand-card p-5 text-sm text-slate-300">No matchdays are available for this season.</p> : null}
