@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import PendingLink from "@/components/navigation/PendingLink";
 import { useState } from "react";
 import type { LatestMatchdayWinners, WinnerPick } from "@/utils/pick8-latest-winners";
 
@@ -34,18 +34,18 @@ export default function MatchdayWinners({ data, currentUserId }: { data: LatestM
   });
 
   return (
-    <section className="brand-card p-4 sm:p-5" aria-labelledby="latest-winners-heading">
+    <section className="brand-card p-4 sm:p-5" aria-labelledby="top-players-heading">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="brand-eyebrow">Latest results</p>
-          <h2 id="latest-winners-heading" className="mt-1 text-xl font-black text-white">Matchday {data.matchdayNumber} winners</h2>
+          <h2 id="top-players-heading" className="mt-1 text-xl font-black text-white">Matchday {data.matchdayNumber} Top Players</h2>
         </div>
         {data.actualGoals !== null ? <span className="brand-pill shrink-0">{data.actualGoals} goals</span> : null}
       </div>
       <ol className="mt-4 space-y-2">
         {data.winners.map((winner) => {
           const open = expanded.has(winner.playerId);
-          const panelId = `winner-picks-${winner.playerId}`;
+          const panelId = `top-player-picks-${winner.playerId}`;
           const isCurrentPlayer = winner.playerId === currentUserId;
           return (
             <li key={winner.playerId} className={`overflow-hidden rounded-xl border ${isCurrentPlayer ? "border-emerald-300/35" : "border-white/10"} bg-[#07111f]/60`}>
@@ -92,8 +92,8 @@ export default function MatchdayWinners({ data, currentUserId }: { data: LatestM
           );
         })}
       </ol>
-      {data.hiddenTied > 0 ? <p className="mt-2 text-xs text-slate-400">+{data.hiddenTied} more tied in the top three.</p> : null}
-      <Link href={`/tables?view=matchday&matchday=${data.matchdayNumber}`} className="mt-3 inline-flex min-h-11 items-center text-sm font-bold text-emerald-200 hover:text-emerald-100">Full matchday breakdown →</Link>
+      {data.hiddenTied > 0 ? <p className="mt-2 text-xs text-slate-400">+{data.hiddenTied} more players tied in the top three.</p> : null}
+      <PendingLink href={`/tables?view=matchday&matchday=${data.matchdayNumber}`} pendingLabel="Opening breakdown…" className="mt-3 inline-flex min-h-11 items-center text-sm font-bold text-emerald-200 hover:text-emerald-100">Full matchday breakdown →</PendingLink>
     </section>
   );
 }

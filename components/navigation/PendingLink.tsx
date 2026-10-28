@@ -1,57 +1,72 @@
 "use client";
 
-import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import Link, { useLinkStatus } from "next/link";
+import { useEffect, useRef, type MouseEvent, type ReactNode, type RefObject } from "react";
 
 type PendingLinkProps = {
   href: string;
   children: ReactNode;
-  pendingChildren?: ReactNode;
+  // Shown with a spinner while the navigation is in flight, e.g. "Opening breakdown…".
+  pendingLabel: string;
   className?: string;
 };
 
-export default function PendingLink({
-  href,
+// Rendered inside <Link> because useLinkStatus only reports the status of its parent link. Next resets
+// `pending` itself when the navigation commits, fails or is superseded, so no timer is needed.
+function LinkContent({
   children,
-  pendingChildren,
-  className = "",
-}: PendingLinkProps) {
-  const [pending, setPending] = useState(false);
+  pendingLabel,
+  pendingRef,
+}: {
+  children: ReactNode;
+  pendingLabel: string;
+  pendingRef: RefObject<boolean>;
+}) {
+  const { pending } = useLinkStatus();
 
   useEffect(() => {
-    if (!pending) {
-      return;
-    }
+    pendingRef.current = pending;
+    return () => {
+      pendingRef.current = false;
+    };
+  }, [pending, pendingRef]);
 
-    const timeout = window.setTimeout(() => setPending(false), 6000);
+  return (
+    <>
+      {pending ? (
+        <span data-pending="" aria-hidden="true" className="inline-flex items-center gap-2">
+          <span
+            className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-emerald-300/30 border-t-emerald-200"
+          />
+          {pendingLabel}
+        </span>
+      ) : (
+        children
+      )}
+      <span role="status" aria-live="polite" className="sr-only">
+        {pending ? pendingLabel : ""}
+      </span>
+    </>
+  );
+}
 
-    return () => window.clearTimeout(timeout);
-  }, [pending]);
+export default function PendingLink({ href, children, pendingLabel, className = "" }: PendingLinkProps) {
+  const pendingRef = useRef(false);
 
+  // A second click or Enter while the first navigation is pending must not start another one.
   function handleClick(event: MouseEvent<HTMLAnchorElement>) {
-    if (
-      event.defaultPrevented ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey ||
-      event.button !== 0
-    ) {
-      return;
-    }
-
-    setPending(true);
+    if (pendingRef.current) event.preventDefault();
   }
 
   return (
-    <a
+    <Link
       href={href}
       onClick={handleClick}
-      aria-busy={pending}
-      className={`${className} ${
-        pending ? "cursor-wait opacity-70" : ""
-      }`}
+      className={`${className} has-[[data-pending]]:cursor-wait has-[[data-pending]]:text-emerald-100`}
     >
-      {pending ? pendingChildren ?? children : children}
-    </a>
+      <LinkContent pendingLabel={pendingLabel} pendingRef={pendingRef}>
+        {children}
+      </LinkContent>
+    </Link>
   );
 }
