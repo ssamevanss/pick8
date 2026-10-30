@@ -38,5 +38,10 @@ Rules:
   `tests/pick8-wyg-contract.test.ts` feeds every response in it through the real sync (statuses, nullable
   fields, identity, corrections, reschedules, must-reject and must-tolerate mutations, HTTP errors). WYG proves its
   route emits exactly those responses, and WYG CI runs this test against its copy and fails if the copies differ.
+- WYG CI depends on this repo directly: its `pick8-contract` job checks out Pick8 `main` without a token (this repo is
+  public), runs `npm ci --ignore-scripts`, then `node --experimental-strip-types --test tests/pick8-wyg-contract.test.ts`
+  with `WYG_SHARED_FIXTURES_CONTRACT` pointing at WYG's copy. Renaming or moving that test, its helper
+  (`tests/helpers/pick8-sync-harness.ts`), the env var or the vendored JSON, or making the repo private, turns WYG CI red
+  on every PR. Change WYG's job in the same window; going private also needs a read-only token there.
 - Changing the contract: edit the JSON and this consumer here first and merge; only then may WYG change. Never edit
   the JSON just to make a failing test pass; a failure means one side no longer matches the other.
