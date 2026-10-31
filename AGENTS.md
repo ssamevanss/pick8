@@ -66,7 +66,8 @@ Don't add features there. Removal is a tracked roadmap item; until then treat th
   fixtures plus Total Goals. Rules version is per matchday (`pick8_rules_version`): v1 (matchdays 1–5)
   has 7 categories; v2 adds `btts`.
 - **Lock:** the *whole entry* (selections and Total Goals, drafts and edits) locks at the matchday's
-  **first fixture kickoff**. Other players' selections become visible only after *that selection's
+  **first fixture kickoff**. Once that deadline has passed it never moves later
+  (`pick8_entry_deadline`), even if the fixture is rescheduled; see `docs/postponed-and-interrupted-fixtures.md`. Other players' selections become visible only after *that selection's
   fixture* kicks off; drafts are always private.
 - **Scoring (finished fixtures only):** Home Winner win `5 + GD`, loss `−5 × GD`; Away Winner win
   `10 + GD`, loss `−5 × GD`; correct Draw `15 + home goals`; Team Win/Lose/Score, Clean Sheet, BTTS
