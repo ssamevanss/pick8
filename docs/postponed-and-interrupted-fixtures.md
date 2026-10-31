@@ -96,6 +96,11 @@ re-score". Whether a *reschedule* is a correction is not stated anywhere.
   (for example `providerStatus`), because Pick8 cannot distinguish them today. Pick8 must ignore unknown fields and
   WYG must keep the existing `status` values.
 
+This is the same two-phase change WYG's `docs/RESULT_SYNC_RELIABILITY_PLAN_2026-10.md` already proposes as step 4
+(Pick8 accepts a non-void, non-terminal `suspended` first, then WYG emits it) and ranks as risk 3. WYG's rechecks of
+suspended/abandoned matches (#17) and of settled results up to 14 days after kickoff (the late-correction sweep) are
+what let Pick8 follow either kind of change; Pick8 itself already re-reads completed matchdays every 24 h.
+
 Implementation sketch for B (needs sign-off first): a `completed_with_void` marker written when scoring completes a
 matchday; `score_pick8_matchday` keeps `final_ready` true while the marker is set and only the void fixtures' later
 changes are ignored; `nextProviderCheckAt` already drops to 24 h for completed matchdays. Tests: extend
