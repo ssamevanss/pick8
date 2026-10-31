@@ -31,7 +31,7 @@ Players ──► Vercel (Next.js 16)  ──► Supabase "Pick8" project (Auth 
   `WHO_YOU_GOT_API_KEY` here). Pick8 validates strictly and fails closed.
 - **Blast radius:** a WYG outage/stale cache ⇒ Pick8 results stop updating (scores stay as last applied; entries and
   locks keep working from Pick8's own data). A WYG contract change ⇒ Pick8 rejects the payload (no corruption) but
-  stops syncing. There is no automated cross-repo contract test or freshness alert today (see review).
+  stops syncing. A shared-fixture contract test runs in both repos' CI (`tests/pick8-wyg-contract.test.ts`); there is no freshness alert yet.
 
 ## Automation state model (short)
 `matchdays.sync_pending / scoring_pending / sync_revision / scoring_revision / scored_revision /
