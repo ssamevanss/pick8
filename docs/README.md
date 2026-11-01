@@ -10,7 +10,8 @@ rewrite and describe WYG. **Trust code and `supabase/migrations/` first**, then 
 | **Current** | [pick8-operations.md](pick8-operations.md) | Env vars, cron, runbook, backup/recovery, environments |
 | **Current** | [BACKLOG.md](BACKLOG.md) | Recorded (unimplemented) feature backlog + dependencies |
 | Partly current | [OPERATIONS.md](OPERATIONS.md) | Only the "Pick8 …" sections (signup/automation, ~L396–470; Monitoring, L1600+). Its scoring "not a transaction" remarks are superseded. Rest is WYG. |
-| Current, narrow | [postponed-and-interrupted-fixtures.md](postponed-and-interrupted-fixtures.md) | How postponed/rescheduled/suspended fixtures flow through sync, scoring and the entry lock; open policy decisions |
+| Current, narrow | [permanent-void-settlement.md](permanent-void-settlement.md) | Policy, design, deployment order and runbook for postponed/replayed/suspended fixtures (permanent void) |
+| Current, narrow | [postponed-and-interrupted-fixtures.md](postponed-and-interrupted-fixtures.md) | The 2026-10-31 investigation behind it (behaviour before the permanent void); superseded policy section |
 | Current, narrow | [transactional-scoring-verification.md](transactional-scoring-verification.md), [result-sync-due-state-redesign.md](result-sync-due-state-redesign.md) | Design/verification notes for the shipped scoring and due-state models |
 | **WYG / stale** | PROJECT_CONTEXT, RELEASE_CHECKLIST (except its "Pick8 MVP" section), ROADMAP, DATABASE_SCHEMA, FUTURE_*, 2.0*, `2026-*.sql` | Do not follow. `docs/*.sql` must never be applied to Pick8's database. |
 

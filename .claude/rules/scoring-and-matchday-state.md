@@ -21,8 +21,12 @@ paths:
 - Scoring must stay idempotent and revision-guarded: mark pending → read → write → clear only if the
   revision still matches. Never write scores outside that path; never "fix" a score by hand-editing
   `calculated_score`/`points_awarded`.
-- Only `finished` fixtures with final scores score. `postponed`/`cancelled` are void (0 pts, excluded
-  from Total Goals). Final (matchday-level) scoring requires every fixture terminal.
+- Only `finished` fixtures with final scores score. `postponed`/`cancelled` and any fixture with
+  `voided_at` are void (0 pts, excluded from Total Goals, whatever the provider mirror later says).
+  Final (matchday-level) scoring requires every fixture terminal or void. `suspended`/`abandoned`
+  are held (not terminal). `voided_at` is set only by `decide_pick8_fixture_void` (mirrored by
+  `utils/pick8-fixture-void.ts`, compared in `tests/pick8-permanent-void-postgres.mjs`) or
+  `void_pick8_fixture`, and never cleared. Change the rules in SQL and TypeScript together.
 - Lock = first kickoff of the matchday, enforced in `runPick8EntryWriteWhileOpen` *and* the DB.
   Compare instants (`Date.parse`), never local-time strings. Don't introduce per-fixture entry
   locking without a product decision (WYG locks per fixture; Pick8 intentionally doesn't).

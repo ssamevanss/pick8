@@ -61,7 +61,27 @@ export function harness({ providerSeason = 2026, matchdayNumber = 5, now: start 
     state.scoring_revision = Number(state.scoring_revision) + 1;
     state.scoring_pending = true;
   }
+  // Stand-ins for the database triggers `decide_pick8_fixture_void` and `preserve_elapsed_pick8_deadline`. The
+  // SQL itself is proven against real Postgres; here the same rules (their TypeScript mirror) let the sync's
+  // lifecycle, cadence and idempotency be exercised end to end.
+  function enforceTriggers(table: string, old: Row | undefined, row: Row) {
+    if (table === "fixtures") {
+      if (old?.voided_at) { row.voided_at = old.voided_at; row.void_reason = old.void_reason; return; }
+      const matchday = tables.matchdays.find((md) => md.id === row.matchday_id);
+      if (matchday?.fixture_sync_mode !== "provider") return;
+      const { decideFixtureVoid } = load<typeof import("../../utils/pick8-fixture-void")>("utils/pick8-fixture-void.ts");
+      const reason = decideFixtureVoid({
+        previous: old ? { status: String(old.status), kickoff_at: String(old.kickoff_at) } : null,
+        next: { status: String(row.status), kickoff_at: String(row.kickoff_at) },
+        entryDeadlineElapsed: matchday.locks_at != null && Date.parse(String(matchday.locks_at)) <= now,
+      });
+      if (reason) { row.voided_at = new ClockDate().toISOString(); row.void_reason = reason; }
+    }
+    if (table === "matchdays" && old?.locks_at && row.locks_at && Date.parse(String(old.locks_at)) <= now &&
+      Date.parse(String(row.locks_at)) > Date.parse(String(old.locks_at))) row.locks_at = old.locks_at;
+  }
   function changed(table: string, old: Row | undefined, row: Row) {
+    enforceTriggers(table, old, row);
     if (table === "fixtures" && JSON.stringify(old) !== JSON.stringify(row)) dirty();
     if (table === "matchdays" && old && ["status", "locks_at", "fixture_sync_mode"].some((key) => old[key] !== row[key])) {
       dirty(old.locks_at !== row.locks_at || old.fixture_sync_mode !== row.fixture_sync_mode);
@@ -149,7 +169,8 @@ export function harness({ providerSeason = 2026, matchdayNumber = 5, now: start 
             return providerDue || Boolean(md.scoring_pending || md.fixture_application_pending || md.sync_pending);
           }).map((md) => {
             const fixtures = tables.fixtures.filter((fixture) => fixture.matchday_id === md.id);
-            const allTerminal = fixtures.length > 0 && fixtures.every((fixture) => ["finished", "postponed", "cancelled"].includes(String(fixture.status)));
+            const allTerminal = fixtures.length > 0 && fixtures.every((fixture) => fixture.voided_at != null || ["finished", "postponed", "cancelled"].includes(String(fixture.status)));
+            const voidedExternalFixtureIds = fixtures.filter((fixture) => fixture.voided_at != null).map((fixture) => fixture.external_fixture_id).sort();
             const providerDue = policy !== "results" || providerIsDue(md);
             return { id: md.id, matchdayNumber: md.matchday_number, status: md.status, locksAt: md.locks_at,
               fixtureSyncMode: md.fixture_sync_mode, syncRevision: md.sync_revision, scoringRevision: md.scoring_revision,
@@ -160,7 +181,7 @@ export function harness({ providerSeason = 2026, matchdayNumber = 5, now: start 
               terminalFixtureFingerprint: md.terminal_fixture_fingerprint ?? null, terminalConfirmedAt: md.terminal_confirmed_at ?? null,
               fixtureCount: fixtures.length, firstKickoffAt: fixtures.map(f => f.kickoff_at).sort()[0] ?? null,
               lastKickoffAt: fixtures.map(f => f.kickoff_at).sort().at(-1) ?? null,
-              hasLiveFixture: fixtures.some(f => ["in_play", "paused"].includes(String(f.status))), allTerminal,
+              hasLiveFixture: fixtures.some(f => ["in_play", "paused"].includes(String(f.status)) && f.voided_at == null), allTerminal, voidedExternalFixtureIds,
               providerFreshnessDue: providerDue, localScoringRecoveryDue: Boolean(md.scoring_pending),
               fixtureApplicationRecoveryDue: Boolean(md.fixture_application_pending || md.sync_pending),
               competitionLifecycleRecoveryDue: Boolean(season.competition_refresh_pending),

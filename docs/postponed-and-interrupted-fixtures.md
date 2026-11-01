@@ -1,5 +1,8 @@
 # Postponed, rescheduled and interrupted fixtures
 
+> **Superseded by [permanent-void-settlement.md](permanent-void-settlement.md)** (the policy below was decided and implemented;
+> Part 4 is now historical). Findings A-D and the five questions describe the behaviour *before* that change.
+
 Status: investigation of 2026-10-31. Findings marked **verified** were reproduced against the real migrations
 (`tests/pick8-postponed-fixtures-postgres.mjs`); the rest come from reading the code.
 Part 4 lists the decisions that need a product owner. Nothing in Part 4 is implemented.

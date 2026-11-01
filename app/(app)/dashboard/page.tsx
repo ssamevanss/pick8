@@ -3,6 +3,7 @@ import { getRequestAuthContext } from "@/utils/app-context";
 import { createInteractiveAdminClient } from "@/utils/supabase/admin";
 import { requireSuccessfulDatabaseOperation } from "@/utils/supabase/resilience";
 import { buildMatchdayBreakdown } from "@/utils/pick8-matchday-breakdown";
+import { withEffectiveFixtureStatus } from "@/utils/pick8-fixture-void";
 import {
   buildStandings,
   currentCompetitionStandings,
@@ -155,9 +156,9 @@ export default async function DashboardPage() {
   const latestMatchdayIds = [...new Set([...latestEntries.map((entry) => entry.matchday_id), ...(settledMatchday ? [settledMatchday.id] : [])])];
   let latestFixtures: (BreakdownFixture & { matchday_id: string })[] = [];
   if (latestMatchdayIds.length) {
-    const { data, error } = await admin.from("fixtures").select("id, matchday_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score").in("matchday_id", latestMatchdayIds);
+    const { data, error } = await admin.from("fixtures").select("id, matchday_id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, voided_at, home_score, away_score").in("matchday_id", latestMatchdayIds);
     requireSuccessfulDatabaseOperation(error);
-    latestFixtures = (data ?? []) as (BreakdownFixture & { matchday_id: string })[];
+    latestFixtures = withEffectiveFixtureStatus(data ?? []) as (BreakdownFixture & { matchday_id: string })[];
   }
   const latestWinners = settledMatchday && podium?.rows.length ? (() => {
     const fixtures = latestFixtures.filter((fixture) => fixture.matchday_id === settledMatchday.id);

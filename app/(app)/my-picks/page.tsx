@@ -14,9 +14,10 @@ import {
   type BreakdownSelection,
 } from "@/utils/pick8-matchday-breakdown";
 import {
-  earliestFixtureKickoff,
+  effectiveEntryDeadline,
   isInitialPick8EntryWindowOpen,
 } from "@/utils/pick8-fixture-state";
+import { withEffectiveFixtureStatus } from "@/utils/pick8-fixture-void";
 import {
   playerMatchdayLifecycle,
   resolveRelevantMatchday,
@@ -87,15 +88,15 @@ export default async function MyPicksPage({
   }
 
   const [fixturesResult, profilesResult, entriesResult] = await Promise.all([
-    admin.from("fixtures").select("id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score").eq("matchday_id", selectedMatchday.id).order("kickoff_at"),
+    admin.from("fixtures").select("id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, voided_at, home_score, away_score").eq("matchday_id", selectedMatchday.id).order("kickoff_at"),
     admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
     admin.from("entries").select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at").eq("matchday_id", selectedMatchday.id),
   ]);
   requireSuccessfulDatabaseOperation(fixturesResult.error);
   requireSuccessfulDatabaseOperation(profilesResult.error);
   requireSuccessfulDatabaseOperation(entriesResult.error);
-  const fixtures = (fixturesResult.data ?? []) as BreakdownFixture[];
-  const effectiveLocksAt = earliestFixtureKickoff(fixtures) ?? selectedMatchday.locks_at;
+  const fixtures = withEffectiveFixtureStatus(fixturesResult.data ?? []) as BreakdownFixture[];
+  const effectiveLocksAt = effectiveEntryDeadline(selectedMatchday.locks_at, fixtures);
   const allProfiles = profilesResult.data ?? [];
   const entries = (entriesResult.data ?? []) as BreakdownEntry[];
   const profiles = allProfiles

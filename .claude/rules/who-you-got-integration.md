@@ -23,7 +23,10 @@ Contract Pick8 relies on (change either side only after checking both):
   homeTeamCrestUrl|null (https only), awayTeamCrestUrl, kickoffAt (ISO), status, homeScore|null,
   awayScore|null, updatedAt`.
 - `status` ∈ `scheduled|timed|in_play|paused|finished|postponed|cancelled`. WYG maps `AWARDED→finished`,
-  `SUSPENDED/ABANDONED→cancelled`, and returns 500 for an unknown provider status.
+  `SUSPENDED/ABANDONED→cancelled`, and returns 500 for an unknown provider status. The optional additive
+  `providerStatus` (upper-case provider status) lets Pick8 store `cancelled`+SUSPENDED/ABANDONED as the held,
+  non-terminal `suspended`/`abandoned`; absent or unknown values are tolerated, a non-string one is rejected.
+  Never accept `suspended`/`abandoned` as a raw `status`.
 - HTTP: 401/403 = credentials, 404 = no season mapping, 5xx/timeout (10 s) = upstream. Pick8 sends
   `If-None-Match` but WYG currently emits no `ETag`; Pick8 therefore fingerprints content itself.
   WYG caches `private, max-age=30`.

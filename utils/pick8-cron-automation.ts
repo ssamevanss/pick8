@@ -264,6 +264,7 @@ function mapDiscoveredMatchday(row: Record<string, unknown>): Matchday {
     terminal_confirmed_at: row.terminalConfirmedAt as string | null,
     first_kickoff_at: row.firstKickoffAt as string | null, last_kickoff_at: row.lastKickoffAt as string | null,
     has_live_fixture: Boolean(row.hasLiveFixture), all_terminal: Boolean(row.allTerminal), fixture_count: Number(row.fixtureCount ?? 0),
+    voided_external_fixture_ids: Array.isArray(row.voidedExternalFixtureIds) ? row.voidedExternalFixtureIds.filter((id): id is string => typeof id === "string") : undefined,
     provider_freshness_due: Boolean(row.providerFreshnessDue), local_scoring_recovery_due: Boolean(row.localScoringRecoveryDue),
     fixture_application_recovery_due: Boolean(row.fixtureApplicationRecoveryDue),
     competition_lifecycle_recovery_due: Boolean(row.competitionLifecycleRecoveryDue),

@@ -8,7 +8,7 @@ import { recalculateMatchdayScores, type ScoreRecalculationSummary } from "@/uti
 import { createAdminClient } from "@/utils/supabase/admin";
 import type { Tables, TablesInsert } from "@/types/database.types";
 import { logicalPick8FixtureKey } from "@/utils/pick8-fixture-identity";
-import { earliestFixtureKickoff } from "@/utils/pick8-fixture-state";
+import { earliestFixtureKickoff, protectedEntryDeadline } from "@/utils/pick8-fixture-state";
 import { shouldSyncProviderFixtures } from "@/utils/pick8-fixture-sync-mode";
 import {
   getProviderPayloadMatchday,
@@ -26,7 +26,7 @@ const FIXTURE_STATUSES = new Set([
   "cancelled",
 ]);
 
-type FixtureStatus =
+type ProviderFixtureStatus =
   | "scheduled"
   | "timed"
   | "in_play"
@@ -34,6 +34,15 @@ type FixtureStatus =
   | "finished"
   | "postponed"
   | "cancelled";
+
+// Who You Got serves SUSPENDED and ABANDONED matches as "cancelled" and names the real provider status in the
+// optional `providerStatus` field. They are held (not terminal, not void) until the provider resolves them, so
+// Pick8 stores them under their own status. A raw "suspended"/"abandoned" `status` is still rejected.
+type FixtureStatus = ProviderFixtureStatus | "suspended" | "abandoned";
+const INTERRUPTED_PROVIDER_STATUSES: Record<string, FixtureStatus> = {
+  SUSPENDED: "suspended",
+  ABANDONED: "abandoned",
+};
 
 type SourceFixture = {
   externalFixtureId: string;
@@ -172,7 +181,15 @@ function parseFixture(value: unknown, index: number): SourceFixture {
   );
   const kickoffDate = kickoffRaw ? new Date(kickoffRaw) : null;
   const rawStatus = stringValue(fixture.status)?.toLowerCase();
-  const status = rawStatus?.replaceAll("-", "_") as FixtureStatus | undefined;
+  const providerStatus = fixture.providerStatus === undefined || fixture.providerStatus === null
+    ? null
+    : typeof fixture.providerStatus === "string" && /^[A-Za-z_]{1,32}$/.test(fixture.providerStatus.trim())
+      ? fixture.providerStatus.trim().toUpperCase()
+      : undefined;
+  const reportedStatus = rawStatus?.replaceAll("-", "_") as ProviderFixtureStatus | undefined;
+  const status: FixtureStatus | undefined = reportedStatus === "cancelled" && providerStatus
+    ? INTERRUPTED_PROVIDER_STATUSES[providerStatus] ?? reportedStatus
+    : reportedStatus;
   const homeScore = scoreValue(fixture, "home");
   const awayScore = scoreValue(fixture, "away");
   const homeTeamCrestUrl = crestUrlValue(fixture.homeTeamCrestUrl);
@@ -190,7 +207,9 @@ function parseFixture(value: unknown, index: number): SourceFixture {
     !kickoffDate ||
     Number.isNaN(kickoffDate.getTime()) ||
     !status ||
-    !FIXTURE_STATUSES.has(status) ||
+    !reportedStatus ||
+    !FIXTURE_STATUSES.has(reportedStatus) ||
+    providerStatus === undefined ||
     home.id === undefined ||
     away.id === undefined ||
     homeScore === undefined ||
@@ -264,11 +283,16 @@ function seasonName(startYear: number) {
 }
 
 function deriveMatchdayStatus(
-  fixtures: SourceFixture[],
+  fixtures: Array<{ status: string; kickoffAt: string }>,
   existingStatus: string | null,
   now = Date.now(),
 ) {
   const statuses = fixtures.map((fixture) => fixture.status);
+  // Moving a completed matchday backwards is scoring's decision, not the provider mirror's: only scoring knows
+  // which non-terminal fixtures are permanently void. A live fixture is the one thing that must still show.
+  if (existingStatus === "completed" && !statuses.some((status) => status === "in_play" || status === "paused")) {
+    return "completed";
+  }
   const hasStartedFixture = fixtures.some(
     (fixture) => Date.parse(fixture.kickoffAt) <= now,
   );
@@ -398,6 +422,8 @@ export type ExistingMatchdaySyncState = {
   terminal_fixture_fingerprint?: string | null; terminal_confirmed_at?: string | null;
   first_kickoff_at?: string | null; last_kickoff_at?: string | null;
   has_live_fixture?: boolean; all_terminal?: boolean; fixture_count?: number;
+  /** Permanently voided fixtures (discovery reports them so the cron path needs no extra read). */
+  voided_external_fixture_ids?: string[];
 };
 
 type SyncInput = {
@@ -596,18 +622,36 @@ async function syncWhoYouGotFixturesInternal(input: SyncInput, diagnostics: Retu
   const fixtures = providerResult.fixtures;
   const fingerprint = matchdayContentFingerprint(input.season, input.matchday, fixtures);
 
+  // A permanently voided fixture is postponed for lifecycle and cadence purposes whatever the provider now
+  // reports for it (a new kickoff, a replay in progress). Discovery supplies the voided set; a direct
+  // (admin) sync reads it. A void decided by this very update is applied by the database and reaches the
+  // lifecycle through scoring, which is the authority on matchday completion.
+  let voidedIds = new Set(existingMatchday?.voided_external_fixture_ids ?? []);
+  if (existingMatchday && !existingMatchday.voided_external_fixture_ids) {
+    const { data: voidedRows, error: voidedReadError } = await cronRead("who-you-got-fixture-sync.void_state", () => supabase.from("fixtures")
+      .select("external_fixture_id").eq("matchday_id", existingMatchday.id).not("voided_at", "is", null));
+    if (voidedReadError) throw databaseError("Reading fixture void state", voidedReadError.message);
+    voidedIds = new Set((voidedRows ?? []).map((row) => row.external_fixture_id));
+  }
+  const lifecycleFixtures = fixtures.map((fixture) => ({
+    kickoffAt: fixture.kickoffAt,
+    status: voidedIds.has(fixture.externalFixtureId) ? "postponed" : fixture.status,
+  }));
+
   const matchdayStatus = deriveMatchdayStatus(
-    fixtures,
+    lifecycleFixtures,
     existingMatchday?.status ?? null,
   );
-  const locksAt = earliestFixtureKickoff(
+  const computedLocksAt = earliestFixtureKickoff(
     fixtures.map((fixture) => ({ kickoff_at: fixture.kickoffAt })),
   );
-  if (!locksAt) throw databaseError("Deriving matchday deadline", "No valid fixture kickoff was returned.");
+  if (!computedLocksAt) throw databaseError("Deriving matchday deadline", "No valid fixture kickoff was returned.");
+  // Once the deadline has passed the database only lets it move earlier (preserve_elapsed_pick8_deadline).
+  const locksAt = protectedEntryDeadline(existingMatchday?.locks_at, computedLocksAt);
   const firstKickoffAt = locksAt;
   const lastKickoffAt = fixtures.map((fixture) => fixture.kickoffAt).sort().at(-1) ?? locksAt;
-  const hasLiveFixture = fixtures.some((fixture) => fixture.status === "in_play" || fixture.status === "paused");
-  const allTerminal = fixtures.every((fixture) => ["finished", "postponed", "cancelled"].includes(fixture.status));
+  const hasLiveFixture = lifecycleFixtures.some((fixture) => fixture.status === "in_play" || fixture.status === "paused");
+  const allTerminal = lifecycleFixtures.every((fixture) => ["finished", "postponed", "cancelled"].includes(fixture.status));
   const terminalConfirmed = Boolean(allTerminal && existingMatchday?.applied_fixture_fingerprint === fingerprint);
   const nextCheck = nextProviderCheckAt({
     status: matchdayStatus, firstKickoffAt, lastKickoffAt, hasLiveFixture, allTerminal, terminalConfirmed,

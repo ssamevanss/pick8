@@ -184,6 +184,8 @@ export type Database = {
           matchday_id: string
           status: string
           updated_at: string
+          void_reason: string | null
+          voided_at: string | null
         }
         Insert: {
           away_score?: number | null
@@ -202,6 +204,8 @@ export type Database = {
           matchday_id: string
           status?: string
           updated_at?: string
+          void_reason?: string | null
+          voided_at?: string | null
         }
         Update: {
           away_score?: number | null
@@ -220,6 +224,8 @@ export type Database = {
           matchday_id?: string
           status?: string
           updated_at?: string
+          void_reason?: string | null
+          voided_at?: string | null
         }
         Relationships: [
           {
