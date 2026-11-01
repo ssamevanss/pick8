@@ -17,7 +17,11 @@ paths:
   (external scheduler, ≤ every 5 min, **not defined in the repo**). **Do not change schedules, or call
   these routes against production, without explicit approval.** Keep daily jobs off `:00/:05` boundaries.
 - Auth: `authorizePick8Cron` — `Authorization: Bearer $CRON_SECRET` only; 401 missing, 403 wrong,
-  fail closed if unset. No query-string secrets. Never log the secret or the header.
+  fail closed if unset. No query-string secrets. Never log the secret or the header. The check lives in
+  `utils/pick8-cron-auth.ts` (SHA-256 + `timingSafeEqual`); rejections emit one throttled
+  `{service:"pick8-cron",event:"auth_rejected",route,status,reason}` line (≤1/min per route+reason per instance,
+  later lines carry `suppressed`). Reasons: `secret_not_configured` (500, `console.error`), `missing_authorization`
+  (401), `malformed_authorization`/`invalid_token` (403).
 - Idempotency: same invocation twice must be safe. Cross-instance protection comes from the DB
   (advisory lock in scoring, revision guards, fingerprints); the process-local in-flight guard is only
   best-effort. Don't rely on the latter.

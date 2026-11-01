@@ -1,6 +1,7 @@
 import { currentCronReadContext, withCronReadContext } from "@/utils/supabase/cron-read";
 import "server-only";
 
+import { checkPick8CronAuthorization } from "@/utils/pick8-cron-auth";
 import { createSyncDiagnostics } from "@/utils/pick8-sync-diagnostics";
 import { competitionRefreshRequired } from "@/utils/pick8-sync-state";
 
@@ -43,15 +44,8 @@ function jsonError(message: string, status: number) {
 
 /** Strict bearer authentication for the new Pick8 cron endpoints. */
 export function authorizePick8Cron(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return jsonError("Cron authentication is not configured.", 500);
-
-  const authorization = request.headers.get("authorization");
-  if (!authorization) return jsonError("Authorization header is required.", 401);
-  if (authorization !== `Bearer ${secret}`) {
-    return jsonError("Cron authorization is invalid.", 403);
-  }
-  return null;
+  const rejection = checkPick8CronAuthorization(request);
+  return rejection ? jsonError(rejection.error, rejection.status) : null;
 }
 
 function safeError(error: unknown) {
