@@ -73,7 +73,6 @@ export function harness({ providerSeason = 2026, matchdayNumber = 5, now: start 
       const reason = decideFixtureVoid({
         previous: old ? { status: String(old.status), kickoff_at: String(old.kickoff_at) } : null,
         next: { status: String(row.status), kickoff_at: String(row.kickoff_at) },
-        entryDeadlineElapsed: matchday.locks_at != null && Date.parse(String(matchday.locks_at)) <= now,
       });
       if (reason) { row.voided_at = new ClockDate().toISOString(); row.void_reason = reason; }
     }
@@ -151,6 +150,22 @@ export function harness({ providerSeason = 2026, matchdayNumber = 5, now: start 
       then(resolve: (value: unknown) => unknown) {
         const call = { table: name === "discover_pick8_due_work" ? "discovery_rpc" : "rpc", operation: "rpc", values: args };
         calls.push(call); before?.(call);
+        // Stand-in for `settle_expired_pick8_interrupted_fixtures` (its SQL is proven against real Postgres).
+        const { isInterruptedFixtureExpired } = load<typeof import("../../utils/pick8-fixture-void")>("utils/pick8-fixture-void.ts");
+        const expiredFixtures = () => tables.fixtures.filter((fixture) => {
+          const md = tables.matchdays.find((row) => row.id === fixture.matchday_id);
+          return md?.fixture_sync_mode === "provider" && isInterruptedFixtureExpired(
+            { status: String(fixture.status), kickoff_at: String(fixture.kickoff_at), voided_at: fixture.voided_at as string | null }, now, String(md.status));
+        });
+        if (name === "settle_expired_pick8_interrupted_fixtures") {
+          const expired = expiredFixtures();
+          for (const fixture of expired) {
+            const old = { ...fixture };
+            Object.assign(fixture, { voided_at: new ClockDate().toISOString(), void_reason: "expired" });
+            changed("fixtures", old, fixture);
+          }
+          return Promise.resolve(resolve({ data: { count: expired.length, voided: expired.map((fixture) => ({ fixtureId: fixture.id })) }, error: null }));
+        }
         if (name === "discover_pick8_due_work") {
           const season = tables.seasons[0];
           const policy = String(args.check_policy ?? "results");
@@ -187,7 +202,7 @@ export function harness({ providerSeason = 2026, matchdayNumber = 5, now: start 
               competitionLifecycleRecoveryDue: Boolean(season.competition_refresh_pending),
               dueReasons: [providerDue ? "provider_freshness" : null, md.scoring_pending ? "local_scoring_recovery" : null].filter(Boolean) };
           });
-          return Promise.resolve(resolve({ data: { season: { id: season.id, name: season.name, providerSeason: season.provider_season,
+          return Promise.resolve(resolve({ data: { expiredInterruptedFixtureCount: expiredFixtures().length, season: { id: season.id, name: season.name, providerSeason: season.provider_season,
             competitionRefreshPending: season.competition_refresh_pending, competitionRevision: season.competition_revision,
             competitionRefreshAfter: season.competition_refresh_after, lifecycleRecoveryDue: season.competition_refresh_pending },
             matchdays: due, dailyMatchdayNumbers: policy === "fixtures" ? due.map(md => md.matchdayNumber) : [] }, error: null }));

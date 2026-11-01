@@ -75,7 +75,8 @@ Don't add features there. Removal is a tracked roadmap item; until then treat th
   (0 points, excluded from Total Goals). A fixture postponed to another day, or abandoned and replayed,
   is **permanently void** (`fixtures.voided_at`, decided by a DB trigger, irreversible): a later date,
   replay or score never reverses it and a completed matchday never reopens for it. A same-day kickoff delay
-  is the same match; a suspended match is held and scored if it resumes. See `docs/permanent-void-settlement.md`.
+  is the same match (before or after the entry deadline); a suspended or abandoned match is held and scored
+  if it resumes, and voided if it is not resolved 14 days after kickoff. See `docs/permanent-void-settlement.md`.
   Final matchday scoring happens only when every fixture is finished or void; provider corrections to
   non-void fixtures trigger recalculation.
 - **Participation:** `profiles.is_active` (account) and `pick8_participation_active` (may enter).

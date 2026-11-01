@@ -9,7 +9,7 @@ const cluster = await createTestDatabase();
 const admin = cluster.admin;
 const db = await cluster.connect();
 const reference = referenceScorer();
-const { decideFixtureVoid } = typeScriptModule('utils/pick8-fixture-void.ts');
+const { decideFixtureVoid, isInterruptedFixtureExpired } = typeScriptModule('utils/pick8-fixture-void.ts');
 
 // `seed` finishes every fixture 2-1 and every entry predicts 30 Total Goals. With the eight v2 categories on fixtures 0-7
 // (home_win, away_win, draw, team_win, team_lose, team_score, clean_sheet, btts) an entry earns 11 from picks plus 10 for
@@ -89,7 +89,7 @@ try {
     }
   });
 
-  await test('a fixture moved to another date after the lock is void; a delay on the same day, or any move before the lock, is not', async () => {
+  await test('a fixture moved to another calendar day is void, after the lock or before it; a delay on the same day is not', async () => {
     const ids = await seedWithPendingFirst(1);
     const id = ids.fixtures[0].id;
     await set(id, { kickoff_at: '2099-03-14T18:00:00Z' });
@@ -102,11 +102,56 @@ try {
     const before = row.voided_at;
     await set(id, { kickoff_at: '2099-03-15T16:00:00Z' });
     assert.deepEqual((await fixture(id)).voided_at, before);
+  });
 
-    const unlocked = await seed(admin, { entries: 1, rulesVersion: 2, draft: true, status: 'timed', home: null, away: null, future: true });
-    await set(unlocked.fixtures[0].id, { kickoff_at: '2099-03-14T15:00:00Z' });
-    await set(unlocked.fixtures[0].id, { kickoff_at: '2099-03-20T15:00:00Z' });
-    assert.equal((await fixture(unlocked.fixtures[0].id)).voided_at, null, 'before the lock entries can still be revised, so a move is not decided');
+  await test('pre-deadline: moved to another day before the entry deadline is void for good; a same-day delay is not; the lock still works', async () => {
+    const ids = await seed(admin, { entries: 2, rulesVersion: 2, status: 'timed', home: null, away: null, future: true });
+    const [moved, delayed, other] = ids.fixtures;
+    assert.ok(Date.parse(await lockedAt(ids)) > Date.now() || (await lockedAt(ids)) === null, 'the entry deadline is still ahead');
+    const kickoff = (await fixture(moved.id)).kickoff_at;
+    const sameDay = new Date(Date.parse(kickoff) + 60_000).toISOString();
+
+    await set(delayed.id, { kickoff_at: sameDay });
+    assert.equal((await fixture(delayed.id)).voided_at, null, 'a delay within the same day is the same match');
+    await set(moved.id, { kickoff_at: '2099-03-15T15:00:00Z' });
+    const row = await fixture(moved.id);
+    assert.equal(row.void_reason, 'rescheduled');
+    assert.ok(row.voided_at);
+
+    // Neither a move back, nor a replay score, nor the provider reporting it timed again brings it back.
+    await set(moved.id, { kickoff_at: kickoff });
+    await set(moved.id, { status: 'finished', home_score: 5, away_score: 5 });
+    assert.deepEqual((await fixture(moved.id)).voided_at, row.voided_at);
+    assert.equal((await fixture(other.id)).voided_at, null);
+
+    // When the others have been played the matchday completes on them: the void pick scores nothing and its goals never count.
+    await admin.query(`update public.fixtures set status='finished', home_score=2, away_score=1, kickoff_at=now()-interval '3 hours'
+      where matchday_id=$1 and id <> $2`, [ids.matchday, moved.id]);
+    const { result, after } = await rescore(ids);
+    assert.equal(result.matchdayStatus, 'completed');
+    assert.equal(result.voidSelections, 2);
+    assert.ok(after.selections.filter(s => s.fixture_id === moved.id).every(s => s.points_awarded === null));
+    assert.deepEqual(scores(after), [VOID_HOME_WIN_SCORE, VOID_HOME_WIN_SCORE], '27 goals: the replayed 5-5 and the 30-goal prediction do not count');
+  });
+
+  await test('pre-deadline: the entry deadline is not reopened or extended by the void, and picks stay locked once it passes', async () => {
+    const ids = await seed(admin, { entries: 1, rulesVersion: 2, draft: true, status: 'timed', home: null, away: null, future: true });
+    const userId = (await admin.query('select user_id from public.entries where matchday_id=$1', [ids.matchday])).rows[0].user_id;
+    await db.query("select set_config('request.jwt.claim.sub',$1,false)", [userId]);
+    await admin.query("update public.matchdays set status='open' where id=$1", [ids.matchday]);
+    await admin.query("update public.fixtures set kickoff_at=now()+interval '1 day' where matchday_id=$1", [ids.matchday]);
+    const gate = async () => (await db.query('select public.can_submit_pick8_matchday($1,$2) as open', [ids.matchday, userId])).rows[0].open;
+    assert.equal(await gate(), true, 'open before the first kickoff');
+    await set(ids.fixtures[0].id, { kickoff_at: '2099-03-14T15:00:00Z' });
+    assert.equal((await fixture(ids.fixtures[0].id)).void_reason, 'rescheduled');
+    assert.equal(await gate(), true, 'still open: the other fixtures have not kicked off');
+    await set(ids.fixtures[1].id, { kickoff_at: new Date(Date.now() - 60_000).toISOString() });
+    assert.equal(await gate(), false, 'locked at the first remaining kickoff');
+    const deadline = await lockedAt(ids);
+    await set(ids.fixtures[0].id, { kickoff_at: new Date(Date.now() + 3600_000).toISOString() });
+    await set(ids.fixtures[1].id, { kickoff_at: new Date(Date.now() + 7200_000).toISOString() });
+    assert.equal(await gate(), false, 'moving fixtures later after the lock never reopens entries');
+    assert.deepEqual(await lockedAt(ids), deadline);
   });
 
   await test('rescheduled fixture eventually played: the matchday, scores and Total Goals do not move', async () => {
@@ -356,7 +401,7 @@ try {
     assert.equal((await fixture(ids.fixtures[0].id)).voided_at, null);
   });
 
-  await test('the SQL decision matches its TypeScript mirror over every status, kickoff move and lock state', async () => {
+  await test('the SQL decision matches its TypeScript mirror over every status and kickoff move, whatever the lock state', async () => {
     const ids = await seed(admin, { entries: 1, rulesVersion: 2 });
     // One matchday whose deadline has passed (its anchor kicked off two days ago) and one that is still open.
     const lockedMd = (await admin.query("insert into public.matchdays(season_id,matchday_number,status,fixture_sync_mode,pick8_rules_version) values($1,20,'open','provider',2) returning id", [ids.season])).rows[0].id;
@@ -381,7 +426,6 @@ try {
         const expected = decideFixtureVoid({
           previous: { status: previous, kickoff_at: new Date(base).toISOString() },
           next: { status: next, kickoff_at: new Date(base + move).toISOString() },
-          entryDeadlineElapsed: locked,
         });
         assert.equal(row.void_reason, expected, `${locked ? 'locked' : 'open'} ${previous} -> ${next} ${move / 3600_000}h`);
         if (expected) voided++;
@@ -399,7 +443,164 @@ try {
       await admin.query("update public.fixtures set kickoff_at=$2 where external_fixture_id=$1", [external, to]);
       const row = (await admin.query('select void_reason from public.fixtures where external_fixture_id=$1', [external])).rows[0];
       assert.equal(row.void_reason, reason, `${from} -> ${to}`);
-      assert.equal(decideFixtureVoid({ previous: { status: 'timed', kickoff_at: from }, next: { status: 'timed', kickoff_at: to }, entryDeadlineElapsed: true }), reason);
+      assert.equal(decideFixtureVoid({ previous: { status: 'timed', kickoff_at: from }, next: { status: 'timed', kickoff_at: to } }), reason);
     }
+  });
+
+  // ---- 14 day expiry of suspended / abandoned fixtures ----
+  const DAY = 24 * 3600_000;
+  const settle = async (client, at) => (await client.query('select public.settle_expired_pick8_interrupted_fixtures($1) as r', [at])).rows[0].r;
+  const candidates = async (at) => (await db.query("select public.discover_pick8_due_work('results', $1, 12) as work", [at])).rows[0].work.expiredInterruptedFixtureCount;
+  async function seedInterrupted(status, kickoffAt, entries = 2) {
+    const ids = await seed(admin, { entries, rulesVersion: 2 });
+    await set(ids.fixtures[0].id, { status, home_score: 1, away_score: 0, kickoff_at: kickoffAt });
+    return ids;
+  }
+
+  for (const status of ['suspended', 'abandoned']) {
+    await test(`${status} for 14 days is voided by the settlement; the matchday completes on the rest and nothing else moves`, async () => {
+      const kickoff = new Date(Date.now() - 20 * DAY);
+      const ids = await seedInterrupted(status, kickoff.toISOString());
+      const id = ids.fixtures[0].id;
+      const held = await rescore(ids);
+      assert.equal(held.after.matchday.status, 'scoring');
+      const justBefore = new Date(kickoff.getTime() + 14 * DAY - 1000).toISOString();
+      const exactly = new Date(kickoff.getTime() + 14 * DAY).toISOString();
+      assert.equal(await candidates(justBefore), 0);
+      assert.equal((await settle(db, justBefore)).count, 0);
+      assert.equal((await fixture(id)).voided_at, null, 'one second short of 14 days: still held');
+      assert.equal(await candidates(exactly), 1, 'discovery names the candidate');
+
+      const before = await snapshot(db, ids.matchday);
+      const settled = await settle(db, exactly);
+      assert.equal(settled.count, 1);
+      assert.equal(settled.voided[0].fixtureId, id);
+      const row = await fixture(id);
+      assert.equal(row.void_reason, 'expired');
+      assert.ok(row.voided_at);
+      const flagged = await snapshot(db, ids.matchday);
+      assert.equal(flagged.matchday.scoring_pending, true, 'the matchday is flagged for scoring');
+      assert.equal(flagged.matchday.fixture_application_pending, true);
+      assert.ok(flagged.matchday.scoring_revision > before.matchday.scoring_revision);
+      assert.equal(await candidates(exactly), 0);
+
+      const done = await rescore(ids);
+      assert.equal(done.result.finalScoringReady, true);
+      assert.equal(done.after.matchday.status, 'completed');
+      assert.equal(done.result.voidSelections, 2);
+      assert.ok(done.after.selections.filter(s => s.fixture_id === id).every(s => s.points_awarded === null));
+      assert.deepEqual(scores(done.after), [VOID_HOME_WIN_SCORE, VOID_HOME_WIN_SCORE], 'its goals are excluded from Total Goals');
+    });
+  }
+
+  await test('the settlement is idempotent and the SQL window matches the TypeScript rule', async () => {
+    const kickoff = new Date(Date.now() - 30 * DAY);
+    const ids = await seedInterrupted('suspended', kickoff.toISOString(), 1);
+    const id = ids.fixtures[0].id;
+    for (const [offset, status] of [[-1, 'suspended'], [0, 'suspended'], [1, 'abandoned']]) {
+      const at = kickoff.getTime() + 14 * DAY + offset;
+      assert.equal(isInterruptedFixtureExpired({ status, kickoff_at: kickoff.toISOString() }, at, 'scoring'), offset >= 0);
+    }
+    assert.equal((await settle(db, new Date().toISOString())).count, 1);
+    const voidedAt = (await fixture(id)).voided_at;
+    const revision = (await snapshot(db, ids.matchday)).matchday.scoring_revision;
+    for (let i = 0; i < 3; i++) assert.equal((await settle(db, new Date().toISOString())).count, 0);
+    assert.deepEqual((await fixture(id)).voided_at, voidedAt);
+    assert.equal((await snapshot(db, ids.matchday)).matchday.scoring_revision, revision, 'repeat runs write nothing');
+  });
+
+  await test('after the expiry no provider update can reverse the void: a late resume, result or replay scores nothing', async () => {
+    const ids = await seedInterrupted('suspended', new Date(Date.now() - 20 * DAY).toISOString());
+    const id = ids.fixtures[0].id;
+    await settle(db, new Date().toISOString());
+    const base = await rescore(ids);
+    const voidedAt = (await fixture(id)).voided_at;
+    for (const update of [
+      { status: 'in_play', home_score: 0, away_score: 0 },
+      { status: 'finished', home_score: 7, away_score: 0 },
+      { status: 'suspended', home_score: 1, away_score: 0 },
+      { status: 'timed', home_score: null, away_score: null, kickoff_at: NEXT_DAY },
+    ]) {
+      await set(id, update);
+      const { after, result } = await rescore(ids);
+      assert.deepEqual((await fixture(id)).voided_at, voidedAt, JSON.stringify(update));
+      assert.equal(after.matchday.status, 'completed');
+      assert.equal(result.finalScoringReady, true);
+      assert.deepEqual(scores(after), scores(base.after));
+    }
+  });
+
+  await test('the expiry only touches held, undecided fixtures of matchdays that are not complete', async () => {
+    const kickoff = new Date(Date.now() - 20 * DAY).toISOString();
+    const now = new Date().toISOString();
+
+    // Resumed or finished fixtures are not candidates, however old they are, and are scored normally.
+    const resumed = await seedInterrupted('suspended', kickoff, 1);
+    await set(resumed.fixtures[0].id, { status: 'finished', home_score: 2, away_score: 1 });
+    assert.equal(await candidates(now), 0);
+    assert.equal((await settle(db, now)).count, 0);
+    const scored = await rescore(resumed);
+    assert.equal(scored.after.matchday.status, 'completed');
+    assert.deepEqual(scores(scored.after), [FULL_SCORE]);
+
+    // Every other status is left to the provider.
+    for (const status of ['timed', 'in_play', 'paused', 'postponed', 'cancelled']) {
+      const ids = await seedInterrupted(status, kickoff, 1);
+      const before = await fixture(ids.fixtures[0].id);
+      await settle(db, now);
+      const row = await fixture(ids.fixtures[0].id);
+      assert.equal(row.voided_at, null, `${status} is left to the provider (the settlement decided nothing)`);
+      assert.equal(before.void_reason, row.void_reason);
+    }
+
+    // A completed matchday keeps its scores: nothing in it is voided afterwards.
+    const completed = await seedInterrupted('suspended', kickoff, 1);
+    await admin.query("update public.matchdays set status='completed' where id=$1", [completed.matchday]);
+    assert.equal(await candidates(now), 0);
+    assert.equal((await settle(db, now)).count, 0);
+    assert.equal((await fixture(completed.fixtures[0].id)).voided_at, null);
+
+    // Manual and accelerated-test matchdays are not provider matchdays.
+    const manual = await seed(admin, { entries: 1, manual: true });
+    await set(manual.fixtures[0].id, { status: 'suspended', kickoff_at: kickoff });
+    assert.equal((await settle(db, now)).count, 0);
+    assert.equal((await fixture(manual.fixtures[0].id)).voided_at, null);
+  });
+
+  await test('an expired match in a matchday that still waits for a later fixture: the void is decided, the matchday keeps waiting', async () => {
+    const ids = await seed(admin, { entries: 1, rulesVersion: 2 });
+    await set(ids.fixtures[0].id, { status: 'suspended', kickoff_at: new Date(Date.now() - 20 * DAY).toISOString() });
+    await set(ids.fixtures[9].id, { status: 'timed', home_score: null, away_score: null, kickoff_at: new Date(Date.now() + 3600_000).toISOString() });
+    await settle(db, new Date().toISOString());
+    assert.equal((await fixture(ids.fixtures[0].id)).void_reason, 'expired');
+    const { result, after } = await rescore(ids);
+    assert.equal(result.finalScoringReady, false, 'a fixture still to be played holds the matchday');
+    assert.equal(after.matchday.status, 'scoring');
+    assert.ok(after.entries.every(e => e.calculated_score === null));
+  });
+
+  await test('the settlement is a service-role tool; clients can not call it', async () => {
+    const outsider = await cluster.connect(false);
+    await outsider.query("set role authenticated; set request.jwt.claim.role='authenticated'");
+    await assert.rejects(outsider.query('select public.settle_expired_pick8_interrupted_fixtures(now())'), error => error.code === '42501');
+  });
+
+  await test('the expiry holds after the provider has stopped checking: discovery and settlement need no provider data', async () => {
+    const ids = await seedInterrupted('suspended', new Date(Date.now() - 20 * DAY).toISOString(), 1);
+    // Whatever the provider cadence left behind, the candidate is found from local rows alone, by every policy.
+    await admin.query("update public.matchdays set next_provider_check_at = now() + interval '100 days' where id=$1", [ids.matchday]);
+    for (const policy of ['results', 'fixtures', 'reconciliation']) {
+      const work = (await db.query('select public.discover_pick8_due_work($1, now(), 12) as work', [policy])).rows[0].work;
+      assert.equal(work.expiredInterruptedFixtureCount, 1, policy);
+    }
+    assert.equal((await settle(db, new Date().toISOString())).count, 1);
+    // Settling flags the matchday, so the very next discovery selects it for application and scoring without waiting on the provider.
+    const work = (await db.query("select public.discover_pick8_due_work('results', now(), 12) as work")).rows[0].work;
+    const matchday = work.matchdays.find(m => m.id === ids.matchday);
+    assert.ok(matchday, 'the matchday is due');
+    assert.equal(matchday.scoringPending, true);
+    assert.equal(matchday.allTerminal, true);
+    assert.deepEqual(matchday.voidedExternalFixtureIds, [ids.fixtures[0].external_fixture_id]);
+    assert.equal(work.expiredInterruptedFixtureCount, 0);
   });
 } finally { await cluster.close(); }

@@ -22,19 +22,32 @@ alter table public.fixtures
   add column void_reason text,
   add constraint fixtures_void_reason_check check (
     (voided_at is null and void_reason is null)
-    or (voided_at is not null and void_reason in ('postponed', 'rescheduled', 'abandoned', 'manual'))
+    or (voided_at is not null and void_reason in ('postponed', 'rescheduled', 'abandoned', 'expired', 'manual'))
   );
 
 create index fixtures_voided_idx on public.fixtures (matchday_id) where voided_at is not null;
+-- Candidates for the 14 day expiry below; tiny, since interrupted matches are rare.
+create index fixtures_interrupted_idx on public.fixtures (kickoff_at)
+  where voided_at is null and status in ('suspended', 'abandoned');
 
 -- Interrupted matches are held, not voided: Who You Got serves SUSPENDED and
 -- ABANDONED as 'cancelled' with providerStatus naming the real state, and Pick8
 -- stores them as non-terminal 'suspended' / 'abandoned' until the provider resolves
--- them (resumes -> scored, new date or postponed -> void).
+-- them (resumes -> scored, new date or postponed -> void) or they expire (below).
 alter table public.fixtures drop constraint fixtures_status_check;
 alter table public.fixtures add constraint fixtures_status_check check (
   status in ('scheduled', 'timed', 'in_play', 'paused', 'finished', 'postponed', 'cancelled', 'suspended', 'abandoned')
 );
+
+-- How long a suspended or abandoned match may stay unresolved before it is voided.
+-- Matches Who You Got's late-correction window (it stops re-reading a fixture 14
+-- days after kickoff), so the game never waits on a provider that has stopped asking.
+create or replace function public.pick8_interrupted_fixture_expiry()
+returns interval
+language sql
+immutable
+set search_path = ''
+as $$ select interval '14 days' $$;
 
 create or replace function public.pick8_london_day(check_instant timestamptz)
 returns date
@@ -48,11 +61,12 @@ $$;
 -- The decision. It runs inside the same statement that stores the provider's data, so
 -- it cannot be skipped, reordered or lost between a sync and a scoring run.
 --   postponed   the provider reports POSTPONED for a match that has not started.
---   rescheduled after the entry deadline, a match that has not started moves to a
---               later calendar day (Europe/London). A shorter move, such as a
---               delayed kickoff on the same day, is the same scheduled match.
+--   rescheduled a match that has not started moves to a later calendar day
+--               (Europe/London), before or after the entry deadline. A shorter move,
+--               such as a delayed kickoff on the same day, is the same scheduled match.
 --   abandoned   the same move, for a match that was abandoned and is being replayed.
--- Moves before the entry deadline are not decided: entries can still be changed.
+--   expired     (settle_expired_pick8_interrupted_fixtures) a suspended or abandoned
+--               match still unresolved 14 days after its kickoff.
 -- A started or finished match is never voided by a kickoff change. Once voided, a
 -- fixture stays voided whatever the provider sends next.
 create or replace function public.decide_pick8_fixture_void()
@@ -63,7 +77,6 @@ set search_path = ''
 as $$
 declare
   matchday_mode text;
-  deadline timestamptz;
   decided text;
 begin
   if tg_op = 'UPDATE' and old.voided_at is not null then
@@ -96,10 +109,7 @@ begin
     and new.kickoff_at > old.kickoff_at
     and public.pick8_london_day(new.kickoff_at) > public.pick8_london_day(old.kickoff_at)
   then
-    deadline := public.pick8_entry_deadline(new.matchday_id);
-    if deadline is not null and deadline <= clock_timestamp() then
-      decided := case when old.status = 'abandoned' then 'abandoned' else 'rescheduled' end;
-    end if;
+    decided := case when old.status = 'abandoned' then 'abandoned' else 'rescheduled' end;
   end if;
 
   if decided is not null then
@@ -148,6 +158,51 @@ $$;
 revoke all on function public.void_pick8_fixture(uuid) from public, anon, authenticated;
 grant execute on function public.void_pick8_fixture(uuid) to service_role;
 
+
+-- Voids suspended and abandoned matches that nobody resolved within the expiry window.
+-- Time passing is not a provider update, so nothing in the sync path would ever notice:
+-- the cron orchestration calls this when discover_pick8_due_work reports expired
+-- candidates, from whichever scheduled job runs first. It works on local data only, so it
+-- still runs after Who You Got has stopped re-reading the fixture. The UPDATE goes through
+-- the normal triggers: the fixture is stamped void, and the matchday is flagged for
+-- fixture application and scoring, which completes it on the remaining fixtures.
+-- Completed matchdays are left alone (their scores and standings do not move), and so are
+-- manual and accelerated-test matchdays. Idempotent: voided fixtures are never candidates.
+create or replace function public.settle_expired_pick8_interrupted_fixtures(
+  check_now timestamptz default now()
+)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  voided jsonb;
+begin
+  if coalesce(auth.role(), '') not in ('', 'service_role') then
+    raise exception 'Settling interrupted fixtures requires service_role' using errcode = '42501';
+  end if;
+  with expired as (
+    update public.fixtures f
+    set voided_at = clock_timestamp(), void_reason = 'expired'
+    from public.matchdays m
+    where m.id = f.matchday_id
+      and m.fixture_sync_mode = 'provider'
+      and m.status <> 'completed'
+      and f.voided_at is null
+      and f.status in ('suspended', 'abandoned')
+      and f.kickoff_at + public.pick8_interrupted_fixture_expiry() <= check_now
+    returning f.id, f.matchday_id, f.external_fixture_id, f.status
+  )
+  select coalesce(jsonb_agg(jsonb_build_object('fixtureId', id, 'matchdayId', matchday_id,
+    'externalFixtureId', external_fixture_id, 'status', status) order by id), '[]'::jsonb)
+  into voided from expired;
+  return jsonb_build_object('voided', voided, 'count', jsonb_array_length(voided));
+end;
+$$;
+revoke all on function public.settle_expired_pick8_interrupted_fixtures(timestamptz) from public, anon, authenticated;
+grant execute on function public.settle_expired_pick8_interrupted_fixtures(timestamptz) to service_role;
 
 create or replace function public.score_pick8_matchday(
   check_season_id uuid,
@@ -377,6 +432,11 @@ with active_season as (
   select * from eligible where selected order by matchday_number limit greatest(1,least(check_limit,38))
 )
 select jsonb_build_object(
+  'expiredInterruptedFixtureCount', (select count(*) from public.fixtures f
+    join public.matchdays m on m.id = f.matchday_id
+    where m.fixture_sync_mode = 'provider' and m.status <> 'completed' and f.voided_at is null
+      and f.status in ('suspended','abandoned')
+      and f.kickoff_at + public.pick8_interrupted_fixture_expiry() <= check_now),
   'season', (select jsonb_build_object('id',s.id,'name',s.name,'providerSeason',s.provider_season,
     'competitionRefreshPending',s.competition_refresh_pending,'competitionRevision',s.competition_revision,
     'competitionRefreshAfter',s.competition_refresh_after,

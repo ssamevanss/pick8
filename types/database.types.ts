@@ -413,6 +413,10 @@ export type Database = {
         Args: { check_policy?: string; check_now?: string; check_limit?: number }
         Returns: Json
       }
+      settle_expired_pick8_interrupted_fixtures: {
+        Args: { check_now?: string }
+        Returns: Json
+      }
       score_pick8_matchday: {
         Args: { check_season_id: string; check_matchday_id: string; check_scoring_revision: number; allow_accelerated_test_completion?: boolean }
         Returns: Json

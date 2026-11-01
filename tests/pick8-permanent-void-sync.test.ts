@@ -157,3 +157,99 @@ test("a malformed providerStatus fails the matchday closed", async () => {
   await assert.rejects(h.sync(), (error: { code?: string }) => error.code === "invalid_response");
   assert.equal(JSON.stringify(h.tables.fixtures), before);
 });
+
+test("pre-deadline: a fixture moved to another day before the entry deadline is void for good; the deadline and other fixtures are untouched", async () => {
+  const h = harness({ seed: (tables) => {
+    tables.fixtures.forEach((fixture) => Object.assign(fixture, { status: "timed", home_score: null, away_score: null, kickoff_at: KICKOFF }));
+    Object.assign(tables.matchdays[0], { status: "open", locks_at: KICKOFF });
+  } });
+  await h.sync();
+  assert.equal(h.tables.matchdays[0].locks_at, KICKOFF);
+
+  const upstreamAt = (index: number) => h.upstream().fixtures[index] as Record<string, unknown>;
+  Object.assign(upstreamAt(1), { kickoff_at: "2026-09-13T16:30:00.000Z" });
+  await h.sync();
+  assert.equal(h.tables.fixtures[1].voided_at ?? null, null, "a delay within the same day is the same match");
+
+  Object.assign(upstreamAt(0), { kickoff_at: NEXT_WEEK });
+  await h.sync();
+  assert.equal(first(h).void_reason, "rescheduled", "the entry deadline (15:00) has not passed, and the move is still decided");
+  assert.equal(h.tables.matchdays[0].locks_at, KICKOFF, "the other fixtures still set the deadline");
+  assert.notEqual(h.tables.matchdays[0].status, "completed");
+  const voidedAt = first(h).voided_at;
+
+  Object.assign(upstreamAt(0), { kickoff_at: KICKOFF });
+  await h.sync();
+  Object.assign(upstreamAt(0), { status: "finished", home_score: 4, away_score: 4 });
+  await h.sync();
+  assert.equal(first(h).voided_at, voidedAt, "moving back or being played changes nothing");
+  assert.equal(h.tables.fixtures.filter((fixture) => fixture.voided_at != null).length, 1);
+
+  await h.sync();
+  assert.equal((await h.sync()).fastPath, true, "an identical sync is a no-op");
+});
+
+const settleCalls = (h: ReturnType<typeof harness>) => h.calls.filter((call) => call.table === "rpc" && call.values && "check_now" in call.values && !("check_scoring_revision" in call.values));
+
+for (const [name, run, scoresInRun] of [
+  ["sync-results", (h: ReturnType<typeof harness>) => h.cron(), true],
+  ["reconcile-results", (h: ReturnType<typeof harness>) => h.reconcile(), true],
+  ["sync-fixtures", (h: ReturnType<typeof harness>) => h.daily(), false],
+] as const) {
+  test(`${name} settles a suspended match after 14 days from local data, even though the provider stopped checking it`, async () => {
+    const h = harness({ seed: (tables) => {
+      Object.assign(tables.fixtures[0], { status: "suspended", home_score: 1, away_score: 0, kickoff_at: "2026-08-20T15:00:00.000Z" });
+      // The provider cadence has parked this matchday far in the future: nothing would poll it.
+      Object.assign(tables.matchdays[0], { status: "scoring", next_provider_check_at: "2026-12-01T00:00:00.000Z" });
+    } });
+    Object.assign(upstreamFirst(h), { status: "cancelled", providerStatus: "SUSPENDED" });
+    await run(h);
+    assert.equal(settleCalls(h).length, 1, "one settlement");
+    assert.equal(first(h).void_reason, "expired");
+    if (!scoresInRun) { assert.equal(h.tables.matchdays[0].scoring_pending, true, "flagged for scoring"); await h.cron(); } // the next results run scores it
+    assert.equal(h.tables.matchdays[0].status, "completed", "the matchday completes on the remaining fixtures");
+    assert.ok(scores(h).every((score) => score !== null));
+    assert.ok(h.tables.entry_selections.filter((s) => s.fixture_id === "fixture-0").every((s) => s.points_awarded === null));
+
+    const voidedAt = first(h).voided_at;
+    const final = scores(h);
+    h.calls.length = 0;
+    await run(h);
+    assert.equal(settleCalls(h).length, 0, "nothing left to settle: no extra request");
+    assert.equal(first(h).voided_at, voidedAt);
+    assert.deepEqual(scores(h), final);
+  });
+}
+
+test("a suspended match that is still inside its 14 days is left held, and no settlement request is made", async () => {
+  const h = harness({ seed: (tables) => {
+    Object.assign(tables.fixtures[0], { status: "suspended", home_score: 1, away_score: 0, kickoff_at: "2026-09-01T15:00:00.000Z" });
+    tables.matchdays[0].status = "scoring";
+  } });
+  Object.assign(upstreamFirst(h), { status: "cancelled", providerStatus: "SUSPENDED" });
+  await h.reconcile();
+  assert.equal(settleCalls(h).length, 0);
+  assert.equal(first(h).voided_at ?? null, null);
+  assert.equal(h.tables.matchdays[0].status, "scoring");
+
+  h.clock("2026-09-15T15:00:00Z"); // 14 days after kickoff
+  await h.reconcile();
+  assert.equal(settleCalls(h).length, 1);
+  assert.equal(first(h).void_reason, "expired");
+});
+
+test("a settled suspended match stays void if the provider resumes it afterwards", async () => {
+  const h = harness({ seed: (tables) => {
+    Object.assign(tables.fixtures[0], { status: "suspended", home_score: 1, away_score: 0, kickoff_at: "2026-08-20T15:00:00.000Z" });
+    tables.matchdays[0].status = "scoring";
+  } });
+  Object.assign(upstreamFirst(h), { status: "cancelled", providerStatus: "SUSPENDED" });
+  await h.reconcile();
+  const final = scores(h);
+  Object.assign(upstreamFirst(h), { status: "finished", providerStatus: "FINISHED", home_score: 6, away_score: 0 });
+  h.clock("2026-09-14T12:00:00Z");
+  await h.reconcile();
+  assert.equal(first(h).void_reason, "expired");
+  assert.equal(h.tables.matchdays[0].status, "completed");
+  assert.deepEqual(scores(h), final);
+});

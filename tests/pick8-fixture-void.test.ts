@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decideFixtureVoid, effectiveFixtureStatus, londonDay, withEffectiveFixtureStatus } from "../utils/pick8-fixture-void.ts";
+import { decideFixtureVoid, effectiveFixtureStatus, isInterruptedFixtureExpired, londonDay, withEffectiveFixtureStatus } from "../utils/pick8-fixture-void.ts";
 import {
   effectiveEntryDeadline,
   getFixtureLifecycle,
@@ -20,23 +20,23 @@ type ScoringFixture = ScoringModule.ScoringFixture;
 // with decideFixtureVoid over a grid. These cases pin the policy in readable form.
 const K0 = "2026-12-12T15:00:00.000Z";
 const at = (iso: string) => ({ status: "timed", kickoff_at: iso });
-const decide = (previous: { status: string; kickoff_at: string } | null, next: { status: string; kickoff_at: string }, locked = true) =>
-  decideFixtureVoid({ previous, next, entryDeadlineElapsed: locked });
+const decide = (previous: { status: string; kickoff_at: string } | null, next: { status: string; kickoff_at: string }) =>
+  decideFixtureVoid({ previous, next });
 
-test("a postponed match that has not started is void whether or not the entry deadline has passed", () => {
-  assert.equal(decide(at(K0), { status: "postponed", kickoff_at: K0 }, true), "postponed");
-  assert.equal(decide(at(K0), { status: "postponed", kickoff_at: K0 }, false), "postponed");
+test("a postponed match that has not started is void", () => {
+  assert.equal(decide(at(K0), { status: "postponed", kickoff_at: K0 }), "postponed");
   assert.equal(decide(null, { status: "postponed", kickoff_at: K0 }), "postponed");
   for (const started of ["in_play", "paused", "finished"]) {
     assert.equal(decide({ status: started, kickoff_at: K0 }, { status: "postponed", kickoff_at: K0 }), null, started);
   }
 });
 
-test("a move to a later calendar day after the deadline is a reschedule; a delay within the day is not", () => {
+test("a move to a later calendar day is a reschedule, before or after the entry deadline; a delay within the day is not", () => {
   assert.equal(decide(at(K0), at("2026-12-12T18:30:00.000Z")), null, "three and a half hours later, same day");
   assert.equal(decide(at(K0), at("2026-12-13T12:30:00.000Z")), "rescheduled");
   assert.equal(decide(at(K0), at("2026-12-12T12:00:00.000Z")), null, "earlier is never a postponement");
-  assert.equal(decide(at(K0), at("2026-12-13T12:30:00.000Z"), false), null, "before the deadline entries can still be revised");
+  assert.equal(decide(at("2026-12-12T12:30:00.000Z"), at("2026-12-13T12:30:00.000Z")), "rescheduled", "the entry deadline is not part of the decision");
+  assert.equal(decide(at(K0), at("2026-12-12T23:59:00.000Z")), null, "late the same day is still the same day");
   assert.equal(decide(at(K0), at(K0)), null);
 });
 
@@ -63,6 +63,21 @@ test("interrupted matches: held, then void only when the provider moves them to 
   assert.equal(decide({ status: "suspended", kickoff_at: K0 }, at("2026-12-16T19:45:00.000Z")), "rescheduled");
   assert.equal(decide({ status: "abandoned", kickoff_at: K0 }, at("2026-12-16T19:45:00.000Z")), "abandoned");
   assert.equal(decide({ status: "abandoned", kickoff_at: K0 }, { status: "finished", kickoff_at: K0 }), null, "result stands");
+});
+
+test("a suspended or abandoned fixture expires 14 days after its kickoff, unless voided, resolved or in a completed matchday", () => {
+  const expiry = Date.parse(K0) + 14 * 24 * 60 * 60_000;
+  for (const status of ["suspended", "abandoned"]) {
+    const held = { status, kickoff_at: K0 };
+    assert.equal(isInterruptedFixtureExpired(held, expiry - 1, "scoring"), false, `${status} one millisecond early`);
+    assert.equal(isInterruptedFixtureExpired(held, expiry, "scoring"), true, `${status} at 14 days`);
+    assert.equal(isInterruptedFixtureExpired(held, expiry + 30 * 24 * 60 * 60_000, "scoring"), true, `${status} long after`);
+    assert.equal(isInterruptedFixtureExpired({ ...held, voided_at: "2026-12-20T00:00:00Z" }, expiry, "scoring"), false, "already void");
+    assert.equal(isInterruptedFixtureExpired(held, expiry, "completed"), false, "a completed matchday is not rescored");
+  }
+  for (const status of ["timed", "in_play", "paused", "finished", "postponed", "cancelled"]) {
+    assert.equal(isInterruptedFixtureExpired({ status, kickoff_at: K0 }, expiry + 1, "scoring"), false, status);
+  }
 });
 
 test("a cancelled fixture is not decided (the provider may still correct it)", () => {
