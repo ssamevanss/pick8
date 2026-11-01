@@ -13,7 +13,7 @@ type Row = Record<string, unknown>;
 type ApiFixture = {
   externalFixtureId: string; homeTeamId: number | null; awayTeamId: number | null;
   homeTeamName: string; awayTeamName: string; homeTeamCrestUrl: string | null; awayTeamCrestUrl: string | null;
-  kickoffAt: string; status: string; homeScore: number | null; awayScore: number | null; updatedAt: string | null;
+  kickoffAt: string; status: string; providerStatus?: string; homeScore: number | null; awayScore: number | null; updatedAt: string | null;
 };
 type ApiResponse = { season: number; providerSeason: string; matchday: number; fixtures: ApiFixture[] };
 type Op = { op: "set" | "remove" | "reverse"; path: Array<string | number>; value?: unknown };
@@ -21,6 +21,7 @@ type Contract = {
   contract: string; version: number; request: { season: number; matchday: number };
   responseHeaders: { success: Record<string, string | null> };
   statuses: Record<string, { providerStatuses: string[]; pick8Lifecycle: "pending" | "live" | "finished" | "void"; terminal: boolean }>;
+  providerStatus: { heldWhenCancelled: string[] };
   errors: Record<string, { pick8Error: string }>;
   scenarios: Array<{ name: string; asOf: string; response: ApiResponse }>;
   mutationBase: string;
@@ -60,12 +61,18 @@ function contractHarness(asOf: string) {
   };
 }
 
+// Pick8 keeps a "cancelled" fixture whose providerStatus is SUSPENDED or ABANDONED under its own, non-terminal status.
+function pick8Status(f: ApiFixture) {
+  return f.status === "cancelled" && f.providerStatus && contract.providerStatus.heldWhenCancelled.includes(f.providerStatus)
+    ? f.providerStatus.toLowerCase() : f.status;
+}
+
 function pick8Row(f: ApiFixture) {
   return {
     external_fixture_id: f.externalFixtureId, home_team_id: f.homeTeamId, away_team_id: f.awayTeamId,
     home_team_name: f.homeTeamName, away_team_name: f.awayTeamName,
     home_team_crest_url: f.homeTeamCrestUrl, away_team_crest_url: f.awayTeamCrestUrl,
-    kickoff_at: new Date(f.kickoffAt).toISOString(), status: f.status, home_score: f.homeScore, away_score: f.awayScore,
+    kickoff_at: new Date(f.kickoffAt).toISOString(), status: pick8Status(f), home_score: f.homeScore, away_score: f.awayScore,
   };
 }
 
@@ -125,10 +132,13 @@ test("in-progress, corrected and rescheduled responses apply through the real sy
   assert.equal(first.removed + first.invalidatedEntries, 0);
   assert.equal(h.tables.matchdays[0].status, "scoring");
   assert.deepEqual([h.selection("btts").points_awarded, h.selection("home-win").points_awarded], [-10, null]);
+  // SUSPENDED and ABANDONED are held, CANCELLED is void, POSTPONED is void for good.
+  assert.deepEqual(["537854", "537855", "537853", "537852"].map((id) => h.rowFor(id).status), ["suspended", "abandoned", "cancelled", "postponed"]);
+  assert.deepEqual(h.tables.fixtures.filter((f) => f.voided_at).map((f) => f.external_fixture_id), ["537852"]);
   const ids = new Map(h.tables.fixtures.map((f) => [f.external_fixture_id, f.id]));
   assert.equal(ids.get("537845"), "pick8-537845");
 
-  // Score correction (0-1 -> 1-1) and SUSPENDED (served as cancelled = void) resuming as finished 2-1.
+  // Score correction (0-1 -> 1-1), SUSPENDED resuming as finished 2-1, ABANDONED awarded.
   const second = await h.apply(settled.response, settled.asOf);
   assertApplied(h, settled.response);
   assert.equal(second.fastPath, false);
@@ -139,15 +149,27 @@ test("in-progress, corrected and rescheduled responses apply through the real sy
   assert.equal(h.tables.entries[0].calculated_score, 26);
   assert.equal((await h.apply(settled.response)).fastPath, true);
 
-  // Rescheduled postponed fixture: same id and Pick8 row, new kickoff, pending again. Current Pick8 behaviour is
-  // that the matchday leaves "completed" and final entry scores clear until it is played (owner decision pending).
+  // Rescheduled postponed fixture: same id and Pick8 row, new kickoff. It was voided when it was postponed, so the
+  // matchday stays completed and every final score is untouched: the new date can never bring it back.
   const third = await h.apply(rescheduled.response, rescheduled.asOf);
   assertApplied(h, rescheduled.response);
   assert.equal(third.inserted + third.removed + third.invalidatedEntries, 0);
   assert.deepEqual(new Map(h.tables.fixtures.map((f) => [f.external_fixture_id, f.id])), ids);
   assert.equal(h.rowFor("537852").kickoff_at, "2025-12-03T19:30:00.000Z");
-  assert.notEqual(h.tables.matchdays[0].status, "completed");
-  assert.equal(h.tables.entries[0].calculated_score, null);
+  assert.equal(h.rowFor("537852").status, "timed");
+  assert.equal(h.rowFor("537852").void_reason, "postponed");
+  assert.equal(h.tables.matchdays[0].status, "completed");
+  assert.equal(h.tables.entries[0].calculated_score, 26);
+  assert.equal((await h.apply(rescheduled.response)).fastPath, true, "an unchanged replayed sync is a no-op");
+});
+
+test("a producer without providerStatus still applies: interrupted matches arrive as plain cancelled (void)", async () => {
+  const h = contractHarness(inProgress.asOf);
+  const legacy = structuredClone(inProgress.response);
+  for (const fixture of legacy.fixtures) delete fixture.providerStatus;
+  await h.apply(legacy);
+  assert.deepEqual(["537854", "537855", "537853"].map((id) => h.rowFor(id).status), ["cancelled", "cancelled", "cancelled"]);
+  assert.equal(h.tables.fixtures.filter((f) => f.voided_at).length, 1, "only the postponed fixture is voided for good");
 });
 
 for (const { name, ops } of contract.consumerMustReject) {

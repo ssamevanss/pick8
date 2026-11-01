@@ -6,6 +6,7 @@ import { requireSuccessfulDatabaseOperation } from "@/utils/supabase/resilience"
 import ReadOnlyMatchdayPicks from "@/components/picks/ReadOnlyMatchdayPicks";
 import MatchdaySelectNavigation from "@/components/picks/MatchdaySelectNavigation";
 import { buildMatchdayBreakdown } from "@/utils/pick8-matchday-breakdown";
+import { withEffectiveFixtureStatus } from "@/utils/pick8-fixture-void";
 import {
   buildStandings,
   currentCompetitionStandings,
@@ -155,14 +156,14 @@ export default async function TablesPage({
       .filter((entry) => entry.matchday_id === selectedMatchday.id)
       .map((entry) => entry.id);
     const [fixturesResult, selectionsResult] = await Promise.all([
-      admin.from("fixtures").select("id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score").eq("matchday_id", selectedMatchday.id).order("kickoff_at"),
+      admin.from("fixtures").select("id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, voided_at, home_score, away_score").eq("matchday_id", selectedMatchday.id).order("kickoff_at"),
       breakdownEntryIds.length
         ? supabase.from("entry_selections").select("id, entry_id, category, fixture_id, selected_team_side, points_awarded, is_correct").in("entry_id", breakdownEntryIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
     requireSuccessfulDatabaseOperation(fixturesResult.error);
     requireSuccessfulDatabaseOperation(selectionsResult.error);
-    const fixtureRows = fixturesResult.data ?? [];
+    const fixtureRows = withEffectiveFixtureStatus(fixturesResult.data ?? []);
     const breakdownProfiles = profiles.filter((item) =>
       (
         item.is_active !== false &&

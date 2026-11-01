@@ -1,6 +1,6 @@
 // Postponed, rescheduled and interrupted fixtures against the real migrations.
 // Run with PICK8_PG_TEST_DEPENDENCIES=/path/to/test-deps node --test tests/pick8-postponed-fixtures-postgres.mjs
-// Policy background and the open decisions: docs/postponed-and-interrupted-fixtures.md
+// Policy: docs/permanent-void-settlement.md (findings behind it: docs/postponed-and-interrupted-fixtures.md)
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { categoriesV2, createTestDatabase, seed, snapshot, score } from './helpers/pick8-postgres.mjs';
@@ -42,41 +42,44 @@ try {
     assert.equal(after.entries[0].calculated_score, expected);
   });
 
-  await test('CURRENT BEHAVIOUR (policy open): rescheduling a void fixture reopens a completed matchday and clears every final score', async () => {
+  await test('rescheduling a void fixture leaves the completed matchday and every final score untouched (permanent void)', async () => {
     const ids = await seedWithPostponed();
     const first = await rescore(ids);
     assert.equal(first.result.matchdayStatus, 'completed');
     assert.ok(first.after.entries.every(e => e.calculated_score !== null));
 
-    // Provider gives the postponed match a new date: status timed, kickoff weeks away.
+    // Provider gives the postponed match a new date: status timed, kickoff weeks away. It was voided when it was
+    // postponed, so the new date is irrelevant to this matchday. (docs/permanent-void-settlement.md)
     await admin.query(
       "update public.fixtures set status='timed',kickoff_at=now()+interval '30 days' where id=$1",
       [ids.fixtures[0].id],
     );
     const second = await rescore(ids);
-    assert.equal(second.result.finalScoringReady, false);
-    assert.equal(second.after.matchday.status, 'scoring');
-    assert.ok(second.after.entries.every(e => e.calculated_score === null && e.score_calculated_at === null),
-      'every player loses the matchday score from standings until the rescheduled match is played');
+    assert.equal(second.result.finalScoringReady, true);
+    assert.equal(second.after.matchday.status, 'completed');
+    assert.deepEqual(second.after.entries.map(e => e.calculated_score), first.after.entries.map(e => e.calculated_score));
 
-    // When it is played, the matchday completes again and Total Goals now includes that match.
+    // When it is eventually played nothing changes either.
     await admin.query(
       "update public.fixtures set status='finished',home_score=2,away_score=1,kickoff_at=now()-interval '1 hour' where id=$1",
       [ids.fixtures[0].id],
     );
     const third = await rescore(ids);
     assert.equal(third.result.matchdayStatus, 'completed');
-    assert.ok(third.after.entries.every(e => e.calculated_score !== null));
+    assert.deepEqual(third.after.entries.map(e => e.calculated_score), first.after.entries.map(e => e.calculated_score));
   });
 
-  await test('a void fixture with a future kickoff blocks completion instead of completing early', async () => {
-    const ids = await seedWithPostponed(1);
-    await admin.query("update public.fixtures set kickoff_at=now()+interval '2 days' where id=$1", [ids.fixtures[0].id]);
+  await test('an undecided cancelled fixture with a future kickoff blocks completion; a postponed (void) one does not', async () => {
+    const ids = await seed(admin, { entries: 1, rulesVersion: 2 });
+    await admin.query("update public.fixtures set status='cancelled',home_score=null,away_score=null,kickoff_at=now()+interval '2 days' where id=$1", [ids.fixtures[0].id]);
     const before = await snapshot(db, ids.matchday);
     await assert.rejects(
       score(db, ids, before.matchday.scoring_revision),
       error => /cannot be completed before every configured kickoff/.test(error.message),
     );
+    const postponed = await seedWithPostponed(1);
+    await admin.query("update public.fixtures set kickoff_at=now()+interval '2 days' where id=$1", [postponed.fixtures[0].id]);
+    assert.equal((await rescore(postponed)).result.matchdayStatus, 'completed');
   });
 
   await test('entry deadline cannot move later after it has elapsed (late reschedule of the earliest fixture)', async () => {

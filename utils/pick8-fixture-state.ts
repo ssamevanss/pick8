@@ -25,6 +25,32 @@ export function earliestFixtureKickoff(
   return kickoffs.length ? new Date(Math.min(...kickoffs)).toISOString() : null;
 }
 
+/**
+ * The stored entry deadline once it has passed: it can only move earlier. Mirrors the database trigger
+ * `preserve_elapsed_pick8_deadline`, so a late reschedule of the earliest fixture neither reopens entries nor
+ * makes the sync's recomputed deadline disagree with the one the database keeps.
+ */
+export function protectedEntryDeadline(
+  storedLocksAt: string | null | undefined,
+  computedLocksAt: string,
+  now = Date.now(),
+) {
+  const stored = storedLocksAt ? fixtureKickoffMs(storedLocksAt) : null;
+  const computed = fixtureKickoffMs(computedLocksAt);
+  if (stored === null || computed === null || stored > now || computed <= stored) return computedLocksAt;
+  return new Date(stored).toISOString();
+}
+
+/** The entry deadline the game acts on: the stored one, or the earliest live kickoff if that is earlier, once the stored one has passed. */
+export function effectiveEntryDeadline(
+  storedLocksAt: string | null | undefined,
+  fixtures: Array<{ kickoff_at: string }>,
+  now = Date.now(),
+) {
+  const earliest = earliestFixtureKickoff(fixtures);
+  return earliest ? protectedEntryDeadline(storedLocksAt, earliest, now) : storedLocksAt ?? null;
+}
+
 export function isInitialPick8EntryWindowOpen(
   matchdayStatus: string,
   locksAt: string | null,
@@ -35,17 +61,17 @@ export function isInitialPick8EntryWindowOpen(
 }
 
 export function getFixtureLifecycle(
-  fixture: { kickoff_at: string; status: string },
+  fixture: { kickoff_at: string; status: string; voided_at?: string | null },
   now = Date.now(),
 ): FixtureLifecycle {
-  if (VOID_STATUSES.has(fixture.status)) return "void";
+  if (fixture.voided_at || VOID_STATUSES.has(fixture.status)) return "void";
   if (FINISHED_STATUSES.has(fixture.status)) return "finished";
   if (LIVE_STATUSES.has(fixture.status)) return "live";
   return hasFixtureKickedOff(fixture.kickoff_at, now) ? "locked" : "upcoming";
 }
 
 export function isFixtureSelectionEditable(
-  fixture: { kickoff_at: string; status: string },
+  fixture: { kickoff_at: string; status: string; voided_at?: string | null },
   now = Date.now(),
 ) {
   return getFixtureLifecycle(fixture, now) === "upcoming";
@@ -139,6 +165,7 @@ export function getMatchdayGoalProgress(
   fixtures: Array<{
     kickoff_at: string;
     status: string;
+    voided_at?: string | null;
     home_score: number | null;
     away_score: number | null;
   }>,
@@ -148,9 +175,11 @@ export function getMatchdayGoalProgress(
   let currentGoals = 0;
 
   for (const fixture of fixtures) {
-    if (getFixtureLifecycle(fixture, now) === "upcoming") continue;
+    const lifecycle = getFixtureLifecycle(fixture, now);
+    if (lifecycle === "upcoming") continue;
     hasStarted = true;
-    if (fixture.home_score !== null && fixture.away_score !== null) {
+    // A void fixture never contributes goals, even if it is replayed and scored by the provider later.
+    if (lifecycle !== "void" && fixture.home_score !== null && fixture.away_score !== null) {
       currentGoals += fixture.home_score + fixture.away_score;
     }
   }

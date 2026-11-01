@@ -247,7 +247,10 @@ function noActiveSeason(route: string, startedAt: number) {
 
 
 type DiscoveryPolicy = "results" | "fixtures" | "reconciliation";
-type DiscoveryPayload = { season: Record<string, unknown> | null; matchdays: Record<string, unknown>[]; dailyMatchdayNumbers?: number[] };
+type DiscoveryPayload = {
+  season: Record<string, unknown> | null; matchdays: Record<string, unknown>[]; dailyMatchdayNumbers?: number[];
+  expiredInterruptedFixtureCount?: number;
+};
 
 function mapDiscoveredMatchday(row: Record<string, unknown>): Matchday {
   return {
@@ -264,6 +267,7 @@ function mapDiscoveredMatchday(row: Record<string, unknown>): Matchday {
     terminal_confirmed_at: row.terminalConfirmedAt as string | null,
     first_kickoff_at: row.firstKickoffAt as string | null, last_kickoff_at: row.lastKickoffAt as string | null,
     has_live_fixture: Boolean(row.hasLiveFixture), all_terminal: Boolean(row.allTerminal), fixture_count: Number(row.fixtureCount ?? 0),
+    voided_external_fixture_ids: Array.isArray(row.voidedExternalFixtureIds) ? row.voidedExternalFixtureIds.filter((id): id is string => typeof id === "string") : undefined,
     provider_freshness_due: Boolean(row.providerFreshnessDue), local_scoring_recovery_due: Boolean(row.localScoringRecoveryDue),
     fixture_application_recovery_due: Boolean(row.fixtureApplicationRecoveryDue),
     competition_lifecycle_recovery_due: Boolean(row.competitionLifecycleRecoveryDue),
@@ -271,14 +275,34 @@ function mapDiscoveredMatchday(row: Record<string, unknown>): Matchday {
   };
 }
 
+async function discoverOnce(route: string, policy: DiscoveryPolicy) {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase.rpc("discover_pick8_due_work", {
+    check_policy: policy, check_now: new Date().toISOString(), check_limit: 12,
+  });
+  if (error) throw new Error(`Discovering due Pick 8 work failed: ${error.message}`);
+  return (data ?? {}) as unknown as DiscoveryPayload;
+}
+
+// A suspended or abandoned match that nobody resolved is voided 14 days after kickoff. That is time passing, not
+// a provider update, and Who You Got stops re-reading the fixture after the same 14 days, so it is settled here, from
+// local data, by whichever scheduled job runs first. Discovery reports the candidates, so the usual run pays nothing;
+// the settlement flags the matchday for application and scoring, and a second discovery then selects it.
+async function settleExpiredInterruptions(route: string, candidates: number) {
+  const { data, error } = await createAdminClient().rpc("settle_expired_pick8_interrupted_fixtures", { check_now: new Date().toISOString() });
+  if (error) throw new Error(`Settling expired interrupted Pick 8 fixtures failed: ${error.message}`);
+  const settled = (data ?? {}) as unknown as { count?: number };
+  createSyncDiagnostics({ route }).event({ service: "pick8-interrupted-expiry", dbRequestCount: 1, candidates, voided: Number(settled.count ?? 0) });
+}
+
 async function discover(route: string, policy: DiscoveryPolicy) {
   return createSyncDiagnostics({ route }).stage("discovery", async () => {
-    const supabase = createAdminClient();
-    const { data, error } = await supabase.rpc("discover_pick8_due_work", {
-      check_policy: policy, check_now: new Date().toISOString(), check_limit: 12,
-    });
-    if (error) throw new Error(`Discovering due Pick 8 work failed: ${error.message}`);
-    const payload = (data ?? {}) as unknown as DiscoveryPayload;
+    let payload = await discoverOnce(route, policy);
+    const expired = Number(payload.expiredInterruptedFixtureCount ?? 0);
+    if (expired > 0) {
+      await settleExpiredInterruptions(route, expired);
+      payload = await discoverOnce(route, policy);
+    }
     const raw = payload.season;
     const season: Season | null = raw ? {
       id: String(raw.id), name: String(raw.name), provider_season: Number(raw.providerSeason),

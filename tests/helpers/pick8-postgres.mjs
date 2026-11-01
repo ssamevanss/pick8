@@ -7,7 +7,8 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 
 export const root = resolve(import.meta.dirname, '../..');
-export function referenceScorer() {
+// Loads a TypeScript module from the repository (and its relative/@ imports) without emitting files.
+export function typeScriptModule(entry) {
   const native = createRequire(join(root, 'package.json'));
   const modules = new Map();
   function load(file) {
@@ -24,10 +25,13 @@ export function referenceScorer() {
       }
       return id.startsWith('@/') ? load(id.slice(2) + '.ts') : native(id);
     };
-    runInNewContext(source, { module: loadedModule, exports: loadedModule.exports, require, Date, Map, Set, console, performance, crypto: globalThis.crypto });
+    runInNewContext(source, { module: loadedModule, exports: loadedModule.exports, require, Date, Map, Set, Intl, console, performance, crypto: globalThis.crypto });
     return loadedModule.exports;
   }
-  return load('utils/pick8-scoring.ts');
+  return load(entry);
+}
+export function referenceScorer() {
+  return typeScriptModule('utils/pick8-scoring.ts');
 }
 
 export async function createTestDatabase() {
