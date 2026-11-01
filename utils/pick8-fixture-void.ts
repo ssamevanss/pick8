@@ -29,6 +29,7 @@ export type VoidDecisionFixture = { status: string; kickoff_at: string };
  * Decides whether a provider update permanently voids a fixture that is not void yet.
  *
  * - `postponed`: the provider reports the match postponed and it had not started.
+ * - `abandoned`: an abandoned match is scheduled again (`scheduled` / `timed`), whatever its kickoff says: the replay is confirmed.
  * - `rescheduled` / `abandoned`: a match that had not started moves to a later calendar day, before or
  *   after the entry deadline. A shorter move (a delayed kickoff the same day) is the same scheduled match
  *   and never voids it. `abandoned` when the match had been abandoned (a replay).
@@ -47,6 +48,9 @@ export function decideFixtureVoid({
     return "postponed";
   }
   if (!previous || STARTED_STATUSES.has(previous.status)) return null;
+  // An abandoned match scheduled again is a confirmed replay. Result polls never rewrite the kickoff, so the status change
+  // is the first signal; the stored kickoff may still be the old one.
+  if (previous.status === "abandoned" && (next.status === "scheduled" || next.status === "timed")) return "abandoned";
   const before = Date.parse(previous.kickoff_at);
   const after = Date.parse(next.kickoff_at);
   if (!(after > before)) return null;

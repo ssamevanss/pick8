@@ -64,7 +64,10 @@ $$;
 --   rescheduled a match that has not started moves to a later calendar day
 --               (Europe/London), before or after the entry deadline. A shorter move,
 --               such as a delayed kickoff on the same day, is the same scheduled match.
---   abandoned   the same move, for a match that was abandoned and is being replayed.
+--   abandoned   a match that was abandoned is scheduled again (status back to
+--               scheduled/timed, or the same later-day move): the replay is confirmed.
+--               Who You Got's result polls never rewrite kickoff_at, so the status
+--               change is the first signal a replay can give.
 --   expired     (settle_expired_pick8_interrupted_fixtures) a suspended or abandoned
 --               match still unresolved 14 days after its kickoff.
 -- A started or finished match is never voided by a kickoff change. Once voided, a
@@ -104,6 +107,8 @@ begin
     and (tg_op = 'INSERT' or old.status not in ('in_play', 'paused', 'finished'))
   then
     decided := 'postponed';
+  elsif tg_op = 'UPDATE' and old.status = 'abandoned' and new.status in ('scheduled', 'timed') then
+    decided := 'abandoned';
   elsif tg_op = 'UPDATE'
     and old.status not in ('in_play', 'paused', 'finished')
     and new.kickoff_at > old.kickoff_at

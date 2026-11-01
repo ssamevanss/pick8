@@ -286,6 +286,21 @@ try {
     assert.deepEqual(scores(replayed.after), scores(settled.after));
   });
 
+  await test('an abandoned match scheduled again is a confirmed replay: void at once, even before its kickoff is rewritten', async () => {
+    const ids = await seed(admin, { entries: 2, rulesVersion: 2 });
+    const id = ids.fixtures[0].id;
+    const kickoff = (await fixture(id)).kickoff_at;
+    await set(id, { status: 'abandoned', home_score: 1, away_score: 0 });
+    assert.equal((await fixture(id)).voided_at, null, 'abandoned alone is held');
+    // Who You Got's result polls never rewrite kickoff_at, so a replay first shows as the old kickoff with a scheduled status.
+    await set(id, { status: 'timed', home_score: null, away_score: null });
+    assert.equal((await fixture(id)).void_reason, 'abandoned');
+    assert.deepEqual((await fixture(id)).kickoff_at, kickoff);
+    const { after } = await rescore(ids);
+    assert.equal(after.matchday.status, 'completed');
+    assert.deepEqual(scores(after), [VOID_HOME_WIN_SCORE, VOID_HOME_WIN_SCORE]);
+  });
+
   await test('an abandoned match whose result stands is scored', async () => {
     const ids = await seed(admin, { entries: 1, rulesVersion: 2 });
     await set(ids.fixtures[0].id, { status: 'abandoned', home_score: 1, away_score: 0 });

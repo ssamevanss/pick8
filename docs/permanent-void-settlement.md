@@ -46,7 +46,7 @@ All of these apply to provider matchdays only (manual and accelerated-test match
 | --- | --- | --- |
 | Postponed | the provider reports `postponed` for a match that had not started (any time, before or after the entry deadline) | `postponed` |
 | Moved to another day | a match that had not started has its kickoff moved to a later **calendar day** (Europe/London), **before or after the entry deadline** | `rescheduled` |
-| Abandoned and replayed | the same move, from an `abandoned` fixture: a replay date is the confirmation that the match must be replayed | `abandoned` |
+| Abandoned and replayed | an `abandoned` fixture is scheduled again (`scheduled`/`timed`, whatever its kickoff says) or moves to a later day: the replay is the confirmation that the match must be replayed | `abandoned` |
 | Unresolved interruption | a `suspended` or `abandoned` fixture of a matchday that is not completed is still unresolved 14 days after its kickoff | `expired` |
 | Owner decision | `select public.void_pick8_fixture('<fixture uuid>')` (service role) | `manual` |
 
@@ -72,8 +72,10 @@ Who You Got keeps `status: "cancelled"` for SUSPENDED/ABANDONED (old Pick8 versi
 `abandoned`: **held, not void and not terminal**. The matchday waits, for at most 14 days.
 
 * resumes (`in_play`, `finished`, `AWARDED`) with the same kickoff: scored normally, never voided;
-* moved to a later day (a replay is scheduled) or reported postponed: void permanently **at once** (`abandoned` /
-  `rescheduled` / `postponed`). A replay date is what Pick8 treats as a confirmed abandonment that requires a replay;
+* an abandoned match scheduled again (status back to `scheduled`/`timed`), a suspended or abandoned one moved to a later day, or
+  one reported postponed: void permanently **at once** (`abandoned` / `rescheduled` / `postponed`). A replay is what Pick8
+  treats as a confirmed abandonment. Who You Got's result polls never rewrite `kickoff_at` (its daily fixture refresh does,
+  once the new date is within 60 days), so for an abandoned match the status change is the signal that arrives first;
 * abandoned or suspended with nothing further from the provider: held until **14 days after the fixture's kickoff**, then void
   (`expired`), because the result may still stand (an abandoned match can be awarded) and the provider's own status does not
   say. 14 days matches Who You Got's late-correction window, after which it no longer re-reads the fixture.
@@ -155,7 +157,10 @@ Remaining risks and open points:
    three matchdays daily, so this is possible but rare; it is exactly the stated policy. If it happens to a fixture that should
    count, the only repair is the reviewed SQL session in the runbook.
 2. **`POSTPONED` is trusted at once.** A provider flapping POSTPONED then back to the same day would void a match that is played.
-3. **A plain ABANDONED with no replay date** waits the full 14 days (the result may stand); use `void_pick8_fixture` to settle it sooner.
+3. **A plain ABANDONED that the provider leaves untouched** waits the full 14 days (the result may stand); use `void_pick8_fixture` to settle it sooner.
+   A SUSPENDED match re-dated by the provider shows as `timed` with its old kickoff until Who You Got's fixture refresh repairs the
+   date; it is voided then (a later calendar day), not earlier, and a suspended match that never gets a new date or a result is expired
+   only while it is still `suspended`.
 4. **The 14 days run from the stored kickoff**, not from when Pick8 first saw the interruption.
 5. **Existing in-flight cases** (matchdays already reopened by an earlier reschedule) are left alone; `void_pick8_fixture` per fixture.
 6. A fixture left `timed` long after kickoff by a provider that never updates it is not an interruption and is not expired.

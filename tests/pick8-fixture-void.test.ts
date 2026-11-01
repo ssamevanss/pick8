@@ -63,6 +63,10 @@ test("interrupted matches: held, then void only when the provider moves them to 
   assert.equal(decide({ status: "suspended", kickoff_at: K0 }, at("2026-12-16T19:45:00.000Z")), "rescheduled");
   assert.equal(decide({ status: "abandoned", kickoff_at: K0 }, at("2026-12-16T19:45:00.000Z")), "abandoned");
   assert.equal(decide({ status: "abandoned", kickoff_at: K0 }, { status: "finished", kickoff_at: K0 }), null, "result stands");
+  assert.equal(decide({ status: "abandoned", kickoff_at: K0 }, { status: "timed", kickoff_at: K0 }), "abandoned", "scheduled again, stale kickoff: a confirmed replay");
+  assert.equal(decide({ status: "abandoned", kickoff_at: K0 }, { status: "scheduled", kickoff_at: K0 }), "abandoned");
+  assert.equal(decide({ status: "suspended", kickoff_at: K0 }, { status: "timed", kickoff_at: K0 }), null, "a suspended match is not a confirmed replay");
+  assert.equal(decide({ status: "abandoned", kickoff_at: K0 }, { status: "in_play", kickoff_at: K0 }), null, "resumed");
 });
 
 test("a suspended or abandoned fixture expires 14 days after its kickoff, unless voided, resolved or in a completed matchday", () => {
