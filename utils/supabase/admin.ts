@@ -8,7 +8,7 @@ import {
   type SupabaseResilienceContext,
 } from "@/utils/supabase/resilience";
 
-export function createAdminClient() {
+export function createAdminClient(options: { wrapFetch?: (base: typeof fetch) => typeof fetch } = {}) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const secretKey = process.env.SUPABASE_SECRET_KEY;
 
@@ -21,8 +21,10 @@ export function createAdminClient() {
   }
 
   const cronContext = currentCronReadContext();
+  const cronFetch = cronContext ? cronDeadlineFetch(cronContext) : undefined;
+  const fetchImpl = options.wrapFetch ? options.wrapFetch(cronFetch ?? globalThis.fetch) : cronFetch;
   return createClient<Database>(supabaseUrl, secretKey, {
-    ...(cronContext ? { global: { fetch: cronDeadlineFetch(cronContext) } } : {}),
+    ...(fetchImpl ? { global: { fetch: fetchImpl } } : {}),
     auth: {
       autoRefreshToken: false,
       persistSession: false,

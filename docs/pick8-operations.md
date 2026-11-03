@@ -69,6 +69,10 @@ dashboard, and the automation history described below. There is no error tracker
 - **cron-job.org (owner action, not done by the code):** a *separate* job for `https://<prod-host>/api/cron/health`
   with header `Authorization: Bearer <CRON_SECRET>`, every 10 min, timeout 30 s, notify after **≥ 2 consecutive
   failures** and on recovery. A genuine failure therefore alerts 10–20 min after it is detected; a Supabase blip does not.
+- **Supabase `JWT issued at future` (PGRST303):** an intermittent Supabase gateway/PostgREST clock-skew rejection of `sb_secret_`
+  keys (upstream supabase/supabase#49655, #50651), not an RLS or migration problem. Monitoring reads/writes replay such a rejection
+  after 300 ms and 900 ms (it is rejected before any SQL runs, so replay is safe) and log `pick8-cron-monitor` `jwt_skew_retry`,
+  which is the way to count how often it happens. The jobs' own database calls are deliberately not wrapped.
 - Caveats: pausing the `sync-results` scheduler on purpose (e.g. off-season) turns the check red after 15 minutes. A daily
   run whose finish write is lost is indistinguishable from a killed run and reads as *failing* until the next success.
   Rolling the code back stops new rows and the endpoint, so `sync-results` goes *missed* and the check fails.

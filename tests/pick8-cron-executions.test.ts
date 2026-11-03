@@ -204,6 +204,7 @@ function loadModule<T>(entry: string, stubs: Record<string, unknown>): T {
       if (id === "next/server") return { NextResponse: Response };
       if (id === "@/utils/pick8-cron-monitor") return load("utils/pick8-cron-monitor.ts");
       if (id === "@/utils/pick8-cron-executions") return load("utils/pick8-cron-executions.ts");
+      if (id === "@/utils/supabase/jwt-skew-retry") return load("utils/supabase/jwt-skew-retry.ts");
       if (id.startsWith("./pick8-cron-monitor")) return load("utils/pick8-cron-monitor.ts");
       if (id.startsWith("@/")) return new Proxy({}, { get: () => () => { throw new Error(`unexpected import ${id}`); } });
       return nativeRequire(id);
@@ -417,4 +418,29 @@ test("store: an EMPTY table with an activation baseline reports every never-star
   assert.equal(unarmed.health.monitoring.source, "none");
   // An env value that cannot be parsed is surfaced, not ignored.
   assert.equal((await loadCronHealth(Date.parse("2026-11-10T12:00:00Z"), "soon")).health.healthy, false);
+});
+
+test("store: monitoring clients opt in to the PGRST303 backoff, and the job-path admin client is not touched", async () => {
+  const fake = fakeAdminClient([]);
+  const optionsSeen: unknown[] = [];
+  const { monitoredCron, loadCronHealth } = loadModule<typeof StoreModule>("utils/pick8-cron-executions-store.ts", {
+    "@/utils/supabase/admin": { createAdminClient: (options?: unknown) => { optionsSeen.push(options); return fake.client; } },
+    "next/server": { NextResponse: Response, after: (task: () => Promise<void>) => { void task(); } },
+  });
+  await monitoredCron("sync-results", async () => ({ ok: true, skipped: true }));
+  await loadCronHealth(Date.parse("2026-11-10T00:10:00Z"), "2026-11-10T00:00:00Z");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(optionsSeen.length >= 3);
+  for (const options of optionsSeen) assert.equal(typeof (options as { wrapFetch?: unknown })?.wrapFetch, "function");
+
+  // The wrapper handed to createAdminClient really retries a skew rejection.
+  const wrap = (optionsSeen[0] as { wrapFetch: (base: typeof fetch) => typeof fetch }).wrapFetch;
+  let calls = 0;
+  const base = (async () => (++calls === 1
+    ? Response.json({ code: "PGRST303", message: "JWT issued at future" }, { status: 401 })
+    : Response.json([], { status: 200 }))) as unknown as typeof fetch;
+  const warn = console.warn; console.warn = () => {};
+  try { assert.equal((await wrap(base)("https://x.supabase.co/rest/v1/t", { method: "POST", body: "{}" })).status, 200); }
+  finally { console.warn = warn; }
+  assert.equal(calls, 2);
 });
