@@ -31,7 +31,8 @@ Detail lives in `docs/`: start at [docs/README.md](docs/README.md). This file is
   `competitions`, `matchdays`, `fixtures`, `entries`, `entry_selections` (see `types/database.types.ts`).
 - **Live routes:** `/login /signup /forgot-password /reset-password /auth/callback`, `/dashboard`
   (home; `/` redirects), `/my-picks`, `/tables`, `/rules`, `/settings`, `/admin`, and
-  `/api/cron/{sync-fixtures,sync-results,reconcile-results}`.
+  `/api/cron/{sync-fixtures,sync-results,reconcile-results}` plus the read-only `/api/cron/health`
+  (automation history in `pick8_cron_executions`, shown on `/admin`).
 - **Football data:** Pick8 never calls a football provider for its live game. It pulls fixtures
   per `(season, matchday)` from WYG `GET /api/shared-football/fixtures` using
   `WHO_YOU_GOT_API_URL` / `WHO_YOU_GOT_API_KEY` (`utils/who-you-got-fixture-sync.ts`).

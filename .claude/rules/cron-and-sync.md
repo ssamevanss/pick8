@@ -30,7 +30,14 @@ paths:
   Don't raise budgets without measuring; no route sets `maxDuration`, so the platform default applies.
 - Failures must be isolated per matchday and returned in `failures`; retain pending flags so the next
   run recovers. A no-op outside kickoff windows is correct, not an incident.
-- Keep structured events (`pick8-cron`, `pick8-sync-stage`, `cron_read`) stable — runbooks and alerts
+- Monitoring: the three job routes run through `monitoredCron` (`utils/pick8-cron-executions-store.ts`), which
+  records `pick8_cron_executions` rows; outcome is classified from the response body (`classifyCronResult`), not
+  the HTTP status. Recording must stay observational: bounded, swallowed, never retried beyond the idempotent
+  finish write, completed in `after()` (off the response path, inline fallback), and never wrapped inside `run*` (the failure-injection harness). Health rules live in the pure
+  `utils/pick8-cron-monitor.ts` (activation baseline `PICK8_CRON_MONITORING_SINCE`); `GET /api/cron/health`
+  (Bearer, read-only) and the admin "Scheduled jobs" section read them. Changing a schedule or the scheduler
+  cadence means updating `PICK8_CRON_SCHEDULES` too (a test compares it with `vercel.json`).
+- Keep structured events (`pick8-cron`, `pick8-cron-monitor`, `pick8-sync-stage`, `cron_read`) stable — runbooks and alerts
   key on them. Never include secrets, provider payloads or emails.
 - Test with the failure-injection suites (`pick8-sync-integration`, `pick8-cron-read`,
   `pick8-sync-state`) and the PGlite migration test; there is no staging environment.

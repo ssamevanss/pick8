@@ -329,6 +329,39 @@ export type Database = {
           },
         ]
       }
+      pick8_cron_executions: {
+        Row: {
+          duration_ms: number | null
+          error: string | null
+          finished_at: string | null
+          id: string
+          job: string
+          outcome: string
+          started_at: string
+          summary: Json
+        }
+        Insert: {
+          duration_ms?: number | null
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          job: string
+          outcome?: string
+          started_at?: string
+          summary?: Json
+        }
+        Update: {
+          duration_ms?: number | null
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          job?: string
+          outcome?: string
+          started_at?: string
+          summary?: Json
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
