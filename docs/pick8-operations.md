@@ -43,7 +43,9 @@ dashboard, and the automation history described below. There is no error tracker
   `pick8_cron_executions` (migration `20261103000000`): `running` at start, then `success`, `no_op` (nothing due /
   no active season) or `failure`. **The outcome comes from the response body** (`ok: false`), because business failures
   return HTTP 200. Rejected-auth calls are not recorded, so a scheduler with a wrong secret shows up as *missed*.
-  Recording is best-effort (3 s bound, one retry of the finish write) and can never change a job's result or status.
+  Recording is best-effort and can never change a job's result or status: the start marker is written concurrently with the
+  job, completion is recorded in Next's `after()` (so it adds no response latency), and every monitoring write is bounded to 3 s
+  with one retry of the idempotent finish write. If `after()` is unavailable the completion is written inline instead.
   The table is RLS-enabled with no policies and no grants to `anon`/`authenticated`; only server code (service role) reads it.
 - **Admin page** (`/admin`, "Scheduled jobs"): per-job status, last attempt/success, recent runs, and when monitoring started. Read-only.
 - **Health endpoint** `GET /api/cron/health` (same Bearer `CRON_SECRET`; read-only; triggers nothing; no query parameters):

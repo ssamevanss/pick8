@@ -33,7 +33,7 @@ paths:
 - Monitoring: the three job routes run through `monitoredCron` (`utils/pick8-cron-executions-store.ts`), which
   records `pick8_cron_executions` rows; outcome is classified from the response body (`classifyCronResult`), not
   the HTTP status. Recording must stay observational: bounded, swallowed, never retried beyond the idempotent
-  finish write, and never wrapped inside `run*` (the failure-injection harness). Health rules live in the pure
+  finish write, completed in `after()` (off the response path, inline fallback), and never wrapped inside `run*` (the failure-injection harness). Health rules live in the pure
   `utils/pick8-cron-monitor.ts` (activation baseline `PICK8_CRON_MONITORING_SINCE`); `GET /api/cron/health`
   (Bearer, read-only) and the admin "Scheduled jobs" section read them. Changing a schedule or the scheduler
   cadence means updating `PICK8_CRON_SCHEDULES` too (a test compares it with `vercel.json`).

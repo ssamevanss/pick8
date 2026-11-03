@@ -106,6 +106,73 @@ test("monitoring failure: every store method and the logger throwing still canno
   assert.equal(await recordCronExecution("sync-results", async () => body, { store, log: () => { throw new Error("log down"); } }), body);
 });
 
+// --- response-path latency: completion bookkeeping is deferred -----------------------------------
+
+function deferral() {
+  const tasks: (() => Promise<void>)[] = [];
+  return { tasks, defer: (task: () => Promise<void>) => { tasks.push(task); } };
+}
+
+test("with defer, the job result is returned before any completion write; running the deferred task records it", async () => {
+  const { store, calls } = fakeStore();
+  const { tasks, defer } = deferral();
+  let clock = 1_000;
+  const body = { ok: false, failures: [{ matchday: 5, error: "Provider returned 502" }] };
+  const result = await recordCronExecution("sync-results", async () => { clock += 250; return body; }, { store, defer, now: () => clock, ...quiet });
+  assert.equal(result, body);
+  assert.equal(tasks.length, 1);
+  assert.ok(!calls.some((c) => c.op === "finish"), "no finish write on the response path");
+  clock += 60_000; // the deferred task runs much later; the recorded duration must still be the job's
+  await tasks[0]();
+  assert.deepEqual(calls.map((c) => c.op), ["start", "finish"]);
+  assert.equal(calls[1].finish?.outcome, "failure");
+  assert.equal(calls[1].finish?.durationMs, 250);
+});
+
+test("with defer, a thrown job error is still rethrown immediately and recorded as a failure later", async () => {
+  const { store, calls } = fakeStore();
+  const { tasks, defer } = deferral();
+  const boom = new Error("Discovering due Pick 8 work failed");
+  await assert.rejects(recordCronExecution("sync-fixtures", async () => { throw boom; }, { store, defer, ...quiet }), (error) => error === boom);
+  await tasks[0]();
+  assert.equal(calls[1].finish?.outcome, "failure");
+  assert.equal(calls[1].finish?.error, "Discovering due Pick 8 work failed");
+});
+
+test("if deferral is unavailable (throws), completion is recorded inline so the attempt is never lost", async () => {
+  const { store, calls } = fakeStore();
+  const defer = () => { throw new Error("after was called outside a request scope"); };
+  assert.deepEqual(await recordCronExecution("sync-results", async () => ({ ok: true }), { store, defer, ...quiet }), { ok: true });
+  assert.deepEqual(calls.map((c) => c.op), ["start", "finish"]);
+});
+
+test("a deferred task never rejects, even when every store call fails", async () => {
+  const fail = async () => { throw new Error("down"); };
+  const { store } = fakeStore({ start: fail, finish: fail, insertFinished: fail });
+  const { tasks, defer } = deferral();
+  await recordCronExecution("sync-results", async () => ({ ok: true }), { store, defer, ...quiet });
+  await assert.doesNotReject(tasks[0]());
+});
+
+test("latency under a hung monitoring database: the response path is ~0 with defer, but the whole tail without it", async () => {
+  const hang = () => new Promise<never>(() => {});
+  const timeoutMs = 60;
+  const time = async (deps: Partial<Parameters<typeof recordCronExecution>[2]>) => {
+    const { store } = fakeStore({ start: hang, finish: hang, insertFinished: hang });
+    const began = Date.now();
+    await recordCronExecution("sync-results", async () => ({ ok: true, skipped: true }), { store, timeoutMs, ...quiet, ...deps });
+    return Date.now() - began;
+  };
+  const { tasks, defer } = deferral();
+  const deferred = await time({ defer });
+  const inline = await time({});
+  assert.ok(deferred < timeoutMs / 2, `deferred response path took ${deferred} ms`);
+  assert.ok(inline >= timeoutMs, `inline path took ${inline} ms`);
+  const began = Date.now();
+  await tasks[0](); // the bounded bookkeeping still completes (and gives up) off the response path
+  assert.ok(Date.now() - began < 10 * timeoutMs);
+});
+
 // --- wiring: routes ------------------------------------------------------------------------------
 
 test("each Pick8 cron route authorizes first, then records the run through monitoredCron", () => {
@@ -279,9 +346,10 @@ function fakeAdminClient(rows: Row[], failReads = false) {
 }
 const exec = (job: string, startedAt: string, outcome = "success") => ({ job, started_at: startedAt, finished_at: startedAt, outcome, duration_ms: 1, error: null, summary: {} });
 
-function loadStore(client: unknown) {
+function loadStore(client: unknown, deferred: (() => Promise<void>)[] = []) {
   return loadModule<typeof StoreModule>("utils/pick8-cron-executions-store.ts", {
     "@/utils/supabase/admin": { createAdminClient: () => client },
+    "next/server": { NextResponse: Response, after: (task: () => Promise<void>) => { deferred.push(task); } },
   });
 }
 
@@ -311,14 +379,29 @@ test("store: a read failure throws rather than reporting 'healthy'", async () =>
   await assert.rejects(loadCronHealth(), /Cron history unreadable/);
 });
 
-test("store: monitoredCron writes through to the table and never changes the result", async () => {
+test("store: monitoredCron records the start alongside the job, completes in after(), and never changes the result", async () => {
   const fake = fakeAdminClient([]);
-  const { monitoredCron } = loadStore(fake.client);
+  const deferred: (() => Promise<void>)[] = [];
+  const { monitoredCron } = loadStore(fake.client, deferred);
   const body = { ok: false, failures: [{ matchday: 5, error: "boom" }] };
   assert.equal(await monitoredCron("sync-results", async () => body), body);
-  assert.deepEqual(fake.writes.map((w) => w.op), ["insert", "update"]);
+  assert.deepEqual(fake.writes.map((w) => w.op), ["insert"], "only the start marker is written before the response");
   assert.equal(fake.writes[0].row.outcome, "running");
+  assert.equal(deferred.length, 1);
+  await deferred[0]();
+  assert.deepEqual(fake.writes.map((w) => w.op), ["insert", "update"]);
   assert.equal(fake.writes[1].row.outcome, "failure");
+});
+
+test("store: outside a request scope (after() throws) the attempt is still completed inline", async () => {
+  const fake = fakeAdminClient([]);
+  const { monitoredCron } = loadModule<typeof StoreModule>("utils/pick8-cron-executions-store.ts", {
+    "@/utils/supabase/admin": { createAdminClient: () => fake.client },
+    "next/server": { NextResponse: Response, after: () => { throw new Error("outside request scope"); } },
+  });
+  await monitoredCron("sync-results", async () => ({ ok: true, skipped: true }));
+  assert.deepEqual(fake.writes.map((w) => w.op), ["insert", "update"]);
+  assert.equal(fake.writes[1].row.outcome, "no_op");
 });
 
 test("store: an EMPTY table with an activation baseline reports every never-started job as missed", async () => {

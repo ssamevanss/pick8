@@ -2,7 +2,8 @@ import { classifyCronResult, type Pick8CronClassification, type Pick8CronJob } f
 
 // Records one execution row around a cron job. The recorder is strictly observational:
 // every monitoring read/write is bounded and swallowed, and the job's result or error is returned or
-// rethrown exactly as if the recorder did not exist.
+// rethrown exactly as if the recorder did not exist. The start marker is written concurrently with the job;
+// the finish write is handed to `defer` (Next's `after`) so it never sits on the response path.
 
 export type CronExecutionFinish = Pick8CronClassification & { finishedAt: string; durationMs: number };
 
@@ -22,6 +23,11 @@ type Deps = {
   now?: () => number;
   timeoutMs?: number;
   log?: (line: Record<string, unknown>) => void;
+  /**
+   * Schedules the completion bookkeeping to run after the response is sent. If absent, or if it throws
+   * (e.g. no request scope), the bookkeeping runs inline instead, so an attempt is never left unrecorded.
+   */
+  defer?: (task: () => Promise<void>) => void;
 };
 
 const defaultLog = (line: Record<string, unknown>) => console.warn(JSON.stringify(line));
@@ -51,7 +57,7 @@ async function bounded<T>(
 }
 
 export async function recordCronExecution<T>(job: Pick8CronJob, run: () => Promise<T>, deps: Deps): Promise<T> {
-  const { store, now = Date.now, timeoutMs = MONITOR_WRITE_TIMEOUT_MS, log = defaultLog } = deps;
+  const { store, now = Date.now, timeoutMs = MONITOR_WRITE_TIMEOUT_MS, log = defaultLog, defer } = deps;
   const startedMs = now();
   const startedAt = new Date(startedMs).toISOString();
   // Start the marker concurrently with the job so monitoring adds no latency on the happy path.
@@ -67,27 +73,35 @@ export async function recordCronExecution<T>(job: Pick8CronJob, run: () => Promi
     thrown = error;
   }
 
-  try {
-    const classification: Pick8CronClassification = threw
-      ? {
-        outcome: "failure",
-        error: (thrown instanceof Error ? thrown.message : "Unexpected automation failure.").slice(0, 300),
-        summary: {},
+  // Duration is the job's, taken before any deferral.
+  const finishedMs = now();
+  const finalize = async () => {
+    try {
+      const classification: Pick8CronClassification = threw
+        ? {
+          outcome: "failure",
+          error: (thrown instanceof Error ? thrown.message : "Unexpected automation failure.").slice(0, 300),
+          summary: {},
+        }
+        : classifyCronResult(result);
+      const finish: CronExecutionFinish = {
+        ...classification, finishedAt: new Date(finishedMs).toISOString(), durationMs: Math.max(0, finishedMs - startedMs),
+      };
+      const start = await started;
+      if (start.ok) {
+        const first = await bounded(() => store.finish(start.value, finish), timeoutMs, log, job, "finish");
+        if (!first.ok) await bounded(() => store.finish(start.value, finish), timeoutMs, log, job, "finish_retry");
+      } else {
+        await bounded(() => store.insertFinished(job, startedAt, finish), timeoutMs, log, job, "insert_finished");
       }
-      : classifyCronResult(result);
-    const finishedMs = now();
-    const finish: CronExecutionFinish = {
-      ...classification, finishedAt: new Date(finishedMs).toISOString(), durationMs: Math.max(0, finishedMs - startedMs),
-    };
-    const start = await started;
-    if (start.ok) {
-      const first = await bounded(() => store.finish(start.value, finish), timeoutMs, log, job, "finish");
-      if (!first.ok) await bounded(() => store.finish(start.value, finish), timeoutMs, log, job, "finish_retry");
-    } else {
-      await bounded(() => store.insertFinished(job, startedAt, finish), timeoutMs, log, job, "insert_finished");
+    } catch {
+      /* Monitoring can never change the job outcome. */
     }
-  } catch {
-    /* Monitoring can never change the job outcome. */
+  };
+  if (defer) {
+    try { defer(finalize); } catch { await finalize(); }
+  } else {
+    await finalize();
   }
 
   if (threw) throw thrown;

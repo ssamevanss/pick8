@@ -1,5 +1,7 @@
 import "server-only";
 
+import { after } from "next/server";
+
 import { createAdminClient } from "@/utils/supabase/admin";
 import {
   MONITOR_WRITE_TIMEOUT_MS,
@@ -47,9 +49,12 @@ const supabaseStore: CronExecutionStore = {
   },
 };
 
-/** Run an authenticated cron job and record the attempt. Never alters the job's result or error. */
+/**
+ * Run an authenticated cron job and record the attempt. Never alters the job's result or error. The start
+ * marker is written alongside the job; completion is recorded in `after()` so it adds no response latency.
+ */
 export function monitoredCron<T>(job: Pick8CronJob, run: () => Promise<T>) {
-  return recordCronExecution(job, run, { store: supabaseStore });
+  return recordCronExecution(job, run, { store: supabaseStore, defer: (task) => after(task) });
 }
 
 /** Read-only snapshot used by the admin page and the health endpoint. Throws if history is unreadable. */
