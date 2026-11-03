@@ -11,7 +11,7 @@ type Options = {
   log?: (line: Record<string, unknown>) => void;
 };
 
-function defaultSleep(ms: number, signal?: AbortSignal | null) {
+export function abortableSleep(ms: number, signal?: AbortSignal | null) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) { reject(signal.reason); return; }
     const timer = setTimeout(() => { signal?.removeEventListener("abort", stop); resolve(); }, ms);
@@ -41,7 +41,7 @@ async function isJwtIssuedInFuture(response: Response) {
 }
 
 export function retryOnJwtIssuedInFuture(base: typeof fetch = globalThis.fetch, options: Options = {}): typeof fetch {
-  const { delaysMs = JWT_SKEW_RETRY_DELAYS_MS, sleep = defaultSleep, log = defaultLog } = options;
+  const { delaysMs = JWT_SKEW_RETRY_DELAYS_MS, sleep = abortableSleep, log = defaultLog } = options;
   return async (input, init) => {
     let response = await base(input, init);
     if (!replayable(input, init)) return response;

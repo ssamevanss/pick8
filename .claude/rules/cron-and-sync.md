@@ -35,7 +35,8 @@ paths:
   the HTTP status. Recording must stay observational: bounded, swallowed, never retried beyond the idempotent
   finish write, completed in `after()` (off the response path, inline fallback), and never wrapped inside `run*` (the failure-injection harness). Health rules live in the pure
   `utils/pick8-cron-monitor.ts` (activation baseline `PICK8_CRON_MONITORING_SINCE`); `GET /api/cron/health`
-  (Bearer, read-only) and the admin "Scheduled jobs" section read them. Changing a schedule or the scheduler
+  (Bearer, read-only) and the admin "Scheduled jobs" section read them. Inside a cron run the admin client replays only an exact PGRST303 rejection (`retryWithinCronDeadline` in `utils/supabase/admin.ts`,
+  reusing `jwt-skew-retry.ts`); keep it deadline-bound and never widen it to other errors. Changing a schedule or the scheduler
   cadence means updating `PICK8_CRON_SCHEDULES` too (a test compares it with `vercel.json`).
 - Keep structured events (`pick8-cron`, `pick8-cron-monitor`, `pick8-sync-stage`, `cron_read`) stable — runbooks and alerts
   key on them. Never include secrets, provider payloads or emails.
