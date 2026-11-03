@@ -3,6 +3,8 @@ import { getRequestAuthContext, type Pick8Profile } from "@/utils/app-context";
 import { createAdminClient } from "@/utils/supabase/admin";
 import { updateProfile } from "./profile-actions";
 import SubmitButton from "@/components/forms/SubmitButton";
+import CronHealthSection from "@/components/admin/CronHealthSection";
+import { loadCronHealth } from "@/utils/pick8-cron-executions-store";
 import {
   buildCurrentSubmissionRows,
   sortPick8AdminProfiles,
@@ -104,6 +106,14 @@ export default async function AdminPage({
     else submissionEntries = data ?? [];
   }
 
+  // Monitoring is informational: an unreadable history must never break the rest of the admin page.
+  const cronHealth = await loadCronHealth().catch((error) => {
+    console.error("Pick8 admin cron health load failed", {
+      message: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+    });
+    return null;
+  });
+
   const submissionRows = currentMatchday
     ? buildCurrentSubmissionRows(profiles, submissionEntries)
     : [];
@@ -172,6 +182,8 @@ export default async function AdminPage({
           <p className="mt-4 text-sm text-slate-400">No eligible participants are available for this matchday.</p>
         )}
       </section>
+
+      <CronHealthSection data={cronHealth} />
 
       <section>
         <div className="mb-4">
