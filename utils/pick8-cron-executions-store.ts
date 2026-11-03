@@ -3,6 +3,7 @@ import "server-only";
 import { after } from "next/server";
 
 import { createAdminClient } from "@/utils/supabase/admin";
+import { retryOnJwtIssuedInFuture } from "@/utils/supabase/jwt-skew-retry";
 import {
   MONITOR_WRITE_TIMEOUT_MS,
   recordCronExecution,
@@ -24,24 +25,26 @@ const COLUMNS = "job, started_at, finished_at, outcome, duration_ms, error, summ
 const RECENT_LIMIT = 10;
 
 const signal = () => AbortSignal.timeout(MONITOR_WRITE_TIMEOUT_MS);
+// Monitoring-only: a PGRST303 clock-skew rejection is replayed with a short backoff inside each call's 3 s bound.
+const monitorClient = () => createAdminClient({ wrapFetch: (base) => retryOnJwtIssuedInFuture(base) });
 
 const supabaseStore: CronExecutionStore = {
   async start(job, startedAt) {
-    const { data, error } = await createAdminClient()
+    const { data, error } = await monitorClient()
       .from(TABLE).insert({ job, started_at: startedAt, outcome: "running" })
       .select("id").abortSignal(signal()).single();
     if (error || !data) throw new Error(error?.message ?? "No execution id returned");
     return data.id;
   },
   async finish(id, finish) {
-    const { error } = await createAdminClient().from(TABLE).update({
+    const { error } = await monitorClient().from(TABLE).update({
       finished_at: finish.finishedAt, outcome: finish.outcome, duration_ms: finish.durationMs,
       error: finish.error, summary: finish.summary as never,
     }).eq("id", id).abortSignal(signal());
     if (error) throw new Error(error.message);
   },
   async insertFinished(job, startedAt, finish) {
-    const { error } = await createAdminClient().from(TABLE).insert({
+    const { error } = await monitorClient().from(TABLE).insert({
       job, started_at: startedAt, finished_at: finish.finishedAt, outcome: finish.outcome,
       duration_ms: finish.durationMs, error: finish.error, summary: finish.summary as never,
     }).abortSignal(signal());
@@ -65,7 +68,7 @@ export async function loadCronHealth(
   health: Pick8CronHealth;
   executionsByJob: Record<Pick8CronJob, Pick8CronExecution[]>;
 }> {
-  const client = createAdminClient();
+  const client = monitorClient();
   const fail = (error: { message: string }) => new Error(`Cron history unreadable: ${error.message}`);
   // One wave of small indexed reads (<= 3 s each), so the whole snapshot is bounded by a single timeout.
   const [recent, successes, first] = await Promise.all([
