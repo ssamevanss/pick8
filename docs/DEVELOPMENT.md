@@ -17,7 +17,7 @@ to `.env.local`. **Point local/Preview at a non-production Supabase project** (s
 | `tests/pick8-scoring-postgres.mjs` (opt-in) | SQL scorer == TS oracle, concurrency, failure injection | **not run**: needs `embedded-postgres` (not installed) |
 
 Not covered by any automated test: auth flows end-to-end, RLS policies as `authenticated`/`anon`, admin
-actions, pages/components, email, Vercel/cron wiring, the WYG contract across repos.
+actions, pages/components, email, Vercel/cron wiring. The WYG contract is covered by `tests/pick8-wyg-contract.test.ts` (shared fixture; see `.claude/rules/who-you-got-integration.md`).
 
 ## Branches, PRs, review
 - `main` is production. Work on `feat/…`, `fix/…`, `chore/…` branches; one concern per PR, ideally < 400 changed lines.

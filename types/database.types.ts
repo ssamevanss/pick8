@@ -184,6 +184,8 @@ export type Database = {
           matchday_id: string
           status: string
           updated_at: string
+          void_reason: string | null
+          voided_at: string | null
         }
         Insert: {
           away_score?: number | null
@@ -202,6 +204,8 @@ export type Database = {
           matchday_id: string
           status?: string
           updated_at?: string
+          void_reason?: string | null
+          voided_at?: string | null
         }
         Update: {
           away_score?: number | null
@@ -220,6 +224,8 @@ export type Database = {
           matchday_id?: string
           status?: string
           updated_at?: string
+          void_reason?: string | null
+          voided_at?: string | null
         }
         Relationships: [
           {
@@ -323,6 +329,39 @@ export type Database = {
           },
         ]
       }
+      pick8_cron_executions: {
+        Row: {
+          duration_ms: number | null
+          error: string | null
+          finished_at: string | null
+          id: string
+          job: string
+          outcome: string
+          started_at: string
+          summary: Json
+        }
+        Insert: {
+          duration_ms?: number | null
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          job: string
+          outcome?: string
+          started_at?: string
+          summary?: Json
+        }
+        Update: {
+          duration_ms?: number | null
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          job?: string
+          outcome?: string
+          started_at?: string
+          summary?: Json
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -405,6 +444,10 @@ export type Database = {
     Functions: {
       discover_pick8_due_work: {
         Args: { check_policy?: string; check_now?: string; check_limit?: number }
+        Returns: Json
+      }
+      settle_expired_pick8_interrupted_fixtures: {
+        Args: { check_now?: string }
         Returns: Json
       }
       score_pick8_matchday: {

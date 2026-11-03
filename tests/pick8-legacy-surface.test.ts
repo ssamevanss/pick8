@@ -16,7 +16,8 @@ function walk(dir: string, out: string[] = []) {
   return out;
 }
 
-const PICK8_CRON_ROUTES = ["reconcile-results", "sync-fixtures", "sync-results"];
+// `health` is the read-only monitoring endpoint added in #18 (same Bearer guard, schedules nothing).
+const PICK8_CRON_ROUTES = ["health", "reconcile-results", "sync-fixtures", "sync-results"];
 
 test("the public debug page is gone", () => {
   assert.equal(existsSync(join(root, "app/test-supabase")), false);

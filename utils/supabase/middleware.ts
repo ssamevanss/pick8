@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { logServerTiming, startServerTiming } from "@/utils/server-timing";
 import type { Database } from "@/types/database.types";
+import { safeOptionalRedirectPath } from "@/utils/pick8-safe-redirect";
 import {
   createMiddlewareAuthFetch,
   evaluateMiddlewareAuth,
@@ -138,10 +139,10 @@ export async function updateSession(request: NextRequest) {
       ...(decision.error ? authErrorFields(decision.error) : {}),
     });
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set(
-      "next",
+    const next = safeOptionalRedirectPath(
       `${request.nextUrl.pathname}${request.nextUrl.search}`,
     );
+    if (next) loginUrl.searchParams.set("next", next);
     const redirectResponse = NextResponse.redirect(loginUrl);
 
     supabaseResponse.cookies.getAll().forEach((cookie) => {

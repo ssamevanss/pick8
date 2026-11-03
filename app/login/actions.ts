@@ -3,10 +3,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import { isServerAuthUnavailable } from "@/utils/supabase/resilience";
-
-function safeNext(value: string) {
-  return value.startsWith("/") && !value.startsWith("//") ? value : "";
-}
+import { safeOptionalRedirectPath, safeRedirectPath } from "@/utils/pick8-safe-redirect";
 
 function redirectWithLoginError(
   message: string,
@@ -32,7 +29,7 @@ export async function login(formData: FormData) {
 
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password"));
-  const next = safeNext(String(formData.get("next") ?? ""));
+  const next = safeOptionalRedirectPath(formData.get("next"));
 
   if (!email || !password) {
     redirectWithLoginError("Enter your email and password.", email, next);
@@ -95,5 +92,5 @@ export async function login(formData: FormData) {
     );
   }
 
-  redirect(next || "/dashboard");
+  redirect(safeRedirectPath(next));
 }

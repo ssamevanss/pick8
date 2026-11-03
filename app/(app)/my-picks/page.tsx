@@ -14,9 +14,10 @@ import {
   type BreakdownSelection,
 } from "@/utils/pick8-matchday-breakdown";
 import {
-  earliestFixtureKickoff,
+  effectiveEntryDeadline,
   isInitialPick8EntryWindowOpen,
 } from "@/utils/pick8-fixture-state";
+import { withEffectiveFixtureStatus } from "@/utils/pick8-fixture-void";
 import {
   playerMatchdayLifecycle,
   resolveRelevantMatchday,
@@ -87,15 +88,15 @@ export default async function MyPicksPage({
   }
 
   const [fixturesResult, profilesResult, entriesResult] = await Promise.all([
-    admin.from("fixtures").select("id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, home_score, away_score").eq("matchday_id", selectedMatchday.id).order("kickoff_at"),
+    admin.from("fixtures").select("id, home_team_name, away_team_name, home_team_crest_url, away_team_crest_url, kickoff_at, status, voided_at, home_score, away_score").eq("matchday_id", selectedMatchday.id).order("kickoff_at"),
     admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
     admin.from("entries").select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at").eq("matchday_id", selectedMatchday.id),
   ]);
   requireSuccessfulDatabaseOperation(fixturesResult.error);
   requireSuccessfulDatabaseOperation(profilesResult.error);
   requireSuccessfulDatabaseOperation(entriesResult.error);
-  const fixtures = (fixturesResult.data ?? []) as BreakdownFixture[];
-  const effectiveLocksAt = earliestFixtureKickoff(fixtures) ?? selectedMatchday.locks_at;
+  const fixtures = withEffectiveFixtureStatus(fixturesResult.data ?? []) as BreakdownFixture[];
+  const effectiveLocksAt = effectiveEntryDeadline(selectedMatchday.locks_at, fixtures);
   const allProfiles = profilesResult.data ?? [];
   const entries = (entriesResult.data ?? []) as BreakdownEntry[];
   const profiles = allProfiles
@@ -156,7 +157,7 @@ export default async function MyPicksPage({
     <div className="space-y-6">
       <header className="brand-card p-5 sm:p-7">
         <p className="brand-eyebrow">{season.name}</p>
-        <div className="mt-2 grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+        <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
           <div><h1 className="brand-title">Matchday {selectedMatchday.matchday_number}</h1><p className="brand-subtitle mt-2">{matchdayUnderway ? "Initial submissions closed · Matchday in progress" : `Initial submission locks ${formatDateTime(effectiveLocksAt)} Melbourne time`}</p><span className="brand-pill mt-3">{lifecycleLabel} · {entryLabel}</span></div>
           <MatchdaySelectNavigation
             currentMatchday={selectedMatchday.matchday_number}

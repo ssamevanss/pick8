@@ -2,10 +2,7 @@ import BrandMark from "@/components/brand/BrandMark";
 import LoginForm from "@/components/auth/LoginForm";
 import { login } from "./actions";
 import Link from "next/link";
-
-function safeNext(value: string | undefined) {
-  return value?.startsWith("/") && !value.startsWith("//") ? value : "";
-}
+import { safeOptionalRedirectPath } from "@/utils/pick8-safe-redirect";
 
 export default async function LoginPage({
   searchParams,
@@ -13,7 +10,7 @@ export default async function LoginPage({
   searchParams?: Promise<{ error?: string; email?: string; next?: string; created?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
-  const next = safeNext(params.next);
+  const next = safeOptionalRedirectPath(params.next);
 
   return (
     <main className="app-surface flex min-h-screen items-center justify-center px-4 py-8 text-white">

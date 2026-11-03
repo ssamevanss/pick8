@@ -102,7 +102,7 @@ try {
       admin.query("update public.entry_selections set category='btts',selected_team_side=null where category='clean_sheet'"),
       error => error.code === '23514',
     );
-    const current = await seed(admin, { entries: 1, rulesVersion: 2, draft: true });
+    const current = await seed(admin, { entries: 1, rulesVersion: 2, draft: true, future: true });
     await admin.query("delete from public.entry_selections where category='btts'");
     await assert.rejects(
       admin.query('update public.entries set submitted_at=now() where matchday_id=$1', [current.matchday]),

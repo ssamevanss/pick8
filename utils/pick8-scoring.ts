@@ -18,6 +18,8 @@ export type ScoringFixture = {
   id: string;
   kickoff_at: string;
   status: string;
+  /** Set once a postponed or replayed fixture is permanently void; overrides `status` and any later score. */
+  voided_at?: string | null;
   home_score: number | null;
   away_score: number | null;
 };
@@ -72,6 +74,9 @@ export type ScoreRecalculationSummary = {
 
 const TERMINAL_STATUSES = new Set(["finished", "postponed", "cancelled"]);
 
+const isVoidFixture = (fixture: Pick<ScoringFixture, "status" | "voided_at">) =>
+  Boolean(fixture.voided_at) || fixture.status === "postponed" || fixture.status === "cancelled";
+
 export function getSelectedTeamPerformance(
   fixture: Pick<ScoringFixture, "home_score" | "away_score">,
   side: Exclude<TeamSide, null>,
@@ -84,6 +89,7 @@ export function scoreFixtureSelection(
   fixture: ScoringFixture,
 ): SelectionScore {
   if (
+    isVoidFixture(fixture) ||
     fixture.status !== "finished" ||
     fixture.home_score === null ||
     fixture.away_score === null
@@ -107,11 +113,12 @@ export function scoreFixtureSelection(
 
 export function isMatchdayReadyForFinalScoring(fixtures: ScoringFixture[]) {
   return fixtures.length > 0 && fixtures.every((fixture) =>
-    TERMINAL_STATUSES.has(fixture.status) &&
-    (
-      fixture.status !== "finished" ||
-      (fixture.home_score !== null && fixture.away_score !== null)
-    )
+    fixture.voided_at ||
+    (TERMINAL_STATUSES.has(fixture.status) &&
+      (
+        fixture.status !== "finished" ||
+        (fixture.home_score !== null && fixture.away_score !== null)
+      ))
   );
 }
 
@@ -119,6 +126,7 @@ export function calculateCompletedMatchdayGoalTotal(fixtures: ScoringFixture[]) 
   if (!isMatchdayReadyForFinalScoring(fixtures)) return null;
   return fixtures.reduce((total, fixture) => {
     if (
+      isVoidFixture(fixture) ||
       fixture.status !== "finished" ||
       fixture.home_score === null ||
       fixture.away_score === null

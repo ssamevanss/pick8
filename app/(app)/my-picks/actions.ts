@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { createClient } from "@/utils/supabase/server";
-import { earliestFixtureKickoff } from "@/utils/pick8-fixture-state";
+import { effectiveEntryDeadline } from "@/utils/pick8-fixture-state";
 import {
   PICK8_MATCHDAY_LOCKED_MESSAGE,
   runPick8EntryWriteWhileOpen,
@@ -223,7 +223,7 @@ export async function savePickEntry(
       ? "Fixtures are temporarily unavailable. Your picks are still on this screen; please try again."
       : "Fixtures could not be verified.",
   );
-  const effectiveLocksAt = earliestFixtureKickoff(eligibleFixtures ?? []) ?? matchday.locks_at;
+  const effectiveLocksAt = effectiveEntryDeadline(matchday.locks_at, eligibleFixtures ?? []);
   const fixtureIds = (eligibleFixtures ?? []).map((fixture) => fixture.id);
   const { data: existingEntry, error: entryReadError } = await supabase
     .from("entries")

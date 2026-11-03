@@ -31,7 +31,8 @@ Detail lives in `docs/`: start at [docs/README.md](docs/README.md). This file is
   `competitions`, `matchdays`, `fixtures`, `entries`, `entry_selections` (see `types/database.types.ts`).
 - **Live routes:** `/login /signup /forgot-password /reset-password /auth/callback`, `/dashboard`
   (home; `/` redirects), `/my-picks`, `/tables`, `/rules`, `/settings`, `/admin`, and
-  `/api/cron/{sync-fixtures,sync-results,reconcile-results}`.
+  `/api/cron/{sync-fixtures,sync-results,reconcile-results}` plus the read-only `/api/cron/health`
+  (automation history in `pick8_cron_executions`, shown on `/admin`).
 - **Football data:** Pick8 never calls a football provider for its live game. It pulls fixtures
   per `(season, matchday)` from WYG `GET /api/shared-football/fixtures` using
   `WHO_YOU_GOT_API_URL` / `WHO_YOU_GOT_API_KEY` (`utils/who-you-got-fixture-sync.ts`).
@@ -68,13 +69,19 @@ Retired: `/test-supabase`, `/api/admin/*` and the WYG `admin/actions.ts` server 
   fixtures plus Total Goals. Rules version is per matchday (`pick8_rules_version`): v1 (matchdays 1–5)
   has 7 categories; v2 adds `btts`.
 - **Lock:** the *whole entry* (selections and Total Goals, drafts and edits) locks at the matchday's
-  **first fixture kickoff**. Other players' selections become visible only after *that selection's
+  **first fixture kickoff**. Once that deadline has passed it never moves later
+  (`pick8_entry_deadline`), even if the fixture is rescheduled; see `docs/postponed-and-interrupted-fixtures.md`. Other players' selections become visible only after *that selection's
   fixture* kicks off; drafts are always private.
 - **Scoring (finished fixtures only):** Home Winner win `5 + GD`, loss `−5 × GD`; Away Winner win
   `10 + GD`, loss `−5 × GD`; correct Draw `15 + home goals`; Team Win/Lose/Score, Clean Sheet, BTTS
   `+10` right / `−10` wrong; Total Goals exact `+10` else `0`. Postponed/cancelled fixtures are void
-  (0 points, excluded from Total Goals). Final matchday scoring happens only when every fixture is
-  finished/postponed/cancelled; provider corrections trigger recalculation.
+  (0 points, excluded from Total Goals). A fixture postponed to another day, or abandoned and replayed,
+  is **permanently void** (`fixtures.voided_at`, decided by a DB trigger, irreversible): a later date,
+  replay or score never reverses it and a completed matchday never reopens for it. A same-day kickoff delay
+  is the same match (before or after the entry deadline); a suspended or abandoned match is held and scored
+  if it resumes, and voided if it is not resolved 14 days after kickoff. See `docs/permanent-void-settlement.md`.
+  Final matchday scoring happens only when every fixture is finished or void; provider corrections to
+  non-void fixtures trigger recalculation.
 - **Participation:** `profiles.is_active` (account) and `pick8_participation_active` (may enter).
   Display time zone is `Australia/Melbourne` (`PICK8_TIME_ZONE`); stored times are UTC.
 

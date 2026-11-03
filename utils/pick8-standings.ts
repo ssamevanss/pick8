@@ -102,7 +102,7 @@ export function currentCompetitionStandings(
   ));
 }
 
-function rerankStandings(rows: ReturnType<typeof buildStandings>) {
+export function rerankStandings(rows: ReturnType<typeof buildStandings>) {
   const reranked = rows.map((row) => ({ ...row }));
   reranked.forEach((row, index) => {
     row.rank = index > 0 && reranked[index - 1].points === row.points
