@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getRequestAuthContext } from "@/utils/app-context";
 import { createInteractiveAdminClient } from "@/utils/supabase/admin";
 import { requireSuccessfulDatabaseOperation } from "@/utils/supabase/resilience";
+import { fetchAllRows } from "@/utils/paginated-read";
 import { buildMatchdayBreakdown } from "@/utils/pick8-matchday-breakdown";
 import { withEffectiveFixtureStatus } from "@/utils/pick8-fixture-void";
 import {
@@ -120,9 +121,23 @@ export default async function DashboardPage() {
   const matchdays = (matchdaysResult.data ?? []) as SettlementMatchday[];
   const competitions = (competitionsResult.data ?? []) as StandingsCompetition[];
   const matchdayIds = matchdays.map((matchday) => matchday.id);
-  const { data: entryRows, error: entriesError } = matchdayIds.length ? await admin.from("entries").select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at").in("matchday_id", matchdayIds) : { data: [], error: null };
-  requireSuccessfulDatabaseOperation(entriesError);
-  const entries = (entryRows ?? []) as BreakdownEntry[];
+  // Season-wide and unbounded: every matchday's entries feed the standings
+  // tables and recent-results cards for every player, so a truncated read
+  // would silently corrupt both. Paged via fetchAllRows - see its docstring.
+  const entryRows = matchdayIds.length
+    ? await fetchAllRows<BreakdownEntry>(({ from, to }) =>
+        admin
+          .from("entries")
+          .select(
+            "id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at",
+            { count: "exact" },
+          )
+          .in("matchday_id", matchdayIds)
+          .order("id", { ascending: true })
+          .range(from, to),
+      )
+    : [];
+  const entries = entryRows;
   const standingsEntries = entries as StandingsEntry[];
   const byMatchday = new Map(matchdays.map((matchday) => [matchday.id, matchday]));
   const now = new Date().getTime();

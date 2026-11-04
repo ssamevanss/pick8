@@ -3,6 +3,7 @@ import { getRequestAuthContext } from "@/utils/app-context";
 import { createInteractiveAdminClient } from "@/utils/supabase/admin";
 import { createClient } from "@/utils/supabase/server";
 import { requireSuccessfulDatabaseOperation } from "@/utils/supabase/resilience";
+import { fetchAllRows } from "@/utils/paginated-read";
 import ReadOnlyMatchdayPicks from "@/components/picks/ReadOnlyMatchdayPicks";
 import MatchdaySelectNavigation from "@/components/picks/MatchdaySelectNavigation";
 import { buildMatchdayBreakdown } from "@/utils/pick8-matchday-breakdown";
@@ -119,11 +120,22 @@ export default async function TablesPage({
   const matchdays = (matchdaysResult.data ?? []) as Matchday[];
   const competitions = (competitionsResult.data ?? []) as Competition[];
   const matchdayIds = matchdays.map((matchday) => matchday.id);
-  const { data: entryRows, error: entriesError } = matchdayIds.length
-    ? await admin.from("entries").select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at").in("matchday_id", matchdayIds)
-    : { data: [], error: null };
-  requireSuccessfulDatabaseOperation(entriesError);
-  const entries = (entryRows ?? []) as Entry[];
+  // Season-wide and unbounded: every matchday's entries feed the competition
+  // and overall standings tables for every player, so a truncated read would
+  // silently corrupt both. Paged via fetchAllRows - see its docstring.
+  const entries = matchdayIds.length
+    ? await fetchAllRows<Entry>(({ from, to }) =>
+        admin
+          .from("entries")
+          .select(
+            "id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at",
+            { count: "exact" },
+          )
+          .in("matchday_id", matchdayIds)
+          .order("id", { ascending: true })
+          .range(from, to),
+      )
+    : [];
   const matchdayById = new Map(matchdays.map((matchday) => [matchday.id, matchday]));
   const currentMatchday = resolveCurrentMatchday(matchdays, requestNow);
   const currentCompetition = resolveCurrentCompetition(competitions, currentMatchday);
