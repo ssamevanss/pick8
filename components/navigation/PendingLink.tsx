@@ -61,6 +61,7 @@ export default function PendingLink({ href, children, pendingLabel, className = 
   return (
     <Link
       href={href}
+      prefetch={false}
       onClick={handleClick}
       className={`${className} has-[[data-pending]]:cursor-wait has-[[data-pending]]:text-emerald-100`}
     >
