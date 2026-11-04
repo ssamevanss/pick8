@@ -8,5 +8,8 @@
       "path": "/api/cron/reconcile-results",
       "schedule": "30 5 * * *"
     }
+  ],
+  "regions": [
+    "dub1"
   ]
 }
