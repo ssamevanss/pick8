@@ -123,3 +123,77 @@ export function overallSeasonStandings(
       ) || row.played > 0,
   ));
 }
+
+export type CompetitionOption = { competition: StandingsCompetition; isCurrent: boolean };
+
+/**
+ * Competitions a player can browse on Tables, newest first. Future (not yet
+ * started) competitions are excluded because they cannot have standings.
+ * Identity is the competition id; the current one is whichever
+ * `resolveCurrentCompetition` returns, never a hardcoded number.
+ */
+export function competitionSelectionOptions(
+  competitions: StandingsCompetition[],
+  current: StandingsCompetition | null,
+): CompetitionOption[] {
+  return [...competitions]
+    .filter((competition) =>
+      competition.id === current?.id ||
+      (current
+        ? competition.start_matchday < current.start_matchday
+        : competition.status === "completed"),
+    )
+    .sort((a, b) => b.start_matchday - a.start_matchday)
+    .map((competition) => ({ competition, isCurrent: competition.id === current?.id }));
+}
+
+/**
+ * Resolves the `competition` query parameter against the offered options.
+ * Unknown, repeated or future ids fall back to the current competition and
+ * report `invalidRequest` so the page can say so instead of silently
+ * showing different standings.
+ */
+export function resolveSelectedCompetition(
+  options: CompetitionOption[],
+  requested: string | string[] | undefined,
+): { selected: CompetitionOption | null; invalidRequest: boolean } {
+  const requestedId = Array.isArray(requested) ? requested[0] : requested;
+  const fallback = options.find((option) => option.isCurrent) ?? options[0] ?? null;
+  if (!requestedId) return { selected: fallback, invalidRequest: false };
+  const match = options.find((option) => option.competition.id === requestedId);
+  return match ? { selected: match, invalidRequest: false } : { selected: fallback, invalidRequest: true };
+}
+
+/** Matchdays inside one competition's fixed range; the only data its standings may read. */
+export function competitionMatchdays(matchdays: StandingsMatchday[], competition: Pick<StandingsCompetition, "start_matchday" | "end_matchday">) {
+  return matchdays.filter((matchday) => matchday.matchday_number >= competition.start_matchday && matchday.matchday_number <= competition.end_matchday);
+}
+
+/** Standings for exactly one competition: entries from other competitions' matchdays are dropped before scoring. */
+export function buildCompetitionStandings(
+  profiles: StandingsProfile[],
+  entries: StandingsEntry[],
+  matchdays: StandingsMatchday[],
+  competition: Pick<StandingsCompetition, "start_matchday" | "end_matchday">,
+) {
+  const scoped = competitionMatchdays(matchdays, competition);
+  const matchdayById = new Map(scoped.map((matchday) => [matchday.id, matchday]));
+  const scopedEntries = entries.filter((entry) => matchdayById.has(entry.matchday_id));
+  return currentCompetitionStandings(
+    buildStandings(profiles, scopedEntries, matchdayById, { start: competition.start_matchday, end: competition.end_matchday }),
+  );
+}
+
+/** Query string for selecting a competition: the current one is the parameter-less default; other params (e.g. `view`) are kept. */
+export function competitionSelectionQuery(existing: string, competitionId: string, currentId: string | null) {
+  const next = new URLSearchParams(existing);
+  if (competitionId === currentId) next.delete("competition");
+  else next.set("competition", competitionId);
+  return next.toString();
+}
+
+/** A competition is final only when every matchday in its range exists and is completed; the stored `status` can lag behind. */
+export function isCompetitionFinal(competition: Pick<StandingsCompetition, "start_matchday" | "end_matchday">, matchdays: StandingsMatchday[]) {
+  const scoped = competitionMatchdays(matchdays, competition);
+  return scoped.length === competition.end_matchday - competition.start_matchday + 1 && scoped.every((matchday) => matchday.status === "completed");
+}

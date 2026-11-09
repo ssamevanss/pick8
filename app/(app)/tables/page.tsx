@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { getRequestAuthContext } from "@/utils/app-context";
 import { createInteractiveAdminClient } from "@/utils/supabase/admin";
@@ -6,15 +7,21 @@ import { requireSuccessfulDatabaseOperation } from "@/utils/supabase/resilience"
 import { fetchAllRows } from "@/utils/paginated-read";
 import ReadOnlyMatchdayPicks from "@/components/picks/ReadOnlyMatchdayPicks";
 import MatchdaySelectNavigation from "@/components/picks/MatchdaySelectNavigation";
+import CompetitionBoundary from "@/components/tables/CompetitionBoundary";
+import CompetitionLoading from "@/components/tables/CompetitionLoading";
+import { CompetitionPanel, CompetitionSelect, CompetitionSwitcher } from "@/components/tables/CompetitionSelect";
+import StandingsTable from "@/components/tables/StandingsTable";
+import CompetitionStandings from "./CompetitionStandings";
 import { buildMatchdayBreakdown } from "@/utils/pick8-matchday-breakdown";
 import { withEffectiveFixtureStatus } from "@/utils/pick8-fixture-void";
 import {
   buildStandings,
-  currentCompetitionStandings,
+  competitionSelectionOptions,
+  isCompetitionFinal,
   overallSeasonStandings,
-  playerDisplayName,
   resolveCurrentCompetition,
   resolveCurrentMatchday,
+  resolveSelectedCompetition,
   type StandingsCompetition as Competition,
   type StandingsEntry,
   type StandingsMatchday as Matchday,
@@ -33,51 +40,10 @@ function formatDate(value: string | null) {
   }).format(new Date(value));
 }
 
-function scoreLabel(score: number | null) {
-  if (score === null) return "Pending";
-  return score > 0 ? `+${score}` : String(score);
-}
-
-
-function StandingsTable({
-  rows,
-  latestColumn,
-}: {
-  rows: ReturnType<typeof buildStandings>;
-  latestColumn: "latest" | "average";
-}) {
-  return (
-    <div className="brand-table">
-      <table className="w-full table-auto text-left text-sm">
-        <thead className="border-b border-white/10 text-[11px] uppercase tracking-wide text-slate-400 sm:text-xs">
-          <tr>
-            <th scope="col" className="px-2 py-3 sm:px-4">Rank</th>
-            <th scope="col" className="px-2 py-3 sm:px-4">Player</th>
-            <th scope="col" className="px-2 py-3 text-right sm:px-4"><span className="sm:hidden" aria-hidden="true">Pts</span><span className="sr-only sm:not-sr-only">Points</span></th>
-            <th scope="col" className="px-2 py-3 text-right sm:px-4"><span className="sm:hidden" aria-hidden="true">Pld</span><span className="sr-only sm:not-sr-only">Played</span></th>
-            <th scope="col" className="px-2 py-3 text-right sm:px-4">{latestColumn === "latest" ? "Latest" : <><span className="sm:hidden" aria-hidden="true">Avg</span><span className="sr-only sm:not-sr-only">Average</span></>}</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-white/10">
-          {rows.map((row) => (
-            <tr key={row.profile.id}>
-              <td className="px-2 py-3 sm:px-4"><span className="brand-pill whitespace-nowrap">#{row.rank}</span></td>
-              <td className="px-2 py-3 font-bold leading-tight text-white [overflow-wrap:anywhere] sm:px-4">{playerDisplayName(row.profile)}</td>
-              <td className="whitespace-nowrap px-2 py-3 text-right font-black text-emerald-200 sm:px-4">{scoreLabel(row.points)}</td>
-              <td className="whitespace-nowrap px-2 py-3 text-right text-slate-300 sm:px-4">{row.played}</td>
-              <td className="whitespace-nowrap px-2 py-3 text-right text-slate-300 sm:px-4">{latestColumn === "latest" ? scoreLabel(row.latest) : row.played ? row.average.toFixed(1) : "0.0"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 export default async function TablesPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ view?: string; matchday?: string }>;
+  searchParams?: Promise<{ view?: string; matchday?: string; competition?: string | string[] }>;
 }) {
   const params = searchParams ? await searchParams : {};
   const view: View = ["competition", "overall", "matchday"].includes(params.view ?? "")
@@ -108,44 +74,48 @@ export default async function TablesPage({
     return <section className="brand-card p-5 sm:p-7"><p className="brand-eyebrow">Competition</p><h1 className="brand-title mt-2">Tables</h1><p className="brand-subtitle mt-3">There is no active season available.</p></section>;
   }
 
-  const [profilesResult, matchdaysResult, competitionsResult] = await Promise.all([
-    admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
+  const [matchdaysResult, competitionsResult] = await Promise.all([
     admin.from("matchdays").select("id, matchday_number, status, locks_at, pick8_rules_version").eq("season_id", season.id).order("matchday_number"),
     admin.from("competitions").select("id, name, start_matchday, end_matchday, status").eq("season_id", season.id).order("start_matchday"),
   ]);
-  requireSuccessfulDatabaseOperation(profilesResult.error);
   requireSuccessfulDatabaseOperation(matchdaysResult.error);
   requireSuccessfulDatabaseOperation(competitionsResult.error);
-  const profiles = (profilesResult.data ?? []) as Profile[];
   const matchdays = (matchdaysResult.data ?? []) as Matchday[];
   const competitions = (competitionsResult.data ?? []) as Competition[];
-  const matchdayIds = matchdays.map((matchday) => matchday.id);
-  // Season-wide and unbounded: every matchday's entries feed the competition
-  // and overall standings tables for every player, so a truncated read would
-  // silently corrupt both. Paged via fetchAllRows - see its docstring.
-  const entries = matchdayIds.length
-    ? await fetchAllRows<Entry>(({ from, to }) =>
-        admin
-          .from("entries")
-          .select(
-            "id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at",
-            { count: "exact" },
-          )
-          .in("matchday_id", matchdayIds)
-          .order("id", { ascending: true })
-          .range(from, to),
-      )
-    : [];
-  const matchdayById = new Map(matchdays.map((matchday) => [matchday.id, matchday]));
   const currentMatchday = resolveCurrentMatchday(matchdays, requestNow);
   const currentCompetition = resolveCurrentCompetition(competitions, currentMatchday);
-  const competitionRowsBuilt = currentCompetition
-    ? currentCompetitionStandings(buildStandings(profiles, entries, matchdayById, {
-        start: currentCompetition.start_matchday,
-        end: currentCompetition.end_matchday,
-      }))
-    : [];
-  const overallRows = overallSeasonStandings(buildStandings(profiles, entries, matchdayById));
+  const competitionOptions = competitionSelectionOptions(competitions, currentCompetition);
+  const { selected: selectedOption, invalidRequest: invalidCompetition } = resolveSelectedCompetition(competitionOptions, params.competition);
+  const selectedCompetition = selectedOption?.competition ?? null;
+  const viewingHistory = selectedOption !== null && !selectedOption.isCurrent;
+
+  // Overall and Matchday Breakdown need the whole season; a competition's
+  // standings load their own range-scoped data inside CompetitionStandings.
+  let profiles: Profile[] = [];
+  let entries: Entry[] = [];
+  if (view !== "competition") {
+    const matchdayIds = matchdays.map((matchday) => matchday.id);
+    const [profilesResult, entryRows] = await Promise.all([
+      admin.from("profiles").select("id, display_name, is_active, pick8_participation_active").order("display_name"),
+      // Season-wide and unbounded: a truncated read would silently corrupt the
+      // overall standings, so it is paged via fetchAllRows - see its docstring.
+      matchdayIds.length
+        ? fetchAllRows<Entry>(({ from, to }) =>
+            admin
+              .from("entries")
+              .select("id, user_id, matchday_id, total_goals_prediction, submitted_at, calculated_score, score_calculated_at", { count: "exact" })
+              .in("matchday_id", matchdayIds)
+              .order("id", { ascending: true })
+              .range(from, to),
+          )
+        : Promise.resolve([] as Entry[]),
+    ]);
+    requireSuccessfulDatabaseOperation(profilesResult.error);
+    profiles = (profilesResult.data ?? []) as Profile[];
+    entries = entryRows;
+  }
+  const matchdayById = new Map(matchdays.map((matchday) => [matchday.id, matchday]));
+  const overallRows = view === "overall" ? overallSeasonStandings(buildStandings(profiles, entries, matchdayById)) : [];
   const selectedMatchday =
     (/^\d+$/.test(params.matchday ?? "")
       ? matchdays.find(
@@ -156,8 +126,13 @@ export default async function TablesPage({
     matchdays.at(-1) ??
     null;
 
+  const tabHref = (key: View) => {
+    const query = new URLSearchParams({ view: key });
+    if (viewingHistory && selectedCompetition) query.set("competition", selectedCompetition.id);
+    return `/tables?${query.toString()}`;
+  };
   const tabs: Array<{ key: View; label: string }> = [
-    { key: "competition", label: "Current Competition" },
+    { key: "competition", label: "Competition" },
     { key: "overall", label: "Overall" },
     { key: "matchday", label: "Matchday Breakdown" },
   ];
@@ -208,8 +183,29 @@ export default async function TablesPage({
   return (
     <div className="space-y-6">
       <header className="brand-card p-5 sm:p-7"><p className="brand-eyebrow">{season.name}</p><h1 className="brand-title mt-2">Tables</h1><p className="brand-subtitle mt-2">Competition standings, overall scores, and locked-matchday picks.</p></header>
-      <nav className="grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="Tables views">{tabs.map((tab) => <Link key={tab.key} prefetch={false} href={`/tables?view=${tab.key}`} className={view === tab.key ? "brand-button-primary" : "brand-button-secondary"}>{tab.label}</Link>)}</nav>
-      {view === "competition" ? currentCompetition ? <section className="space-y-4"><div><p className="brand-eyebrow">Current competition</p><h2 className="mt-1 text-2xl font-black text-white">{currentCompetition.name}</h2></div><StandingsTable rows={competitionRowsBuilt} latestColumn="latest" /></section> : <p className={profile.is_admin ? "brand-alert-warning" : "brand-card p-5 text-sm text-slate-300"}>{profile.is_admin ? "No competition is configured for the active season. Refresh competitions from Admin." : "Competition standings are not configured yet. Overall and Matchday Breakdown remain available."}</p> : null}
+      <nav className="grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="Tables views">{tabs.map((tab) => <Link key={tab.key} prefetch={false} href={tabHref(tab.key)} className={view === tab.key ? "brand-button-primary" : "brand-button-secondary"}>{tab.label}</Link>)}</nav>
+      {view === "competition" ? selectedCompetition ? (
+        <CompetitionSwitcher selectedId={selectedCompetition.id} currentId={currentCompetition?.id ?? null} options={competitionOptions.map((option) => ({ id: option.competition.id, label: `${option.competition.name}${option.isCurrent ? " (Current)" : ""}` }))}>
+          <section className="space-y-4" aria-labelledby="competition-heading">
+            <CompetitionSelect />
+            {invalidCompetition ? <p className="brand-alert-warning">That competition isn&apos;t available, so the current competition is shown instead.</p> : null}
+            <CompetitionPanel>
+              <div>
+                <p className="brand-eyebrow">Competition</p>
+                <h2 id="competition-heading" className="mt-1 text-2xl font-black text-white">{selectedCompetition.name}</h2>
+                <p className="mt-1 text-sm text-slate-400">{viewingHistory ? `${isCompetitionFinal(selectedCompetition, matchdays) ? "Final standings" : "Standings"} · read-only` : "Current competition · submitted entries with finalized scores only"}</p>
+              </div>
+              <div className="mt-4">
+                <CompetitionBoundary key={selectedCompetition.id} name={selectedCompetition.name}>
+                  <Suspense key={selectedCompetition.id} fallback={<CompetitionLoading />}>
+                    <CompetitionStandings competition={selectedCompetition} matchdays={matchdays} requestDeadlineSignal={requestDeadlineSignal} requestId={requestId} />
+                  </Suspense>
+                </CompetitionBoundary>
+              </div>
+            </CompetitionPanel>
+          </section>
+        </CompetitionSwitcher>
+      ) : <p className={profile.is_admin ? "brand-alert-warning" : "brand-card p-5 text-sm text-slate-300"}>{profile.is_admin ? "No competition is configured for the active season. Refresh competitions from Admin." : "Competition standings are not configured yet. Overall and Matchday Breakdown remain available."}</p> : null}
       {view === "overall" ? <section className="space-y-4"><div><p className="brand-eyebrow">Season standings</p><h2 className="mt-1 text-2xl font-black text-white">Overall</h2><p className="mt-1 text-sm text-slate-400">Submitted entries with finalized scores only · standard tied ranking.</p></div><StandingsTable rows={overallRows} latestColumn="average" /></section> : null}
       {view === "matchday" ? selectedMatchday ? <><div className="brand-card p-4"><MatchdaySelectNavigation currentMatchday={selectedMatchday.matchday_number} matchdays={matchdays.map((matchday) => ({ number: matchday.matchday_number, label: `Matchday ${matchday.matchday_number} · ${matchday.status}` }))} /></div>{breakdown}</> : <p className="brand-card p-5 text-sm text-slate-300">No matchdays are available for this season.</p> : null}
     </div>
