@@ -10,8 +10,7 @@ const read = (path: string) => readFileSync(join(root, path), "utf8");
 // behaviour itself is verified in a browser; these stop the known patterns coming back.
 
 test("standings tables compact to the viewport instead of forcing a minimum width and scrolling", () => {
-  const source = read("app/(app)/tables/page.tsx");
-  const table = source.slice(source.indexOf("function StandingsTable"), source.indexOf("export default async function TablesPage"));
+  const table = read("components/tables/StandingsTable.tsx");
   assert.doesNotMatch(table, /min-w-\[/, "a fixed table minimum width clips columns on phones");
   assert.doesNotMatch(table, /overflow-x-(auto|scroll)/, "columns must fit rather than scroll sideways");
   assert.match(table, /\[overflow-wrap:anywhere\]/, "long player names must be able to wrap");
