@@ -14,6 +14,35 @@ export type Database = {
   }
   public: {
     Tables: {
+      pick8_entry_admin_audit: {
+        Row: {
+          id: string
+          actor_id: string
+          player_id: string
+          matchday_id: string
+          entry_id: string
+          recorded_at: string
+          reason: string
+          post_lock: boolean
+          before_value: Json | null
+          after_value: Json
+        }
+        Insert: {
+          id?: string
+          actor_id: string
+          player_id: string
+          matchday_id: string
+          entry_id: string
+          recorded_at?: string
+          reason: string
+          post_lock: boolean
+          before_value?: Json | null
+          after_value: Json
+        }
+        Update: never
+        Relationships: []
+      }
+
       competitions: {
         Row: {
           created_at: string
@@ -487,6 +516,20 @@ export type Database = {
       replace_submitted_pick8_selections: {
         Args: { check_entry_id: string; check_selections: Json }
         Returns: undefined
+      }
+      admin_save_pick8_entry: {
+        Args: {
+          check_actor_id: string
+          check_player_id: string
+          check_expected_updated_at: string | null
+          check_reason: string
+          check_allow_post_lock: boolean
+          check_matchday_id: string
+          check_intent: string
+          check_total_goals: number | null
+          check_selections: Json
+        }
+        Returns: Json
       }
       save_pick8_entry: {
         Args: {
