@@ -56,7 +56,9 @@ function submittedTime(value: string | null) {
   }).format(submittedAt);
 }
 
-export default function MatchdayEntryForm({ matchdayId, rulesVersion, reloadHref, locksAt, fixtures, initialSelections, initialTotalGoals, initiallyEditable, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry, actualGoals, finalReady, finalMatchdayScore, totalGoalsPoints, fixtureSlate }: {
+export default function MatchdayEntryForm({ matchdayId, rulesVersion, reloadHref, locksAt, fixtures, initialSelections, initialTotalGoals, initiallyEditable, initiallySubmitted, initiallySubmittedAt, initiallyHasEntry, actualGoals, finalReady, finalMatchdayScore, totalGoalsPoints, fixtureSlate, adminContext, saveAction = savePickEntry }: {
+  adminContext?: { playerId: string; playerName: string; expectedUpdatedAt: string | null; postLock?: boolean };
+  saveAction?: typeof savePickEntry;
   matchdayId: string;
   rulesVersion: Pick8RulesVersion;
   reloadHref: string;
@@ -105,7 +107,7 @@ export default function MatchdayEntryForm({ matchdayId, rulesVersion, reloadHref
   const [now, setNow] = useState(0);
   const [state, formAction, pending] = useActionState(
     async (previousState: PickEntryActionState, formData: FormData) => {
-      const result = await savePickEntry(previousState, formData);
+      const result = await saveAction(previousState, formData);
       if (result.ok) {
         setSavedChoices(choices);
         setSavedTotalGoals(totalGoals);
@@ -140,7 +142,8 @@ export default function MatchdayEntryForm({ matchdayId, rulesVersion, reloadHref
     setEditing(!incomingPersistedState.submitted);
   }
   const eligibleFixtures = useMemo(() => fixtures, [fixtures]);
-  const entryWindowOpen = now > 0 && now < new Date(locksAt).getTime();
+  const adminPostLock = Boolean(adminContext) && (Boolean(adminContext?.postLock) || (now > 0 && now >= new Date(locksAt).getTime()));
+  const entryWindowOpen = Boolean(adminContext) || (now > 0 && now < new Date(locksAt).getTime());
   const outcomeUnknown = state.outcome === "unknown";
   const editable = initiallyEditable && entryWindowOpen && (!submitted || editing) && !outcomeUnknown;
 
@@ -218,9 +221,18 @@ export default function MatchdayEntryForm({ matchdayId, rulesVersion, reloadHref
 
   return (
     <form action={formAction} className="space-y-5">
+      {adminContext ? <div className="brand-alert-warning space-y-3">
+        <p><strong>Acting on behalf of {adminContext.playerName}.</strong> Administrative changes are audited.</p>
+        {adminPostLock ? <p>The deadline has passed. This is a retrospective change and results may already be known. Submit a complete entry and explain the authorisation below.</p> : null}
+        <input type="hidden" name="player_id" value={adminContext.playerId} />
+        <input type="hidden" name="expected_updated_at" value={adminContext.expectedUpdatedAt ?? ""} />
+        <label className="block">Reason for this change<textarea className="brand-input" name="admin_reason" required minLength={5} maxLength={1000} /></label>
+        {adminPostLock ? <label className="block"><input type="checkbox" name="allow_post_lock" required /> I authorise this post-deadline change. Matches may already have started or finished and results may be known.</label> : null}
+        <label className="block"><input type="checkbox" name="confirm_admin_save" required /> I have checked these picks and confirm saving them for {adminContext.playerName}.</label>
+      </div> : null}
       <input type="hidden" name="matchday_id" value={matchdayId} />
       <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 ${submitted ? "border-emerald-300/40 bg-emerald-300/15" : complete ? "border-emerald-300/30 bg-emerald-300/10" : hasSavedEntry ? "border-amber-300/30 bg-amber-300/10" : "border-white/10 bg-white/5"}`}>
-        <div><p className="text-xs font-bold uppercase tracking-wide text-slate-400">{now > 0 && !entryWindowOpen ? "Matchday in progress" : "Time remaining"}</p><p className="mt-1 text-xl font-black text-white">{now ? remainingLabel(locksAt, now) : "Calculating…"}</p></div>
+        <div><p className="text-xs font-bold uppercase tracking-wide text-slate-400">{adminContext ? "Player submission deadline" : now > 0 && !entryWindowOpen ? "Matchday in progress" : "Time remaining"}</p><p className="mt-1 text-xl font-black text-white">{now ? remainingLabel(locksAt, now) : "Calculating…"}</p></div>
         <div className="text-right"><p className={`text-lg font-black ${submitted || complete ? "text-emerald-200" : hasSavedEntry ? "text-amber-100" : "text-white"}`}>{topStatus}</p><p className="mt-1 text-sm text-slate-300">{topStatusDetail}</p></div>
       </div>
       {now > 0 && !submitted && !entryWindowOpen ? <p className="brand-alert-warning">The submission deadline has passed. This entry is read-only.</p> : null}
@@ -250,7 +262,7 @@ export default function MatchdayEntryForm({ matchdayId, rulesVersion, reloadHref
           {fixtures.map((fixture) => {
             const unavailable = ["cancelled", "postponed"].includes(fixture.status);
             const fixtureState = getFixtureLifecycle({ kickoff_at: fixture.kickoffAt, status: fixture.status }, now || 0);
-            const fixtureEditable = editable && now > 0 && isFixtureSelectionEditable({ kickoff_at: fixture.kickoffAt, status: fixture.status }, now);
+            const fixtureEditable = editable && (Boolean(adminContext) || (now > 0 && isFixtureSelectionEditable({ kickoff_at: fixture.kickoffAt, status: fixture.status }, now)));
             const choice = choices[fixture.id] ?? { category: "", side: "" };
             const category = choice.category ? categoryByKey.get(choice.category) : undefined;
             const duplicated = Boolean(choice.category && duplicateKeys.has(choice.category));
@@ -266,7 +278,7 @@ export default function MatchdayEntryForm({ matchdayId, rulesVersion, reloadHref
                 </div>
                 <CategorySelect
                   value={choice.category}
-                  disabled={!fixtureEditable || pending || unavailable}
+                  disabled={!fixtureEditable || pending || (unavailable && !adminContext)}
                   invalid={duplicated}
                   ariaLabel={`Category for ${fixture.homeTeamName} v ${fixture.awayTeamName}`}
                   options={categories.map((item) => ({
@@ -315,7 +327,7 @@ export default function MatchdayEntryForm({ matchdayId, rulesVersion, reloadHref
       {editable ? submitted ? (
         <div className="grid w-full gap-3 sm:grid-cols-2"><button className="brand-button-primary w-full" type="submit" name="intent" value="save_changes" disabled={pending || !complete}>{pending ? "Saving…" : "Save edited submission"}</button><button className="brand-button-secondary w-full" type="button" disabled={pending} onClick={cancelEditing}>Cancel editing</button></div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2"><button className="brand-button-secondary" type="submit" name="intent" value="draft" disabled={pending}>{pending ? "Saving…" : "Save Draft"}</button><button className="brand-button-primary" type="submit" name="intent" value="submit" disabled={pending || !complete}>{pending ? "Submitting…" : "Submit Picks"}</button></div>
+        <div className="grid gap-3 sm:grid-cols-2">{!adminPostLock ? <button className="brand-button-secondary" type="submit" name="intent" value="draft" disabled={pending}>{pending ? "Saving…" : "Save Draft"}</button> : null}<button className="brand-button-primary" type="submit" name="intent" value="submit" disabled={pending || !complete}>{pending ? "Submitting…" : "Submit Picks"}</button></div>
       ) : null}
       </>}
     </form>

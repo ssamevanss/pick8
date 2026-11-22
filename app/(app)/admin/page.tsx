@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getRequestAuthContext, type Pick8Profile } from "@/utils/app-context";
 import { createAdminClient } from "@/utils/supabase/admin";
@@ -165,12 +166,13 @@ export default async function AdminPage({
         ) : submissionRows.length ? (
           <div className="mt-4 overflow-hidden rounded-xl border border-white/10">
             <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 sm:px-4">
-              <span>Player</span><span>Status</span>
+              <span>Player / picks</span><span>Status</span>
             </div>
             <ul className="divide-y divide-white/10">
               {submissionRows.map(({ profile: item, status }) => (
                 <li key={item.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-3 sm:px-4">
-                  <span className="truncate text-sm font-bold text-white">{item.display_name}</span>
+                  <div className="min-w-0"><span className="block truncate text-sm font-bold text-white">{item.display_name}</span>
+                  <Link className="text-sm text-sky-300 underline" href={`/admin/entries?player=${item.id}&matchday=${currentMatchday.id}`}>{status === "not_submitted" ? "Enter picks" : "View / correct picks"}</Link></div>
                   <span className={`rounded-full border px-2.5 py-1 text-xs font-black ${STATUS_CLASSES[status]}`}>
                     {STATUS_LABELS[status]}
                   </span>
